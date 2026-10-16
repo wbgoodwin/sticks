@@ -6,5 +6,8 @@ pub mod project;
 pub mod units;
 
 pub use lumber::{Cut, Member, MemberKind, Nominal};
-pub use project::{Project, ProjectError};
+pub use project::{
+    CornerStyle, LayoutStart, Opening, OpeningKind, Project, ProjectError, Rules, Stock, Wall,
+    WallEnd,
+};
 pub use units::{Length, ParseLengthError};

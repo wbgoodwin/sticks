@@ -33,6 +33,8 @@ pub struct Rules {
     pub wall_lumber: Nominal,
     /// Which end of each wall stud layout is measured from. Default left.
     pub layout_from: LayoutStart,
+    /// How a wall end marked `corner` is backed. Default three-stud.
+    pub corner_style: CornerStyle,
 }
 
 impl Default for Rules {
@@ -43,6 +45,7 @@ impl Default for Rules {
             end_trim: Length::ZERO,
             wall_lumber: Nominal::new(2, 4),
             layout_from: LayoutStart::Left,
+            corner_style: CornerStyle::ThreeStud,
         }
     }
 }
@@ -53,6 +56,33 @@ pub enum LayoutStart {
     #[default]
     Left,
     Right,
+}
+
+/// Corner backing on the wall that runs through a corner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CornerStyle {
+    /// End stud, 1-1/2" spacer blocks, then a backer stud. The butting wall's
+    /// end stud makes the third.
+    #[default]
+    ThreeStud,
+}
+
+/// What happens at one end of a wall.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WallEnd {
+    /// A single end stud: a free end, or a wall that butts into another.
+    #[default]
+    Plain,
+    /// This wall runs through a corner and backs the wall that butts into it.
+    Corner,
+}
+
+impl WallEnd {
+    fn is_plain(&self) -> bool {
+        *self == WallEnd::Plain
+    }
 }
 
 /// Stock boards available at the lumber yard for one nominal size.
@@ -74,6 +104,13 @@ pub struct Wall {
     pub length: Length,
     /// Overall height, bottom of bottom plate to top of top plates.
     pub height: Length,
+    #[serde(default, skip_serializing_if = "WallEnd::is_plain")]
+    pub left_end: WallEnd,
+    #[serde(default, skip_serializing_if = "WallEnd::is_plain")]
+    pub right_end: WallEnd,
+    /// Centers of partitions that tee into this wall, from its left end.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tees: Vec<Length>,
     #[serde(default, rename = "opening", skip_serializing_if = "Vec::is_empty")]
     pub openings: Vec<Opening>,
 }
@@ -141,6 +178,8 @@ prices_cents = [498, 698, 849, 1149]
 id = "W1"
 length = "18'"
 height = "10'"
+left_end = "corner"
+tees = ["11'"]
 
 [[wall.opening]]
 kind = "door"
@@ -166,6 +205,9 @@ header = "2x4"
         assert_eq!(p.walls[0].openings[0].width.to_string(), "3' 2-1/2\"");
         assert_eq!(p.walls[0].openings[1].kind, OpeningKind::Penetration);
         assert_eq!(p.stock[0].lengths[3], Length::feet(16));
+        assert_eq!(p.walls[0].left_end, WallEnd::Corner);
+        assert_eq!(p.walls[0].right_end, WallEnd::Plain);
+        assert_eq!(p.walls[0].tees, vec![Length::feet(11)]);
     }
 
     #[test]

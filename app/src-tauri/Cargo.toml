@@ -1,0 +1,17 @@
+[package]
+name = "sticks-app"
+description = "Sticks desktop app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/wbgoodwin/sticks"
+
+# Kept out of the main workspace so building the core and CLI never needs the
+# system webview libraries Tauri links against.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

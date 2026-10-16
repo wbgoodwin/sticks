@@ -16,6 +16,8 @@ lengths = ["8'", "10'", "12'", "16'"]
 id = "front"
 length = "18'"
 height = "10'"
+left_end = "corner"      # the front wall runs through both corners
+right_end = "corner"
 
 [[wall.opening]]
 kind = "door"
