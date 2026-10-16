@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/wbgoodwin/sticks"
+
+[workspace.dependencies]
+sticks-core = { path = "crates/sticks-core" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+proptest = "1"

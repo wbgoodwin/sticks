@@ -1,0 +1,33 @@
+# Reference design from the PRD: 18x14 lean-to shed. Back wall height and
+# roof pitch are still open questions, so only the front wall is filled in.
+name = "Backyard shed"
+
+[rules]
+on_center = "16\""
+kerf = "1/8\""
+wall_lumber = "2x4"
+layout_from = "left"
+
+[[stock]]
+size = "2x4"
+lengths = ["8'", "10'", "12'", "16'"]
+
+[[wall]]
+id = "front"
+length = "18'"
+height = "10'"
+
+[[wall.opening]]
+kind = "door"
+offset = "7' 3\""
+width = "38-1/2\""
+height = "82-1/2\""
+header = "2x8"
+
+[[wall.opening]]
+kind = "penetration"   # mini-split line set
+offset = "15'"
+width = "4\""
+height = "4\""
+sill_height = "1'"
+header = "2x4"
