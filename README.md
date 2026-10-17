@@ -74,8 +74,8 @@ set: `TYPESAFE_API_KEY=... npm run tauri dev` (or `npm run dev`), or put the
 key in `app/.env.local`. A bundled build can't reach Jev yet.
 
 `app/scripts/jev-probe.ts` runs sample requests through Jev from the command
-line: `cargo build -p sticks-cli`, then `TYPESAFE_API_KEY=... npm run
-probe:jev` in `app/`.
+line: `TYPESAFE_API_KEY=... npm run probe:jev` in `app/`, which builds
+`sticks` first.
 
 ## Project file
 

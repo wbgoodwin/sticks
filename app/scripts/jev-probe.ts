@@ -3,8 +3,7 @@
 // and turns the confident answers into edits. Whatever Jev wasn't sure of,
 // or the request doesn't say, is left for you.
 //
-//   cargo build -p sticks-cli
-//   TYPESAFE_API_KEY=... node scripts/jev-probe.ts
+//   TYPESAFE_API_KEY=... npm run probe:jev   (builds sticks first)
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
