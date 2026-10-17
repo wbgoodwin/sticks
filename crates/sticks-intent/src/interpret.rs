@@ -194,7 +194,15 @@ const ROLES: [(&str, &str); 7] = [
 /// Slots whose answer the request may simply not give ("add a window":
 /// which wall?). Their questions offer [`UNSAID`] so the classifier can say
 /// so, rather than being sure of a guess.
-const MAY_BE_UNSAID: [&str; 6] = ["dimension", "direction", "kind", "wall", "framing", "which"];
+const MAY_BE_UNSAID: [&str; 7] = [
+    "dimension",
+    "direction",
+    "kind",
+    "wall",
+    "framing",
+    "which",
+    "next_to",
+];
 
 /// The option for "the request doesn't say".
 const UNSAID: &str = "unsaid";
@@ -270,10 +278,16 @@ pub fn interpret(project: &Project, request: &str, answers: &Answers) -> Interpr
         .map(|(i, text)| {
             let mut c = Clause::new(i, text.clone(), answers, project);
             let result = c.run();
+            let mut assumed: Vec<String> = Vec::new();
+            for a in c.assumed {
+                if !assumed.contains(&a) {
+                    assumed.push(a);
+                }
+            }
             let mut step = Step {
                 text,
                 edits: Vec::new(),
-                assumed: c.assumed,
+                assumed,
                 question: None,
                 problem: None,
             };
@@ -359,6 +373,7 @@ impl<'a> Clause<'a> {
         .to_vec();
         if !self.openings().is_empty() {
             s.push("which".into());
+            s.push("next_to".into());
         }
         s.extend(self.nums().iter().map(|(k, _)| format!("num{k}")));
         s
@@ -455,6 +470,18 @@ impl<'a> Clause<'a> {
                     ("centered", "Centered, or no place given"),
                     ("left_end", "Near the wall's left end, seen from outside"),
                     ("right_end", "Near the wall's right end, seen from outside"),
+                    (
+                        "left_of",
+                        "Beside an existing door or window, on its left seen from outside",
+                    ),
+                    (
+                        "right_of",
+                        "Beside an existing door or window, on its right seen from outside",
+                    ),
+                    (
+                        "both_sides",
+                        "One on each side of an existing door or window",
+                    ),
                 ]),
             ),
             "framing" => (
@@ -466,6 +493,13 @@ impl<'a> Clause<'a> {
             ),
             "which" => (
                 "Which opening?".into(),
+                self.openings()
+                    .into_iter()
+                    .map(|(_, l, d)| (l, d))
+                    .collect(),
+            ),
+            "next_to" => (
+                "If the new opening goes beside an existing one, which one?".into(),
                 self.openings()
                     .into_iter()
                     .map(|(_, l, d)| (l, d))
@@ -808,11 +842,28 @@ impl<'a> Clause<'a> {
             "penetration" => OpeningKind::Penetration,
             _ => OpeningKind::Window,
         };
-        let wall = match self.pick("wall")?.as_str() {
-            "front" => Side::Front,
-            "back" => Side::Back,
-            "left" => Side::Left,
-            _ => Side::Right,
+        // Beside an existing opening, the wall is that opening's.
+        let position = self.maybe("position");
+        let beside = match position.as_deref() {
+            Some(p @ ("left_of" | "right_of" | "both_sides")) => {
+                let pick = self.pick("next_to")?;
+                let (at, ..) = self
+                    .openings()
+                    .into_iter()
+                    .find(|(_, l, _)| *l == pick)
+                    .expect("picks are checked against the options");
+                Some((p.to_string(), at))
+            }
+            _ => None,
+        };
+        let wall = match &beside {
+            Some((_, (side, _))) => *side,
+            None => match self.pick("wall")?.as_str() {
+                "front" => Side::Front,
+                "back" => Side::Back,
+                "left" => Side::Left,
+                _ => Side::Right,
+            },
         };
 
         // A bare number up to 8 is feet ("a 3 window"), above that inches.
@@ -853,17 +904,29 @@ impl<'a> Clause<'a> {
                     .push(format!("A {slab} door needs a {width} rough opening"));
             }
         }
-
+        let new = New {
+            wall,
+            kind,
+            width,
+            height,
+            sill,
+            header,
+        };
         let wall_len = wall.length(b);
+        let room = wall_len - width;
+
+        if let Some((how, (_, index))) = beside {
+            return self.add_beside(new, &how, index);
+        }
+
         let placed = match (role(&["from_left"]), role(&["from_right"])) {
             (Some(at), _) => Some(at),
             (None, Some(at)) => Some(wall_len - at - width),
             (None, None) => None,
         };
-        let slide = placed.is_none();
         let offset = match placed {
             Some(at) => at,
-            None => match self.maybe("position").as_deref() {
+            None => match position.as_deref() {
                 Some("left_end") => {
                     self.assumed
                         .push("Placed 2' from the wall's left end, seen from outside".into());
@@ -880,84 +943,115 @@ impl<'a> Clause<'a> {
                 }
             },
         };
-        let edit = |offset, header| Edit::AddOpening {
-            wall,
-            kind,
-            offset,
-            width,
-            height,
-            sill_height: sill,
-            header,
+        // A given spot stays put; otherwise Rust tries the nearest spots
+        // either way.
+        let offsets = if placed.is_some() {
+            vec![offset]
+        } else {
+            nearest(offset, Length::ZERO, room)
         };
+        let project = self.project.clone();
+        self.fit(&project, &new, &offsets)
+            .map(|e| vec![e])
+            .map_err(Stop::Problem)
+    }
 
-        // Rust tries the nearest spots and, for a door up to 4' wide, one
-        // header size down, and keeps the first that frames.
-        let headers: &[Nominal] = match kind {
-            OpeningKind::Door if width <= Length::feet(4) => &[header, Nominal::new(2, 6)],
+    /// New openings beside opening `index` on the new opening's wall: on its
+    /// left, its right, or both sides, seen from outside.
+    fn add_beside(&mut self, new: New, how: &str, index: usize) -> Out {
+        let b = self
+            .project
+            .building
+            .as_ref()
+            .expect("checked by the caller");
+        let room = new.wall.length(b) - new.width;
+        let anchor = self
+            .project
+            .walls
+            .iter()
+            .find(|w| w.id == new.wall.id())
+            .and_then(|w| w.openings.get(index))
+            .expect("picks are checked against the options");
+        let (a_left, a_right) = (anchor.offset, anchor.offset + anchor.width);
+        let gap = Length::feet(1);
+        let near = kind_name(anchor.kind);
+        let sides: &[&str] = match how {
+            "left_of" => &["left"],
+            "right_of" => &["right"],
+            _ => &["left", "right"],
+        };
+        self.assumed.push(format!(
+            "About {gap} from the {near}, the nearest spot that frames"
+        ));
+        let mut project = self.project.clone();
+        let mut edits = Vec::new();
+        for &side in sides {
+            // Start a gap away and move only away from it, so the opening
+            // stays on its side.
+            let offsets = if side == "left" {
+                let start = a_left - gap - new.width;
+                nearest(start, Length::ZERO, a_left - new.width)
+            } else {
+                let start = a_right + gap;
+                nearest(start, a_right, room)
+            };
+            let edit = self.fit(&project, &new, &offsets).map_err(|e| {
+                Stop::Problem(format!("There's no room on the {side} of the {near}: {e}"))
+            })?;
+            edit.apply(&mut project)
+                .map_err(|e| Stop::Problem(e.to_string()))?;
+            edits.push(edit);
+        }
+        Ok(edits)
+    }
+
+    /// The first of `offsets` where `new` frames in `project`, trying a door
+    /// up to 4' wide with a 2x6 header too. Says what it assumed.
+    fn fit(&mut self, project: &Project, new: &New, offsets: &[Length]) -> Result<Edit, String> {
+        let header = new.header;
+        let headers: &[Nominal] = match new.kind {
+            OpeningKind::Door if new.width <= Length::feet(4) => &[header, Nominal::new(2, 6)],
             _ => &[header],
         };
-        let room = wall_len - width;
-        let offsets: Vec<Length> = if slide {
-            let inch = Length::inches(1);
-            let mut v = vec![offset];
-            let mut k = 1;
-            while offset - inch * k >= Length::ZERO || offset + inch * k <= room {
-                for at in [offset - inch * k, offset + inch * k] {
-                    if at >= Length::ZERO && at <= room {
-                        v.push(at);
-                    }
-                }
-                k += 1;
-            }
-            v
-        } else {
-            vec![offset]
-        };
-        let Some(first_problem) = self.wall_problem(wall, &edit(offset, header)) else {
-            self.assumed.push(format!(
-                "{header} header, the app's default; check it for this span"
-            ));
-            return Ok(vec![edit(offset, header)]);
-        };
+        let first = offsets.first().copied().unwrap_or(Length::ZERO);
+        let mut first_problem = None;
         for &h in headers {
-            for &at in &offsets {
-                if self.wall_problem(wall, &edit(at, h)).is_none() {
-                    if at != offset {
-                        let side = if at < offset { "left" } else { "right" };
-                        let by = if at < offset {
-                            offset - at
+            for &at in offsets {
+                let edit = new.edit(at, h);
+                match wall_problem(project, new.wall, &edit) {
+                    None => {
+                        if at != first {
+                            let (side, by) = if at < first {
+                                ("left", first - at)
+                            } else {
+                                ("right", at - first)
+                            };
+                            self.assumed
+                                .push(format!("Moved {by} {side} to clear the other openings"));
+                        }
+                        self.assumed.push(if h == header {
+                            format!("{h} header, the app's default; check it for this span")
                         } else {
-                            at - offset
-                        };
-                        self.assumed
-                            .push(format!("Moved {by} {side} to clear the other openings"));
+                            format!(
+                                "{h} header so it fits under the top plates; check it for this span"
+                            )
+                        });
+                        return Ok(edit);
                     }
-                    self.assumed.push(if h == header {
-                        format!("{h} header, the app's default; check it for this span")
-                    } else {
-                        format!(
-                            "{h} header so it fits under the top plates; check it for this span"
-                        )
-                    });
-                    return Ok(vec![edit(at, h)]);
+                    Some(p) => {
+                        first_problem.get_or_insert(p);
+                    }
                 }
             }
         }
-        Err(Stop::Problem(format!(
-            "A {width} x {height} {} won't fit in the {} wall: {first_problem}",
-            kind_name(kind),
-            wall.id()
-        )))
-    }
-
-    /// The first reason `edit` keeps its wall from framing.
-    fn wall_problem(&self, wall: Side, edit: &Edit) -> Option<String> {
-        let mut p = self.project.clone();
-        edit.apply(&mut p).ok()?;
-        let prefix = format!("wall {}: ", wall.id());
-        crate::framing_problems(&p)
-            .into_iter()
-            .find_map(|e| e.strip_prefix(&prefix).map(str::to_string))
+        Err(format!(
+            "A {} x {} {} won't fit in the {} wall: {}",
+            new.width,
+            new.height,
+            kind_name(new.kind),
+            new.wall.id(),
+            first_problem.unwrap_or_else(|| "there's no room".into())
+        ))
     }
 
     fn remove_opening(&mut self) -> Out {
@@ -972,4 +1066,57 @@ impl<'a> Clause<'a> {
             .expect("picks are checked against the options");
         Ok(vec![Edit::RemoveOpening { wall, index }])
     }
+}
+
+/// An opening about to be added, before it has a place.
+struct New {
+    wall: Side,
+    kind: OpeningKind,
+    width: Length,
+    height: Length,
+    sill: Length,
+    header: Nominal,
+}
+
+impl New {
+    fn edit(&self, offset: Length, header: Nominal) -> Edit {
+        Edit::AddOpening {
+            wall: self.wall,
+            kind: self.kind,
+            offset,
+            width: self.width,
+            height: self.height,
+            sill_height: self.sill,
+            header,
+        }
+    }
+}
+
+/// `start` and then every inch from it within `lo..=hi`, nearest first.
+fn nearest(start: Length, lo: Length, hi: Length) -> Vec<Length> {
+    let inch = Length::inches(1);
+    let mut v = Vec::new();
+    if start >= lo && start <= hi {
+        v.push(start);
+    }
+    let mut k = 1;
+    while start - inch * k >= lo || start + inch * k <= hi {
+        for at in [start - inch * k, start + inch * k] {
+            if at >= lo && at <= hi {
+                v.push(at);
+            }
+        }
+        k += 1;
+    }
+    v
+}
+
+/// The first reason `edit` keeps its wall from framing in `project`.
+fn wall_problem(project: &Project, wall: Side, edit: &Edit) -> Option<String> {
+    let mut p = project.clone();
+    edit.apply(&mut p).ok()?;
+    let prefix = format!("wall {}: ", wall.id());
+    crate::framing_problems(&p)
+        .into_iter()
+        .find_map(|e| e.strip_prefix(&prefix).map(str::to_string))
 }

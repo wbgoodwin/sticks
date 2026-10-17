@@ -307,6 +307,57 @@ fn drops_a_header_size_to_fit_a_door_under_a_low_wall() {
 }
 
 #[test]
+fn puts_openings_beside_an_existing_one() {
+    let picks = [
+        ("0.intent", "add_opening"),
+        ("0.kind", "window"),
+        ("0.position", "both_sides"),
+        ("0.next_to", "front-1"),
+    ];
+    let r = read(
+        "please add a window on each side of the door",
+        &sure(&picks),
+    );
+    let e = r.edits().unwrap();
+    assert_eq!(
+        e.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+        [
+            "Add a 3' x 3' window to the front wall, 3' 3\" from its left end",
+            "Add a 3' x 3' window to the front wall, 11' 5-1/2\" from its left end",
+        ]
+    );
+    assert!(framing_problems(&apply_all(&shed(), &e).unwrap()).is_empty());
+
+    // Only one side, and the request doesn't say which wall: the door's.
+    let picks = [
+        ("0.intent", "add_opening"),
+        ("0.kind", "window"),
+        ("0.wall", "unsaid"),
+        ("0.position", "right_of"),
+        ("0.next_to", "front-1"),
+    ];
+    let e = read("a window right of the door", &sure(&picks))
+        .edits()
+        .unwrap();
+    assert_eq!(e.len(), 1);
+    assert!(
+        matches!(&e[0], Edit::AddOpening { offset, .. } if offset.to_string() == "11' 5-1/2\"")
+    );
+}
+
+#[test]
+fn asks_which_opening_when_beside_one_is_unclear() {
+    let picks = [
+        ("0.intent", "add_opening"),
+        ("0.kind", "window"),
+        ("0.position", "left_of"),
+        ("0.next_to", "unsaid"),
+    ];
+    let r = read("put a window next to it", &sure(&picks));
+    assert_eq!(r.questions().next().unwrap().id, "0.next_to");
+}
+
+#[test]
 fn says_why_an_opening_wont_fit_anywhere() {
     let picks = [
         ("0.intent", "add_opening"),

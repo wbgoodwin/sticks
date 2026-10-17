@@ -28,6 +28,7 @@ const REQUESTS = [
   "paint it red",
   "put a 36x48 window in the right wall 2' from the left",
   "make the porch 8' deep",
+  "please add a window on each side of the door",
 ];
 
 // What `sticks edit --questions` prints.
@@ -102,7 +103,7 @@ for (const request of REQUESTS) {
       overhang: ["direction"],
       porch: ["porch", "deck", "direction"],
       deck: ["deck"],
-      add_opening: ["kind", "wall", "position"],
+      add_opening: ["kind", "wall", "position", "next_to"],
       remove_opening: ["which"],
       lumber: ["framing"],
       roof_kind: ["roof_kind"],
