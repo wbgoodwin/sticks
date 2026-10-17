@@ -543,7 +543,38 @@ mountCommand($<HTMLDivElement>(".command"), {
     renderPanel(panel, project, panelContext, events);
     liveHints();
   },
+  reveal(target) {
+    const opening = /^(front|back|left|right)-\d+$/.exec(target);
+    if (opening) panelContext.selectWall(opening[1]);
+    const title = opening || target === "new_opening" ? "Openings" : PANEL_SECTIONS[target];
+    const section = [...panel.querySelectorAll<HTMLElement>(".panel-section")].find(
+      (s) => s.querySelector("h2")?.textContent === title,
+    );
+    if (!section) return;
+    section.scrollIntoView({ block: "center", behavior: "smooth" });
+    section.classList.remove("flash");
+    void section.offsetWidth;
+    section.classList.add("flash");
+  },
 });
+
+/** The panel section where each command-bar target is edited. */
+const PANEL_SECTIONS: Record<string, string> = {
+  width: "Shed",
+  depth: "Shed",
+  height: "Shed",
+  footprint: "Shed",
+  studs: "Shed",
+  spacing: "Shed",
+  pitch: "Roof",
+  roof_shape: "Roof",
+  overhangs: "Roof",
+  rafters: "Roof",
+  joists: "Floor",
+  porch: "Porch",
+  porch_depth: "Porch",
+  deck: "Porch",
+};
 
 /** Starts editing another project. */
 function openProject(next: ProjectJson): void {

@@ -1,7 +1,7 @@
-// Runs sample requests the way the app will: Rust lists every question
-// about a request, Jev answers them in one batched call, and Rust turns the
-// confident answers into edits. Whatever Jev wasn't sure of, or the request
-// doesn't say, is left for you.
+// Runs sample requests the way the app does: Rust asks Jev what in the
+// design each part of a request changes, then that thing's own questions,
+// and turns the confident answers into edits. Whatever Jev wasn't sure of,
+// or the request doesn't say, is left for you.
 //
 //   cargo build -p sticks-cli
 //   TYPESAFE_API_KEY=... node scripts/jev-probe.ts
@@ -30,6 +30,8 @@ const REQUESTS = [
   "make the porch 8' deep",
   "please add a window on each side of the door",
   "make the door 60 inches by 80 inches",
+  "center the front door",
+  "add two windows to the back wall",
 ];
 
 // What `sticks edit --questions` prints.
@@ -51,6 +53,7 @@ interface Answer {
 interface Reading {
   steps: {
     text: string;
+    target?: string;
     edits: unknown[];
     assumed?: string[];
     question?: { id: string; prompt: string; reason: string };
@@ -71,22 +74,26 @@ if (!key) {
 }
 const client = new TypeSafeClient();
 
+const file = join(dir, "answers.json");
 for (const request of REQUESTS) {
-  const asks = JSON.parse(run([request, "--questions"])) as Ask[];
-  // Each question carries its clause, since one request can hold several.
-  const questions = Object.fromEntries(
-    asks.map((a) => [
-      a.id,
-      choice(`${a.prompt} About: "${a.text}"`, Object.fromEntries(a.options.map((o) => [o.label, o.description]))),
-    ]),
-  );
-  const { answers } = await client.systemOne({ state: { request, design }, questions });
-
+  // Round one asks what each part changes; round two, that thing's questions.
   const picked: Record<string, Answer> = {};
-  for (const [id, a] of Object.entries(answers)) {
-    if (a.type === "choice") picked[id] = { pick: a.choice, confidence: a.confidence };
+  for (let round = 0; round < 3; round++) {
+    writeFileSync(file, JSON.stringify(picked));
+    const asks = JSON.parse(run([request, "--answers", file, "--questions"])) as Ask[];
+    if (asks.length === 0) break;
+    // Each question carries its clause, since one request can hold several.
+    const questions = Object.fromEntries(
+      asks.map((a) => [
+        a.id,
+        choice(`${a.prompt} About: "${a.text}"`, Object.fromEntries(a.options.map((o) => [o.label, o.description]))),
+      ]),
+    );
+    const { answers } = await client.systemOne({ state: { request, design }, questions });
+    for (const [id, a] of Object.entries(answers)) {
+      if (a.type === "choice") picked[id] = { pick: a.choice, confidence: a.confidence };
+    }
   }
-  const file = join(dir, "answers.json");
   writeFileSync(file, JSON.stringify(picked));
   const reading = JSON.parse(run([request, "--answers", file, "--json"])) as Reading;
 
@@ -94,25 +101,12 @@ for (const request of REQUESTS) {
   console.log(`\n"${request}"  [${asked ? "asks you" : "settled"}]`);
   for (const s of reading.steps) {
     const i = reading.steps.indexOf(s);
-    const intent = picked[`${i}.intent`];
     const pct = (a: Answer) => `${a.pick} ${Math.round(a.confidence * 100)}%`;
-    if (intent) console.log(`  "${s.text}": ${pct(intent)}`);
-    // The picks Rust reads for each kind of change, plus the numbers.
-    const used: Record<string, string[]> = {
-      resize: ["dimension", "direction"],
-      pitch: ["direction"],
-      overhang: ["direction"],
-      porch: ["porch", "deck", "direction"],
-      deck: ["deck"],
-      add_opening: ["kind", "wall", "position", "next_to"],
-      change_opening: ["which"],
-      remove_opening: ["which"],
-      lumber: ["framing"],
-      roof_kind: ["roof_kind"],
-    };
-    const nums = Object.keys(picked).filter((id) => id.startsWith(`${i}.num`));
-    const slots = [...(used[intent?.pick ?? ""] ?? []).map((slot) => `${i}.${slot}`), ...nums];
-    const shown = slots.flatMap((id) => (picked[id] ? [`${id.slice(id.indexOf(".") + 1)} ${pct(picked[id])}`] : []));
+    const target = picked[`${i}.target`];
+    if (target) console.log(`  "${s.text}": ${pct(target)}`);
+    const shown = Object.keys(picked)
+      .filter((id) => id.startsWith(`${i}.`) && id !== `${i}.target` && picked[id].pick !== "unsaid")
+      .map((id) => `${id.slice(id.indexOf(".") + 1)} ${pct(picked[id])}`);
     if (shown.length) console.log(`    picks: ${shown.join(", ")}`);
     for (const e of s.edits) console.log(`    edit: ${JSON.stringify(e)}`);
     for (const a of s.assumed ?? []) console.log(`    assumed: ${a}`);

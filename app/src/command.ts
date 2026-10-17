@@ -1,9 +1,10 @@
 // The command bar: a change in plain English, previewed before it's made.
 //
-// Rust lists every question about the request, Jev answers them in one call,
-// and Rust turns the confident answers into changes. Whatever Jev wasn't
-// sure of, or the request doesn't say, shows as buttons for the user. Their
-// answers re-read the request without asking Jev again.
+// Rust asks Jev what in the design each part of the request changes, then
+// that thing's own questions (what to do to it, where, how many), and turns
+// the confident answers into changes. Whatever Jev wasn't sure of, or the
+// request doesn't say, shows as buttons for the user. An answer from the
+// user may open new questions for Jev, such as once they pick what changes.
 
 import { cutList, describeDesign, editQuestions, readEdit, type EditAnswer, type EditReading, type ProjectJson } from "./core";
 import { dollars } from "./cutlist";
@@ -14,6 +15,21 @@ export interface CommandContext {
   readonly project: ProjectJson;
   /** Makes `next` the project, keeping the view. */
   replace(next: ProjectJson): void;
+  /** Shows where a target (`width`, `front-1`, ...) is edited in the panel. */
+  reveal(target: string): void;
+}
+
+/** Rounds of Jev questions before giving up: the target, then its own. */
+const ROUNDS = 3;
+
+/** Asks Jev until Rust has nothing more for it, adding to `answers`. */
+async function settle(base: ProjectJson, request: string, answers: Record<string, EditAnswer>): Promise<void> {
+  const design = describeDesign(base);
+  for (let round = 0; round < ROUNDS; round++) {
+    const asks = editQuestions(base, request, answers);
+    if (asks.length === 0) return;
+    Object.assign(answers, await askJev(request, design, asks));
+  }
 }
 
 /** A request being previewed. */
@@ -59,8 +75,8 @@ export function mountCommand(root: HTMLElement, ctx: CommandContext): { focus():
     showBusy(request);
     submit.disabled = true;
     try {
-      const asks = editQuestions(base, request);
-      const answers = await askJev(request, describeDesign(base), asks);
+      const answers: Record<string, EditAnswer> = {};
+      await settle(base, request, answers);
       if (mine !== generation) return;
       pending = { request, base, answers, reading: readEdit(base, request, answers) };
       render();
@@ -92,7 +108,10 @@ export function mountCommand(root: HTMLElement, ctx: CommandContext): { focus():
     if (!target) return;
     switch (target.dataset.do) {
       case "answer":
-        answer(target.dataset.id!, target.dataset.pick!);
+        void answer(target.dataset.id!, target.dataset.pick!);
+        break;
+      case "reveal":
+        ctx.reveal(target.dataset.target!);
         break;
       case "apply":
         apply();
@@ -110,10 +129,23 @@ export function mountCommand(root: HTMLElement, ctx: CommandContext): { focus():
     }
   });
 
-  function answer(id: string, pick: string): void {
+  async function answer(id: string, pick: string): Promise<void> {
     if (!pending) return;
-    pending.answers[id] = { pick, confidence: 1, by_user: true };
-    pending.reading = readEdit(pending.base, pending.request, pending.answers);
+    const now = pending;
+    const mine = ++generation;
+    now.answers[id] = { pick, confidence: 1, by_user: true };
+    if (editQuestions(now.base, now.request, now.answers).length > 0) {
+      showBusy(now.request);
+      try {
+        await settle(now.base, now.request, now.answers);
+      } catch (err) {
+        if (mine === generation) showError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      if (mine !== generation) return;
+    }
+    now.reading = readEdit(now.base, now.request, now.answers);
+    pending = now;
     render();
   }
 
@@ -185,7 +217,8 @@ export function mountCommand(root: HTMLElement, ctx: CommandContext): { focus():
     const steps = reading.steps.map((s) => {
       const changes = s.changes.map((c) => `<li class="change">${esc(c)}</li>`).join("");
       const assumed = s.assumed.map((a) => `<li class="assumed">${esc(a)}</li>`).join("");
-      const problem = s.problem ? `<p class="step-problem">${esc(s.problem)}</p>` : "";
+      const reveal = s.problem && s.target ? ` <button type="button" class="link-button" data-do="reveal" data-target="${esc(s.target)}">Show it in the panel</button>` : "";
+      const problem = s.problem ? `<p class="step-problem">${esc(s.problem)}${reveal}</p>` : "";
       const q = s.question;
       const question = q
         ? `<div class="step-question">

@@ -90,11 +90,16 @@ pub fn describe_design(project_json: &str) -> Result<String, JsError> {
     Ok(sticks_intent::describe(&project))
 }
 
-/// Every multiple-choice question about a plain-English request, for a
-/// classifier such as Jev to answer in one call.
+/// The multiple-choice questions a classifier such as Jev should answer
+/// next about a plain-English request, given the answers so far (a JSON
+/// map of question id to answer). Ask until it comes back empty.
 #[wasm_bindgen]
-pub fn edit_questions(project_json: &str, request: &str) -> Result<String, JsError> {
-    edit_questions_json(project_json, request).map_err(|e| JsError::new(&e))
+pub fn edit_questions(
+    project_json: &str,
+    request: &str,
+    answers_json: &str,
+) -> Result<String, JsError> {
+    edit_questions_json(project_json, request, answers_json).map_err(|e| JsError::new(&e))
 }
 
 /// What a request comes to with the answers so far (a JSON map of question
@@ -363,6 +368,9 @@ struct EditView {
 #[derive(Serialize)]
 struct StepView {
     text: String,
+    /// What in the design it changes, once that's settled, such as
+    /// `width` or `front-1`.
+    target: Option<String>,
     /// Each change in builder English.
     changes: Vec<String>,
     assumed: Vec<String>,
@@ -370,9 +378,16 @@ struct StepView {
     problem: Option<String>,
 }
 
-pub fn edit_questions_json(project_json: &str, request: &str) -> Result<String, String> {
+pub fn edit_questions_json(
+    project_json: &str,
+    request: &str,
+    answers_json: &str,
+) -> Result<String, String> {
     let project: Project = serde_json::from_str(project_json).map_err(|e| e.to_string())?;
-    serde_json::to_string(&sticks_intent::questions(&project, request)).map_err(|e| e.to_string())
+    let answers: sticks_intent::Answers =
+        serde_json::from_str(answers_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&sticks_intent::questions(&project, request, &answers))
+        .map_err(|e| e.to_string())
 }
 
 pub fn read_edit_json(
@@ -399,6 +414,7 @@ pub fn read_edit_json(
         .into_iter()
         .map(|s| StepView {
             text: s.text,
+            target: s.target,
             changes: s.edits.iter().map(|e| e.to_string()).collect(),
             assumed: s.assumed,
             question: s.question,
@@ -880,11 +896,23 @@ mod tests {
             &Project::from_toml(include_str!("../../../examples/shed.toml")).unwrap(),
         )
         .unwrap();
-        let asks: serde_json::Value =
-            serde_json::from_str(&edit_questions_json(&project, "add a window").unwrap()).unwrap();
-        assert!(asks.as_array().unwrap().iter().any(|a| a["id"] == "0.wall"));
+        // First the target, then, once it's settled, its own questions.
+        let ids = |answers: &str| -> Vec<String> {
+            let asks: serde_json::Value = serde_json::from_str(
+                &edit_questions_json(&project, "add a window", answers).unwrap(),
+            )
+            .unwrap();
+            asks.as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(ids("{}"), ["0.target"]);
+        let target = r#"{"0.target": {"pick": "new_opening", "confidence": 0.95}}"#;
+        assert!(ids(target).contains(&"0.wall".to_string()));
 
-        let sure = r#"{"0.intent": {"pick": "add_opening", "confidence": 0.95},
+        let sure = r#"{"0.target": {"pick": "new_opening", "confidence": 0.95},
                        "0.kind": {"pick": "window", "confidence": 0.95}}"#;
         let out: serde_json::Value =
             serde_json::from_str(&read_edit_json(&project, "add a window", sure).unwrap()).unwrap();

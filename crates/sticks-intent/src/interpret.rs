@@ -1,12 +1,19 @@
 //! Turns a request into edits.
 //!
 //! Rust reads what's notation: it splits the request into clauses and reads
-//! the lengths, pitches and sizes in each. Everything that's meaning (what
-//! kind of change, which wall, what a number is for) is a fixed-option
-//! question from [`questions`], answered by a classifier such as Jev. Rust
-//! then turns confident answers into edits; anything the classifier wasn't
-//! sure of, or the request doesn't say, comes back as a [`Question`] for the
-//! user.
+//! the lengths, pitches and sizes in each. Everything that's meaning is a
+//! fixed-option question answered by a classifier such as Jev, built from
+//! the design itself. First: what in the design does each clause change?
+//! The options are every part of the design that can change, with its
+//! value now, plus a new opening. Then, for that target: what to do to it
+//! (set it, make it bigger or smaller, center it, put it beside another
+//! opening, how many), and what each number is for.
+//!
+//! [`questions`] lists what the classifier still needs to answer, given the
+//! answers so far: the targets first, then each target's own questions, so
+//! a request takes two rounds. [`interpret`] turns confident answers into
+//! edits; anything the classifier wasn't sure of, or the request doesn't
+//! say, comes back as a [`Question`] for the user.
 
 use std::collections::BTreeMap;
 
@@ -80,6 +87,10 @@ impl Interpretation {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Step {
     pub text: String,
+    /// What in the design it changes, once that's settled: a target label
+    /// such as `width` or `front-1`, so the app can show it in the panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     pub edits: Vec<Edit>,
     /// Choices made without being told, so the preview can show them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -111,105 +122,60 @@ pub struct Choice {
     pub description: String,
 }
 
-/// What a clause is asking for.
+/// Something in the design a clause can change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Intent {
-    Resize,
+enum Target {
+    Size(Dimension),
+    /// Width and depth together.
+    Footprint,
     Pitch,
-    RoofKind,
-    Overhang,
-    Porch,
-    Deck,
-    AddOpening,
-    ChangeOpening,
-    RemoveOpening,
+    RoofShape,
+    Overhangs,
+    Lumber(Framing),
     Spacing,
-    Lumber,
+    Porch,
+    PorchDepth,
+    Deck,
+    /// The opening at this index in that wall.
+    Opening(Side, usize),
+    NewOpening,
 }
 
-impl Intent {
-    const ALL: [Intent; 11] = [
-        Intent::Resize,
-        Intent::Pitch,
-        Intent::RoofKind,
-        Intent::Overhang,
-        Intent::Porch,
-        Intent::Deck,
-        Intent::AddOpening,
-        Intent::ChangeOpening,
-        Intent::RemoveOpening,
-        Intent::Spacing,
-        Intent::Lumber,
-    ];
-
-    fn label(self) -> &'static str {
-        match self {
-            Intent::Resize => "resize",
-            Intent::Pitch => "pitch",
-            Intent::RoofKind => "roof_kind",
-            Intent::Overhang => "overhang",
-            Intent::Porch => "porch",
-            Intent::Deck => "deck",
-            Intent::AddOpening => "add_opening",
-            Intent::ChangeOpening => "change_opening",
-            Intent::RemoveOpening => "remove_opening",
-            Intent::Spacing => "spacing",
-            Intent::Lumber => "lumber",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            Intent::Resize => "Change the building's width, depth or height",
-            Intent::Pitch => "Make the roof steeper or flatter",
-            Intent::RoofKind => "Switch between a lean-to and a gable roof",
-            Intent::Overhang => "Change how far the roof runs past the walls",
-            Intent::Porch => "Add, resize or remove the front porch",
-            Intent::Deck => "Add or remove the deck under the porch",
-            Intent::AddOpening => "Add a window or door to a wall",
-            Intent::ChangeOpening => "Resize or move an existing window or door",
-            Intent::RemoveOpening => "Remove a window, door or other opening",
-            Intent::Spacing => "Change how far apart studs, joists and rafters are",
-            Intent::Lumber => "Use a different lumber size for studs, joists or rafters",
-        }
-    }
-}
-
-/// The intent option for requests that aren't about framing.
-const NOT_FRAMING: &str = "not_framing";
-
-/// What a number in a request is for.
-const ROLES: [(&str, &str); 7] = [
-    ("size", "The new size of what's being changed"),
-    ("change", "How much to add or take away"),
-    ("width", "How wide a window or door is"),
-    ("height", "How tall a window or door is"),
-    (
-        "from_left",
-        "How far a window or door is from the wall's left end",
-    ),
-    (
-        "from_right",
-        "How far a window or door is from the wall's right end",
-    ),
-    ("other", "Something else"),
-];
-
-/// Slots whose answer the request may simply not give ("add a window":
-/// which wall?). Their questions offer [`UNSAID`] so the classifier can say
-/// so, rather than being sure of a guess.
-const MAY_BE_UNSAID: [&str; 7] = [
-    "dimension",
-    "direction",
-    "kind",
-    "wall",
-    "framing",
-    "which",
-    "next_to",
-];
+/// The target option for anything not in the list.
+const SOMETHING_ELSE: &str = "something_else";
 
 /// The option for "the request doesn't say".
 const UNSAID: &str = "unsaid";
+
+/// Where an opening goes along its wall.
+const PLACES: [(&str, &str); 10] = [
+    ("center", "Centered on the wall"),
+    (
+        "left_end",
+        "At the wall's left end seen from outside, or a distance from it",
+    ),
+    (
+        "right_end",
+        "At the wall's right end seen from outside, or a distance from it",
+    ),
+    ("spread", "Several spread evenly along the wall"),
+    (
+        "left_of",
+        "Beside another door or window, on its left seen from outside",
+    ),
+    (
+        "right_of",
+        "Beside another door or window, on its right seen from outside",
+    ),
+    ("both_sides", "One on each side of another door or window"),
+    ("shift_left", "Moved left from where it is now"),
+    ("shift_right", "Moved right from where it is now"),
+    ("other", "Somewhere else"),
+];
+
+/// Places that only make sense for a new opening, and for one being moved.
+const NEW_ONLY: [&str; 2] = ["spread", "both_sides"];
+const MOVE_ONLY: [&str; 2] = ["shift_left", "shift_right"];
 
 enum Stop {
     Ask(Question),
@@ -246,33 +212,54 @@ fn opening_defaults(kind: OpeningKind) -> (Length, Length, Length, Nominal) {
 /// opening is 2-1/2" wider.
 const SLAB_WIDTHS: [i64; 9] = [24, 28, 30, 32, 34, 36, 42, 48, 72];
 
-/// Every question a classifier should answer about `request`, in one batch.
-pub fn questions(project: &Project, request: &str) -> Vec<Ask> {
-    let empty = Answers::new();
+/// Dimensional lumber widths, for "bigger" and "smaller".
+const WIDTHS: [u8; 5] = [4, 6, 8, 10, 12];
+
+/// The questions a classifier should answer next about `request`, given the
+/// answers so far: which target each clause changes, then, once that's
+/// settled, the target's own questions. Empty once there's nothing left
+/// for the classifier; anything still open is for the user.
+pub fn questions(project: &Project, request: &str, answers: &Answers) -> Vec<Ask> {
     clauses(request)
         .into_iter()
         .enumerate()
         .flat_map(|(i, text)| {
-            let c = Clause::new(i, text, &empty, project);
-            let mut asks = Vec::new();
-            for slot in c.slots() {
-                let (prompt, mut options) = c.slot(&slot);
-                if MAY_BE_UNSAID.contains(&slot.as_str()) {
-                    options.push((UNSAID.into(), "The request doesn't say".into()));
-                }
-                asks.push(Ask::Choice {
-                    id: c.id(&slot),
-                    text: c.text.clone(),
-                    prompt,
-                    options: options
-                        .into_iter()
-                        .map(|(label, description)| Choice { label, description })
-                        .collect(),
-                });
-            }
-            asks
+            let c = Clause::new(i, text, answers, project);
+            let slots = match answers.get(&c.id("target")) {
+                None => vec!["target".to_string()],
+                Some(_) => match c.settled_target() {
+                    Some(t) => c.slots(t),
+                    None => Vec::new(),
+                },
+            };
+            slots
+                .into_iter()
+                .filter(|s| !answers.contains_key(&c.id(s)))
+                .map(|slot| {
+                    let (prompt, mut options) = c.slot(&slot);
+                    if may_be_unsaid(&slot) {
+                        options.push((UNSAID.into(), "The request doesn't say".into()));
+                    }
+                    Ask::Choice {
+                        id: c.id(&slot),
+                        text: c.text.clone(),
+                        prompt,
+                        options: options
+                            .into_iter()
+                            .map(|(label, description)| Choice { label, description })
+                            .collect(),
+                    }
+                })
+                .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// Slots whose answer the request may simply not give ("add a window":
+/// which wall?). Their questions offer [`UNSAID`] so the classifier can say
+/// so, rather than being sure of a guess.
+fn may_be_unsaid(slot: &str) -> bool {
+    !matches!(slot, "target") && !slot.starts_with("num")
 }
 
 pub fn interpret(project: &Project, request: &str, answers: &Answers) -> Interpretation {
@@ -282,6 +269,7 @@ pub fn interpret(project: &Project, request: &str, answers: &Answers) -> Interpr
         .map(|(i, text)| {
             let mut c = Clause::new(i, text.clone(), answers, project);
             let result = c.run();
+            let target = c.settled_target().map(|t| c.target_label(t));
             let mut assumed: Vec<String> = Vec::new();
             for a in c.assumed {
                 if !assumed.contains(&a) {
@@ -289,6 +277,7 @@ pub fn interpret(project: &Project, request: &str, answers: &Answers) -> Interpr
                 }
             }
             let mut step = Step {
+                target,
                 text,
                 edits: Vec::new(),
                 assumed,
@@ -317,6 +306,12 @@ struct Clause<'a> {
 
 /// A number's position among the clause's numbers, and the number.
 type Numbered<'n> = (usize, &'n Num);
+
+/// The width, height and distance given for an opening.
+type OpeningNumbers = (Option<Length>, Option<Length>, Option<Length>);
+
+/// A target, its label and what it is now.
+type TargetOption = (Target, String, String);
 
 impl<'a> Clause<'a> {
     fn new(index: usize, text: String, answers: &'a Answers, project: &'a Project) -> Self {
@@ -359,27 +354,183 @@ impl<'a> Clause<'a> {
         })
     }
 
-    /// The slots worth asking about for this clause.
-    fn slots(&self) -> Vec<String> {
-        let mut s: Vec<String> = [
-            "intent",
-            "dimension",
-            "direction",
-            "roof_kind",
-            "porch",
-            "deck",
-            "kind",
-            "wall",
-            "position",
-            "framing",
-        ]
-        .map(str::to_string)
-        .to_vec();
-        if !self.openings().is_empty() {
-            s.push("which".into());
-            s.push("next_to".into());
+    /// Everything in this design a clause can change, with its value now.
+    fn targets(&self) -> Vec<TargetOption> {
+        let p = self.project;
+        let mut t: Vec<TargetOption> = Vec::new();
+        let mut add = |target, label: &str, description: String| {
+            t.push((target, label.to_string(), description))
+        };
+        if let Some(b) = &p.building {
+            add(
+                Target::Size(Dimension::Width),
+                "width",
+                format!(
+                    "The building's width, along the front wall, now {}",
+                    b.width
+                ),
+            );
+            add(
+                Target::Size(Dimension::Depth),
+                "depth",
+                format!("The building's depth, front to back, now {}", b.depth),
+            );
+            add(
+                Target::Size(Dimension::Height),
+                "height",
+                format!("The building's height at the front wall, now {}", b.height),
+            );
+            add(
+                Target::Footprint,
+                "footprint",
+                format!(
+                    "The building's width and depth together, now {} x {}",
+                    b.width, b.depth
+                ),
+            );
         }
-        s.extend(self.nums().iter().map(|(k, _)| format!("num{k}")));
+        if let Some(r) = &p.roof {
+            add(
+                Target::Pitch,
+                "pitch",
+                format!("How steep the roof is, now {}", r.pitch),
+            );
+            let shape = match r.kind {
+                RoofKind::LeanTo => "a lean-to (one slope)",
+                RoofKind::Gable => "a gable (two slopes)",
+            };
+            add(
+                Target::RoofShape,
+                "roof_shape",
+                format!("The roof's shape, now {shape}"),
+            );
+            add(
+                Target::Overhangs,
+                "overhangs",
+                format!(
+                    "How far the roof runs past the front and back walls, now {:#}",
+                    r.front_overhang
+                ),
+            );
+            add(
+                Target::Lumber(Framing::Rafters),
+                "rafters",
+                format!("The roof rafters, now {}", r.rafter),
+            );
+        }
+        if let Some(f) = &p.floor {
+            add(
+                Target::Lumber(Framing::Joists),
+                "joists",
+                format!("The floor joists, now {}", f.joist),
+            );
+        }
+        add(
+            Target::Lumber(Framing::Studs),
+            "studs",
+            format!("The wall studs, now {}", p.rules.wall_lumber),
+        );
+        add(
+            Target::Spacing,
+            "spacing",
+            format!(
+                "How far apart studs, joists and rafters are, now {:#} on center",
+                p.rules.on_center
+            ),
+        );
+        if p.building.is_some() {
+            match &p.porch {
+                Some(porch) => {
+                    let deck = if porch.deck.is_some() {
+                        " with a deck"
+                    } else {
+                        ""
+                    };
+                    add(
+                        Target::Porch,
+                        "porch",
+                        format!("The front porch as a whole, now {} deep{deck}", porch.depth),
+                    );
+                    add(
+                        Target::PorchDepth,
+                        "porch_depth",
+                        format!("How deep the porch is, now {}", porch.depth),
+                    );
+                    let now = if porch.deck.is_some() {
+                        "there now"
+                    } else {
+                        "none now"
+                    };
+                    add(
+                        Target::Deck,
+                        "deck",
+                        format!("The deck under the porch, {now}"),
+                    );
+                }
+                None => add(
+                    Target::Porch,
+                    "porch",
+                    "A front porch, none now".to_string(),
+                ),
+            }
+        }
+        for ((side, i), label, description) in self.openings() {
+            add(Target::Opening(side, i), &label, description);
+        }
+        if p.building.is_some() {
+            add(
+                Target::NewOpening,
+                "new_opening",
+                "A new door, window or hole in a wall".to_string(),
+            );
+        }
+        t
+    }
+
+    fn target_label(&self, target: Target) -> String {
+        self.targets()
+            .into_iter()
+            .find(|(t, ..)| *t == target)
+            .map(|(_, l, _)| l)
+            .unwrap_or_default()
+    }
+
+    /// The target once the classifier is sure of it or the user picked it.
+    fn settled_target(&self) -> Option<Target> {
+        let a = self.answers.get(&self.id("target"))?;
+        if !a.by_user && a.confidence < CONFIDENT {
+            return None;
+        }
+        self.targets()
+            .into_iter()
+            .find(|(_, l, _)| *l == a.pick)
+            .map(|(t, ..)| t)
+    }
+
+    /// The questions about a settled target, asked in one batch.
+    fn slots(&self, target: Target) -> Vec<String> {
+        let mut s: Vec<&str> = match target {
+            Target::Size(_)
+            | Target::Footprint
+            | Target::Pitch
+            | Target::Overhangs
+            | Target::Lumber(_)
+            | Target::Spacing
+            | Target::PorchDepth => vec!["how"],
+            Target::RoofShape => vec!["shape"],
+            Target::Porch => vec!["porch", "deck"],
+            Target::Deck => vec!["deck"],
+            Target::Opening(..) => vec!["action", "place"],
+            Target::NewOpening => vec!["kind", "wall", "count", "place"],
+        };
+        let opening = matches!(target, Target::Opening(..) | Target::NewOpening);
+        if opening && self.openings().len() > usize::from(target != Target::NewOpening) {
+            s.push("ref");
+        }
+        let mut s: Vec<String> = s.into_iter().map(str::to_string).collect();
+        if opening {
+            s.extend(self.nums().iter().map(|(k, _)| format!("num{k}")));
+        }
         s
     }
 
@@ -390,45 +541,35 @@ impl<'a> Clause<'a> {
                 .map(|(l, d)| (l.to_string(), d.to_string()))
                 .collect()
         };
-        let b = self.project.building.as_ref();
+        let target = self.settled_target();
         match slot {
-            "intent" => {
-                let mut o: Vec<(String, String)> = Intent::ALL
-                    .iter()
-                    .map(|i| (i.label().to_string(), i.description().to_string()))
-                    .collect();
+            "target" => {
+                let mut o: Vec<(String, String)> =
+                    self.targets().into_iter().map(|(_, l, d)| (l, d)).collect();
                 o.push((
-                    NOT_FRAMING.into(),
-                    "Something else, which Sticks can't change from a request yet".into(),
+                    SOMETHING_ELSE.into(),
+                    "Something else, not in this list or not about the framing".into(),
                 ));
-                ("What kind of change is this?".into(), o)
+                ("What in the design does this change?".into(), o)
             }
-            "dimension" => (
-                "Which size of the building should change?".into(),
-                Dimension::ALL
-                    .iter()
-                    .map(|d| {
-                        let word = match d {
-                            Dimension::Width => "along the front wall",
-                            Dimension::Depth => "front to back",
-                            Dimension::Height => "the front wall's height",
-                        };
-                        let now = b.map(|b| format!(", now {}", d.of(b))).unwrap_or_default();
-                        (
-                            d.label().to_string(),
-                            format!("The {} ({word}){now}", d.label()),
-                        )
-                    })
-                    .collect(),
-            ),
-            "direction" => (
-                "Should it get bigger or smaller (steeper or flatter, deeper or shallower)?".into(),
+            "how" => (
+                "What should happen to it?".into(),
                 own(&[
-                    ("increase", "Bigger, longer, deeper, taller or steeper"),
-                    ("decrease", "Smaller, shorter, shallower, lower or flatter"),
+                    (
+                        "set",
+                        "Set it to a size or value the request gives, like \"20 feet wide\" or \"2x8\"",
+                    ),
+                    (
+                        "increase",
+                        "Make it bigger, longer, deeper, taller, heavier or steeper",
+                    ),
+                    (
+                        "decrease",
+                        "Make it smaller, shorter, shallower, lower, lighter or flatter",
+                    ),
                 ]),
             ),
-            "roof_kind" => (
+            "shape" => (
                 "Which roof shape?".into(),
                 own(&[
                     ("gable", "Two slopes meeting at a ridge"),
@@ -438,7 +579,7 @@ impl<'a> Clause<'a> {
             "porch" => (
                 "What should happen to the porch?".into(),
                 own(&[
-                    ("add_or_resize", "Add a porch or change its depth"),
+                    ("add_or_resize", "Add a porch, or keep it and change it"),
                     ("remove", "Take the porch off"),
                 ]),
             ),
@@ -448,6 +589,14 @@ impl<'a> Clause<'a> {
                     ("add", "Put a deck under the porch"),
                     ("remove", "Take the deck out"),
                     ("unmentioned", "The request doesn't mention a deck"),
+                ]),
+            ),
+            "action" => (
+                "What should happen to it?".into(),
+                own(&[
+                    ("resize", "Change its size"),
+                    ("move", "Move it along its wall"),
+                    ("remove", "Take it out"),
                 ]),
             ),
             "kind" => (
@@ -462,50 +611,39 @@ impl<'a> Clause<'a> {
                 ]),
             ),
             "wall" => (
-                "Which wall?".into(),
+                "Which wall does it go in?".into(),
                 self.wall_options()
                     .into_iter()
                     .map(|(_, l, d)| (l, d))
                     .collect(),
             ),
-            "position" => (
-                "Where along the wall?".into(),
+            "count" => (
+                "How many?".into(),
                 own(&[
-                    ("centered", "Centered, or no place given"),
-                    ("left_end", "Near the wall's left end, seen from outside"),
-                    ("right_end", "Near the wall's right end, seen from outside"),
-                    (
-                        "left_of",
-                        "Beside an existing door or window, on its left seen from outside",
-                    ),
-                    (
-                        "right_of",
-                        "Beside an existing door or window, on its right seen from outside",
-                    ),
-                    (
-                        "both_sides",
-                        "One on each side of an existing door or window",
-                    ),
+                    ("one", "One"),
+                    ("two", "Two"),
+                    ("three", "Three"),
+                    ("four", "Four"),
                 ]),
             ),
-            "framing" => (
-                "Which framing members?".into(),
-                Framing::ALL
-                    .iter()
-                    .map(|f| (f.label().to_string(), format!("The {}", f.label())))
-                    .collect(),
-            ),
-            "which" => (
-                "Which opening?".into(),
+            "place" => {
+                let skip: &[&str] = match target {
+                    Some(Target::NewOpening) => &MOVE_ONLY,
+                    _ => &NEW_ONLY,
+                };
+                (
+                    "Where along the wall?".into(),
+                    own(&PLACES)
+                        .into_iter()
+                        .filter(|(l, _)| !skip.contains(&l.as_str()))
+                        .collect(),
+                )
+            }
+            "ref" => (
+                "If it goes beside another door or window, which one?".into(),
                 self.openings()
                     .into_iter()
-                    .map(|(_, l, d)| (l, d))
-                    .collect(),
-            ),
-            "next_to" => (
-                "If the new opening goes beside an existing one, which one?".into(),
-                self.openings()
-                    .into_iter()
+                    .filter(|((side, i), ..)| target != Some(Target::Opening(*side, *i)))
                     .map(|(_, l, d)| (l, d))
                     .collect(),
             ),
@@ -518,7 +656,15 @@ impl<'a> Clause<'a> {
                     .unwrap_or_default();
                 (
                     format!("In this request, what is {written} for?"),
-                    own(&ROLES),
+                    own(&[
+                        ("width", "How wide the door or window is"),
+                        ("height", "How tall the door or window is"),
+                        (
+                            "distance",
+                            "A distance: from a wall end, from another door or window, or how far to move it",
+                        ),
+                        ("other", "Something else"),
+                    ]),
                 )
             }
         }
@@ -556,130 +702,149 @@ impl<'a> Clause<'a> {
     fn maybe(&self, slot: &str) -> Option<String> {
         self.answers
             .get(&self.id(slot))
-            .filter(|a| a.by_user || a.confidence >= CONFIDENT)
+            .filter(|a| a.pick != UNSAID && (a.by_user || a.confidence >= CONFIDENT))
             .map(|a| a.pick.clone())
     }
 
-    /// The numbers with a given role.
-    fn with_role(&self, roles: &[&str]) -> Result<Vec<(String, Num)>, Stop> {
-        let mut out = Vec::new();
-        for (k, n) in self.nums() {
-            let role = self.pick(&format!("num{k}"))?;
-            if roles.contains(&role.as_str()) {
-                out.push((role, n.clone()));
-            }
-        }
-        Ok(out)
-    }
-
-    fn intent(&self) -> Result<Intent, Stop> {
-        let pick = self.pick("intent")?;
-        if pick == NOT_FRAMING {
+    fn target(&self) -> Result<Target, Stop> {
+        let pick = self.pick("target")?;
+        if pick == SOMETHING_ELSE {
             return Err(Stop::Problem(
                 "Sticks can't make that change from a request yet. Try the panel on the left."
                     .into(),
             ));
         }
-        Ok(Intent::ALL
+        Ok(self
+            .targets()
             .into_iter()
-            .find(|i| i.label() == pick)
+            .find(|(_, l, _)| *l == pick)
+            .map(|(t, ..)| t)
             .expect("picks are checked against the options"))
     }
 
     fn run(&mut self) -> Out {
-        match self.intent()? {
-            Intent::Resize => self.resize(),
-            Intent::Pitch => self.pitch_edit(),
-            Intent::RoofKind => self.roof_kind(),
-            Intent::Overhang => self.overhang(),
-            Intent::Porch => self.porch(),
-            Intent::Deck => self.deck(),
-            Intent::AddOpening => self.add_opening(),
-            Intent::ChangeOpening => self.change_opening(),
-            Intent::RemoveOpening => self.remove_opening(),
-            Intent::Spacing => self.spacing(),
-            Intent::Lumber => self.lumber_edit(),
+        match self.target()? {
+            Target::Size(d) => self.size(d),
+            Target::Footprint => self.footprint(),
+            Target::Pitch => self.pitch_edit(),
+            Target::RoofShape => self.roof_shape(),
+            Target::Overhangs => self.overhang(),
+            Target::Lumber(f) => self.lumber_edit(f),
+            Target::Spacing => self.spacing(),
+            Target::Porch => self.porch(),
+            Target::PorchDepth => self.porch_depth(),
+            Target::Deck => self.deck(),
+            Target::Opening(side, i) => self.change_opening(side, i),
+            Target::NewOpening => self.new_opening(),
         }
     }
 
-    /// The new value of something that is `now`: a number given as the new
-    /// size, a number given as a change, or with no number, one `step` in
-    /// the direction asked for.
-    fn scalar(&mut self, now: Length, unit: Unit, step: Length) -> Result<Length, Stop> {
-        let given = self.with_role(&["size", "change"])?;
-        match given.first() {
-            Some((role, n)) => {
-                let Some(l) = n.length(unit) else {
-                    return Err(Stop::Problem(format!(
-                        "{} doesn't land on a sixteenth.",
-                        n.written()
-                    )));
-                };
-                if role == "size" {
-                    return Ok(l);
-                }
-                let d = if self.pick("direction")? == "increase" {
-                    1
+    /// The first length written in the clause, read in `unit` when it has
+    /// none.
+    fn length(&self, unit: Unit) -> Result<Option<Length>, Stop> {
+        match self.nums().first() {
+            None => Ok(None),
+            Some((_, n)) => n.length(unit).map(Some).ok_or_else(|| {
+                Stop::Problem(format!("{} doesn't land on a sixteenth.", n.written()))
+            }),
+        }
+    }
+
+    /// The new value of something that is `now`: set to the number given,
+    /// or bigger or smaller by it, or by one `step` when there's none.
+    fn scalar(
+        &mut self,
+        what: &str,
+        now: Length,
+        unit: Unit,
+        step: Length,
+    ) -> Result<Length, Stop> {
+        let how = self.pick("how")?;
+        let given = self.length(unit)?;
+        match (how.as_str(), given) {
+            ("set", Some(l)) => Ok(l),
+            ("set", None) => Err(Stop::Problem(format!(
+                "Give the new {what}, like {}.",
+                now + step
+            ))),
+            (how, by) => {
+                let by = by.unwrap_or_else(|| {
+                    self.assumed
+                        .push(format!("No amount given, so it changes by {step:#}"));
+                    step
+                });
+                Ok(if how == "increase" {
+                    now + by
                 } else {
-                    -1
-                };
-                Ok(now + l * d)
-            }
-            None => {
-                let d = if self.pick("direction")? == "increase" {
-                    1
-                } else {
-                    -1
-                };
-                self.assumed
-                    .push(format!("No amount given, so it moves by {step:#}"));
-                Ok(now + step * d)
+                    now - by
+                })
             }
         }
     }
 
-    fn resize(&mut self) -> Out {
-        let Some(b) = self.project.building.as_ref() else {
-            return Err(Stop::Problem(
-                "This project has no building to resize.".into(),
-            ));
-        };
+    fn size(&mut self, dimension: Dimension) -> Out {
         if let Some((w, d)) = self.pair() {
-            let (Some(w), Some(d)) = (w.length(Unit::Feet), d.length(Unit::Feet)) else {
-                return Err(Stop::Problem(
-                    "Those sizes don't land on a sixteenth.".into(),
-                ));
-            };
-            self.assumed
-                .push(format!("{w} by {d} is the width by the depth"));
-            return Ok(vec![
-                Edit::Resize {
-                    dimension: Dimension::Width,
-                    to: w,
-                },
-                Edit::Resize {
-                    dimension: Dimension::Depth,
-                    to: d,
-                },
-            ]);
+            if dimension != Dimension::Height {
+                return self.pair_size(w.clone(), d.clone());
+            }
         }
-        let dimension = match self.pick("dimension")?.as_str() {
-            "width" => Dimension::Width,
-            "depth" => Dimension::Depth,
-            _ => Dimension::Height,
-        };
-        let to = self.scalar(dimension.of(b), Unit::Feet, Length::feet(2))?;
+        let b = self.project.building.as_ref().expect("a building target");
+        let to = self.scalar(
+            dimension.label(),
+            dimension.of(b),
+            Unit::Feet,
+            Length::feet(2),
+        )?;
         Ok(vec![Edit::Resize { dimension, to }])
     }
 
-    fn pitch_edit(&mut self) -> Out {
-        let Some(roof) = self.project.roof.as_ref() else {
-            return Err(Stop::Problem("This project has no roof.".into()));
+    fn pair_size(&mut self, w: Num, d: Num) -> Out {
+        let (Some(w), Some(d)) = (w.length(Unit::Feet), d.length(Unit::Feet)) else {
+            return Err(Stop::Problem(
+                "Those sizes don't land on a sixteenth.".into(),
+            ));
         };
+        self.assumed
+            .push(format!("{w} by {d} is the width by the depth"));
+        Ok(vec![
+            Edit::Resize {
+                dimension: Dimension::Width,
+                to: w,
+            },
+            Edit::Resize {
+                dimension: Dimension::Depth,
+                to: d,
+            },
+        ])
+    }
+
+    fn footprint(&mut self) -> Out {
+        if let Some((w, d)) = self.pair() {
+            return self.pair_size(w.clone(), d.clone());
+        }
+        let b = self.project.building.as_ref().expect("a building target");
+        let (w, d) = (b.width, b.depth);
+        let width = self.scalar("size", w, Unit::Feet, Length::feet(2))?;
+        let depth = d + (width - w);
+        Ok(vec![
+            Edit::Resize {
+                dimension: Dimension::Width,
+                to: width,
+            },
+            Edit::Resize {
+                dimension: Dimension::Depth,
+                to: depth,
+            },
+        ])
+    }
+
+    fn pitch_edit(&mut self) -> Out {
+        let roof = self.project.roof.as_ref().expect("a roof target");
         let pitch = match self.pitch() {
             Some(p) => p,
             None => {
-                let rise = self.scalar(roof.pitch.rise, Unit::Inches, Length::inches(1))?;
+                let rise =
+                    self.scalar("pitch", roof.pitch.rise, Unit::Inches, Length::inches(1))?;
                 format!("{}:12", format!("{rise:#}").trim_end_matches('"'))
                     .parse()
                     .map_err(Stop::Problem)?
@@ -688,11 +853,8 @@ impl<'a> Clause<'a> {
         Ok(vec![Edit::SetPitch { pitch }])
     }
 
-    fn roof_kind(&mut self) -> Out {
-        if self.project.roof.is_none() {
-            return Err(Stop::Problem("This project has no roof.".into()));
-        }
-        let kind = match self.pick("roof_kind")?.as_str() {
+    fn roof_shape(&mut self) -> Out {
+        let kind = match self.pick("shape")?.as_str() {
             "gable" => RoofKind::Gable,
             _ => RoofKind::LeanTo,
         };
@@ -704,13 +866,69 @@ impl<'a> Clause<'a> {
     }
 
     fn overhang(&mut self) -> Out {
-        let Some(roof) = self.project.roof.as_ref() else {
-            return Err(Stop::Problem("This project has no roof.".into()));
-        };
-        let to = self.scalar(roof.front_overhang, Unit::Inches, Length::inches(6))?;
+        let roof = self.project.roof.as_ref().expect("a roof target");
+        let to = self.scalar(
+            "overhang",
+            roof.front_overhang,
+            Unit::Inches,
+            Length::inches(6),
+        )?;
         Ok(vec![Edit::SetOverhang {
             to: to.max(Length::ZERO),
         }])
+    }
+
+    fn lumber_edit(&mut self, framing: Framing) -> Out {
+        if let Some(size) = self.pair().and_then(|(a, b)| lumber(a, b)) {
+            return Ok(vec![Edit::SetLumber { framing, size }]);
+        }
+        let p = self.project;
+        let now = match framing {
+            Framing::Studs => p.rules.wall_lumber,
+            Framing::Joists => p.floor.as_ref().expect("a floor target").joist,
+            Framing::Rafters => p.roof.as_ref().expect("a roof target").rafter,
+        };
+        let how = self.pick("how")?;
+        let i = WIDTHS.iter().position(|w| *w == now.width);
+        let next = match (how.as_str(), i) {
+            ("increase", Some(i)) => WIDTHS.get(i + 1),
+            ("decrease", Some(i)) if i > 0 => WIDTHS.get(i - 1),
+            _ => None,
+        };
+        let Some(&width) = next else {
+            return Err(Stop::Problem(format!(
+                "Which size? Write it like 2x8. The {} are {now} now.",
+                framing.label()
+            )));
+        };
+        let size = Nominal::new(2, width);
+        self.assumed.push(format!(
+            "One size {}, from {now}",
+            if width > now.width { "up" } else { "down" }
+        ));
+        Ok(vec![Edit::SetLumber { framing, size }])
+    }
+
+    fn spacing(&mut self) -> Out {
+        let now = self.project.rules.on_center;
+        let on_center = match self.length(Unit::Inches)? {
+            Some(l) => l,
+            None => {
+                let steps = [Length::inches(12), Length::inches(16), Length::inches(24)];
+                let i = steps.iter().position(|s| *s == now);
+                let next = match (self.pick("how")?.as_str(), i) {
+                    ("increase", Some(i)) => steps.get(i + 1),
+                    ("decrease", Some(i)) if i > 0 => steps.get(i - 1),
+                    _ => None,
+                };
+                *next
+                    .ok_or_else(|| Stop::Problem("Give the spacing, like 24\" on center.".into()))?
+            }
+        };
+        if on_center <= Length::ZERO {
+            return Err(Stop::Problem("Spacing has to be more than zero.".into()));
+        }
+        Ok(vec![Edit::SetSpacing { on_center }])
     }
 
     fn porch(&mut self) -> Out {
@@ -720,65 +938,53 @@ impl<'a> Clause<'a> {
                 None => Err(Stop::Problem("There's no porch to remove.".into())),
             };
         }
-        let mut edits = match &self.project.porch {
-            Some(p) => {
-                let now = p.depth;
-                let to = self.scalar(now, Unit::Feet, Length::feet(1))?;
-                vec![Edit::SetPorch { depth: to }]
+        let mut edits = Vec::new();
+        let given = self.length(Unit::Feet)?;
+        match (&self.project.porch, given) {
+            (_, Some(depth)) => edits.push(Edit::SetPorch { depth }),
+            (Some(_), None) => {}
+            (None, None) => {
+                let d = sticks_core::Porch::default().depth;
+                self.assumed
+                    .push(format!("No depth given, so the porch is {d} deep"));
+                edits.push(Edit::SetPorch { depth: d });
             }
-            None => {
-                let given = self.with_role(&["size"])?;
-                let depth = match given.first().and_then(|(_, n)| n.length(Unit::Feet)) {
-                    Some(d) => d,
-                    None => {
-                        let d = sticks_core::Porch::default().depth;
-                        self.assumed
-                            .push(format!("No depth given, so the porch is {d} deep"));
-                        d
-                    }
-                };
-                vec![Edit::SetPorch { depth }]
+        }
+        match self.maybe("deck").as_deref() {
+            Some("add") => edits.push(Edit::AddDeck),
+            Some("remove")
+                if self
+                    .project
+                    .porch
+                    .as_ref()
+                    .is_some_and(|p| p.deck.is_some()) =>
+            {
+                edits.push(Edit::RemoveDeck)
             }
-        };
-        if self.maybe("deck").as_deref() == Some("add") {
-            edits.push(Edit::AddDeck);
+            _ => {}
+        }
+        if edits.is_empty() {
+            return Err(Stop::Problem(
+                "Say what to change about the porch, like \"make the porch 8' deep\".".into(),
+            ));
         }
         Ok(edits)
+    }
+
+    fn porch_depth(&mut self) -> Out {
+        let now = self.project.porch.as_ref().expect("a porch target").depth;
+        let depth = self.scalar("depth", now, Unit::Feet, Length::feet(1))?;
+        Ok(vec![Edit::SetPorch { depth }])
     }
 
     fn deck(&mut self) -> Out {
         match self.pick("deck")?.as_str() {
             "remove" => Ok(vec![Edit::RemoveDeck]),
-            _ if self.project.porch.is_none() => Err(Stop::Problem(
-                "The deck goes under the porch, and there's no porch yet. Try \"add a porch with a deck\".".into(),
+            "add" => Ok(vec![Edit::AddDeck]),
+            _ => Err(Stop::Problem(
+                "Say whether to add the deck or take it out.".into(),
             )),
-            _ => Ok(vec![Edit::AddDeck]),
         }
-    }
-
-    fn spacing(&mut self) -> Out {
-        let given = self.with_role(&["size", "change"])?;
-        let Some(on_center) = given.first().and_then(|(_, n)| n.length(Unit::Inches)) else {
-            return Err(Stop::Problem(
-                "Give the spacing, like 24\" on center.".into(),
-            ));
-        };
-        if on_center <= Length::ZERO {
-            return Err(Stop::Problem("Spacing has to be more than zero.".into()));
-        }
-        Ok(vec![Edit::SetSpacing { on_center }])
-    }
-
-    fn lumber_edit(&mut self) -> Out {
-        let Some(size) = self.pair().and_then(|(a, b)| lumber(a, b)) else {
-            return Err(Stop::Problem("Which size? Write it like 2x6.".into()));
-        };
-        let framing = match self.pick("framing")?.as_str() {
-            "studs" => Framing::Studs,
-            "joists" => Framing::Joists,
-            _ => Framing::Rafters,
-        };
-        Ok(vec![Edit::SetLumber { framing, size }])
     }
 
     fn wall_options(&self) -> Vec<(Side, String, String)> {
@@ -812,6 +1018,9 @@ impl<'a> Clause<'a> {
 
     /// Every opening in a building wall, labeled like `front-2`.
     fn openings(&self) -> Vec<((Side, usize), String, String)> {
+        if self.project.building.is_none() {
+            return Vec::new();
+        }
         Side::ALL
             .iter()
             .flat_map(|s| {
@@ -825,10 +1034,11 @@ impl<'a> Clause<'a> {
                             (*s, i),
                             format!("{}-{}", s.id(), i + 1),
                             format!(
-                                "The {} on the {} wall, {} wide at {}",
-                                kind_name(o.kind),
+                                "The {} wall's {}, {} x {}, {} from the left end",
                                 s.id(),
+                                kind_name(o.kind),
                                 o.width,
+                                o.height,
                                 o.offset
                             ),
                         )
@@ -837,33 +1047,84 @@ impl<'a> Clause<'a> {
             .collect()
     }
 
-    fn add_opening(&mut self) -> Out {
-        let Some(b) = self.project.building.as_ref() else {
-            return Err(Stop::Problem(
-                "This prototype only adds openings to a building's walls.".into(),
-            ));
+    fn opening(&self, side: Side, index: usize) -> sticks_core::Opening {
+        self.project
+            .walls
+            .iter()
+            .find(|w| w.id == side.id())
+            .and_then(|w| w.openings.get(index))
+            .expect("picks are checked against the options")
+            .clone()
+    }
+
+    /// The opening picked as the one to go beside.
+    fn reference(&self) -> Result<(Side, usize), Stop> {
+        let pick = self.pick("ref")?;
+        Ok(self
+            .openings()
+            .into_iter()
+            .find(|(_, l, _)| *l == pick)
+            .map(|(at, ..)| at)
+            .expect("picks are checked against the options"))
+    }
+
+    /// The width, height and distance given for an opening. A door's slab
+    /// width becomes its rough opening.
+    fn opening_numbers(&mut self, kind: OpeningKind) -> Result<OpeningNumbers, Stop> {
+        // A bare number up to 8 is feet ("a 3 window"), above that inches.
+        let read = |n: &Num| {
+            let unit = if !n.has_unit() && n.amount().is_some_and(|a| a > 8.0) {
+                Unit::Inches
+            } else {
+                Unit::Feet
+            };
+            n.length(unit)
         };
+        let mut roles = Vec::new();
+        for (k, n) in self.nums() {
+            roles.push((self.pick(&format!("num{k}"))?, n.clone()));
+        }
+        let role = |r: &str| {
+            roles
+                .iter()
+                .find(|(x, _)| x == r)
+                .and_then(|(_, n)| read(n))
+        };
+        let mut width = self.pair().and_then(|(w, _)| read(w)).or(role("width"));
+        let height = self.pair().and_then(|(_, h)| read(h)).or(role("height"));
+        if let (OpeningKind::Door, Some(w)) = (kind, width) {
+            let inches = w.as_inches_f64();
+            if inches.fract() == 0.0 && SLAB_WIDTHS.contains(&(inches as i64)) {
+                let rough = w + Length::from_sixteenths(40);
+                self.assumed
+                    .push(format!("A {w} door needs a {rough} rough opening"));
+                width = Some(rough);
+            }
+        }
+        Ok((width, height, role("distance")))
+    }
+
+    fn new_opening(&mut self) -> Out {
+        let b = self.project.building.as_ref().expect("a building target");
         let kind = match self.pick("kind")?.as_str() {
             "door" => OpeningKind::Door,
             "penetration" => OpeningKind::Penetration,
             _ => OpeningKind::Window,
         };
-        // Beside an existing opening, the wall is that opening's.
-        let position = self.maybe("position");
-        let beside = match position.as_deref() {
-            Some(p @ ("left_of" | "right_of" | "both_sides")) => {
-                let pick = self.pick("next_to")?;
-                let (at, ..) = self
-                    .openings()
-                    .into_iter()
-                    .find(|(_, l, _)| *l == pick)
-                    .expect("picks are checked against the options");
-                Some((p.to_string(), at))
-            }
+        let count = match self.maybe("count").as_deref() {
+            Some("two") => 2,
+            Some("three") => 3,
+            Some("four") => 4,
+            _ => 1,
+        };
+        let place = self.maybe("place");
+        // Beside another opening, the wall is that opening's.
+        let beside = match place.as_deref() {
+            Some("left_of" | "right_of" | "both_sides") => Some(self.reference()?),
             _ => None,
         };
-        let wall = match &beside {
-            Some((_, (side, _))) => *side,
+        let wall = match beside {
+            Some((side, _)) => side,
             None => match self.pick("wall")?.as_str() {
                 "front" => Side::Front,
                 "back" => Side::Back,
@@ -871,12 +1132,9 @@ impl<'a> Clause<'a> {
                 _ => Side::Right,
             },
         };
-
         let (dw, dh, sill, header) = opening_defaults(kind);
-        let (given_width, given_height, from_left, from_right) = self.opening_numbers(kind)?;
-        let width = given_width.unwrap_or(dw);
-        let height = given_height.unwrap_or(dh);
-        if given_width.is_none() && given_height.is_none() {
+        let (width, height, distance) = self.opening_numbers(kind)?;
+        if width.is_none() && height.is_none() {
             self.assumed.push(format!(
                 "No size given, so it's the usual {dw} x {dh} rough opening"
             ));
@@ -884,103 +1142,209 @@ impl<'a> Clause<'a> {
         let new = New {
             wall,
             kind,
-            width,
-            height,
+            width: width.unwrap_or(dw),
+            height: height.unwrap_or(dh),
             sill,
             header,
             replaces: None,
         };
         let wall_len = wall.length(b);
-        let room = wall_len - width;
-
-        if let Some((how, (_, index))) = beside {
-            return self.add_beside(new, &how, index);
-        }
-
-        let placed = match (from_left, from_right) {
-            (Some(at), _) => Some(at),
-            (None, Some(at)) => Some(wall_len - at - width),
-            (None, None) => None,
-        };
-        let offset = match placed {
-            Some(at) => at,
-            None => match position.as_deref() {
-                Some("left_end") => {
-                    self.assumed
-                        .push("Placed 2' from the wall's left end, seen from outside".into());
-                    Length::feet(2)
-                }
-                Some("right_end") => {
-                    self.assumed
-                        .push("Placed 2' from the wall's right end, seen from outside".into());
-                    wall_len - width - Length::feet(2)
-                }
-                _ => {
-                    self.assumed.push("Centered on the wall".into());
-                    (wall_len - width).mul_div(1, 2)
-                }
-            },
-        };
-        // A given spot stays put; otherwise Rust tries the nearest spots
-        // either way.
-        let offsets = if placed.is_some() {
-            vec![offset]
-        } else {
-            nearest(offset, Length::ZERO, room)
-        };
-        let project = self.project.clone();
-        self.fit(&project, &new, &offsets)
-            .map(|e| vec![e])
-            .map_err(Stop::Problem)
-    }
-
-    /// New openings beside opening `index` on the new opening's wall: on its
-    /// left, its right, or both sides, seen from outside.
-    fn add_beside(&mut self, new: New, how: &str, index: usize) -> Out {
-        let b = self
-            .project
-            .building
-            .as_ref()
-            .expect("checked by the caller");
-        let room = new.wall.length(b) - new.width;
-        let anchor = self
-            .project
-            .walls
-            .iter()
-            .find(|w| w.id == new.wall.id())
-            .and_then(|w| w.openings.get(index))
-            .expect("picks are checked against the options");
-        let (a_left, a_right) = (anchor.offset, anchor.offset + anchor.width);
-        let gap = Length::feet(1);
-        let near = kind_name(anchor.kind);
-        let sides: &[&str] = match how {
-            "left_of" => &["left"],
-            "right_of" => &["right"],
-            _ => &["left", "right"],
-        };
-        self.assumed.push(format!(
-            "About {gap} from the {near}, the nearest spot that frames"
-        ));
+        let room = wall_len - new.width;
         let mut project = self.project.clone();
         let mut edits = Vec::new();
-        for &side in sides {
-            // Start a gap away and move only away from it, so the opening
-            // stays on its side.
-            let offsets = if side == "left" {
-                let start = a_left - gap - new.width;
-                nearest(start, Length::ZERO, a_left - new.width)
-            } else {
-                let start = a_right + gap;
-                nearest(start, a_right, room)
+
+        if let (Some(how), Some((_, index))) = (place.as_deref(), beside) {
+            let anchor = self.opening(wall, index);
+            let gap = distance.unwrap_or(Length::feet(1));
+            let near = kind_name(anchor.kind);
+            self.assumed.push(format!(
+                "About {gap} from the {near}, or the nearest spot past that which frames"
+            ));
+            let sides: Vec<&str> = match how {
+                "left_of" => vec!["left"; count],
+                "right_of" => vec!["right"; count],
+                _ => vec!["left", "right"],
             };
-            let edit = self.fit(&project, &new, &offsets).map_err(|e| {
-                Stop::Problem(format!("There's no room on the {side} of the {near}: {e}"))
-            })?;
+            let (mut left_edge, mut right_edge) = (anchor.offset, anchor.offset + anchor.width);
+            for side in sides {
+                // Start a gap away and move only away, so each opening stays
+                // on its side.
+                let offsets = if side == "left" {
+                    nearest(
+                        left_edge - gap - new.width,
+                        Length::ZERO,
+                        left_edge - new.width,
+                    )
+                } else {
+                    nearest(right_edge + gap, right_edge, room)
+                };
+                let edit = self.fit(&project, &new, &offsets).map_err(|e| {
+                    Stop::Problem(format!("There's no room on the {side} of the {near}: {e}"))
+                })?;
+                if let Edit::AddOpening { offset, .. } = edit {
+                    if side == "left" {
+                        left_edge = offset;
+                    } else {
+                        right_edge = offset + new.width;
+                    }
+                }
+                edit.apply(&mut project)
+                    .map_err(|e| Stop::Problem(e.to_string()))?;
+                edits.push(edit);
+            }
+            return Ok(edits);
+        }
+
+        // Where each opening's left edge should go, and whether it may
+        // slide to frame.
+        let starts: Vec<(Length, bool)> = match (place.as_deref(), distance) {
+            (Some("left_end"), Some(d)) => vec![(d, false)],
+            (Some("right_end"), Some(d)) => vec![(wall_len - d - new.width, false)],
+            _ if count > 1 => {
+                self.assumed
+                    .push(format!("{count} spread evenly along the wall"));
+                (1..=count as i64)
+                    .map(|i| {
+                        let center = wall_len.mul_div(i, count as i64 + 1);
+                        (center - new.width.mul_div(1, 2), true)
+                    })
+                    .collect()
+            }
+            (Some("left_end"), None) => {
+                self.assumed
+                    .push("Placed 2' from the wall's left end, seen from outside".into());
+                vec![(Length::feet(2), true)]
+            }
+            (Some("right_end"), None) => {
+                self.assumed
+                    .push("Placed 2' from the wall's right end, seen from outside".into());
+                vec![(wall_len - new.width - Length::feet(2), true)]
+            }
+            _ => {
+                self.assumed.push("Centered on the wall".into());
+                vec![((wall_len - new.width).mul_div(1, 2), true)]
+            }
+        };
+        for (start, slide) in starts {
+            let offsets = if slide {
+                nearest(start, Length::ZERO, room)
+            } else {
+                vec![start]
+            };
+            let edit = self.fit(&project, &new, &offsets).map_err(Stop::Problem)?;
             edit.apply(&mut project)
                 .map_err(|e| Stop::Problem(e.to_string()))?;
             edits.push(edit);
         }
         Ok(edits)
+    }
+
+    fn change_opening(&mut self, wall: Side, index: usize) -> Out {
+        let b = self
+            .project
+            .building
+            .as_ref()
+            .expect("openings are on a building");
+        let o = self.opening(wall, index);
+        let wall_len = wall.length(b);
+        let action = self.pick("action")?;
+        if action == "remove" {
+            return Ok(vec![Edit::RemoveOpening { wall, index }]);
+        }
+        let (width, height, distance) = self.opening_numbers(o.kind)?;
+        let mut new = New {
+            wall,
+            kind: o.kind,
+            width: o.width,
+            height: o.height,
+            sill: o.sill_height,
+            header: o.header,
+            replaces: Some(index),
+        };
+        let offsets = if action == "resize" {
+            if width.is_none() && height.is_none() {
+                return Err(Stop::Problem(format!(
+                    "Say the new size, like \"make the {} 36x80\".",
+                    kind_name(o.kind)
+                )));
+            }
+            new.width = width.unwrap_or(o.width);
+            new.height = height.unwrap_or(o.height);
+            // Grow or shrink about its middle.
+            if new.width != o.width {
+                self.assumed.push("Kept centered where it was".into());
+            }
+            let start = o.offset + o.width.mul_div(1, 2) - new.width.mul_div(1, 2);
+            nearest(start, Length::ZERO, wall_len - new.width)
+        } else {
+            let room = wall_len - o.width;
+            let place = self.pick("place")?;
+            match (place.as_str(), distance) {
+                ("center", _) => nearest((wall_len - o.width).mul_div(1, 2), Length::ZERO, room),
+                ("left_end", Some(d)) => vec![d],
+                ("right_end", Some(d)) => vec![wall_len - d - o.width],
+                ("left_end", None) => {
+                    self.assumed
+                        .push("Placed 2' from the wall's left end, seen from outside".into());
+                    nearest(Length::feet(2), Length::ZERO, room)
+                }
+                ("right_end", None) => {
+                    self.assumed
+                        .push("Placed 2' from the wall's right end, seen from outside".into());
+                    nearest(room - Length::feet(2), Length::ZERO, room)
+                }
+                ("shift_left" | "shift_right", d) => {
+                    let by = d.unwrap_or_else(|| {
+                        self.assumed
+                            .push("No distance given, so it moves 1'".into());
+                        Length::feet(1)
+                    });
+                    let at = if place == "shift_left" {
+                        o.offset - by
+                    } else {
+                        o.offset + by
+                    };
+                    vec![at]
+                }
+                ("left_of" | "right_of", d) => {
+                    let (side, i) = self.reference()?;
+                    if side != wall {
+                        return Err(Stop::Problem(
+                            "Moving an opening to another wall isn't supported yet. Remove it and add a new one there."
+                                .into(),
+                        ));
+                    }
+                    let anchor = self.opening(side, i);
+                    let gap = d.unwrap_or(Length::feet(1));
+                    if place == "left_of" {
+                        let edge = anchor.offset;
+                        nearest(edge - gap - o.width, Length::ZERO, edge - o.width)
+                    } else {
+                        let edge = anchor.offset + anchor.width;
+                        nearest(edge + gap, edge, room)
+                    }
+                }
+                _ => {
+                    return Err(Stop::Problem(
+                        "Say where to move it, like \"center it\" or \"2' from the left end\"."
+                            .into(),
+                    ))
+                }
+            }
+        };
+        if offsets
+            .iter()
+            .all(|&at| at < Length::ZERO || at > wall_len - new.width)
+        {
+            return Err(Stop::Problem(format!(
+                "That would put the {} past the end of the wall.",
+                kind_name(o.kind)
+            )));
+        }
+        let project = self.project.clone();
+        self.fit(&project, &new, &offsets)
+            .map(|e| vec![e])
+            .map_err(Stop::Problem)
     }
 
     /// The first of `offsets` where `new` frames in `project`, trying a door
@@ -1033,128 +1397,9 @@ impl<'a> Clause<'a> {
             first_problem.unwrap_or_else(|| "there's no room".into())
         ))
     }
-
-    /// The width, height and distances from the left and right ends given
-    /// for an opening. A door's slab width becomes its rough opening.
-    #[allow(clippy::type_complexity)]
-    fn opening_numbers(
-        &mut self,
-        kind: OpeningKind,
-    ) -> Result<
-        (
-            Option<Length>,
-            Option<Length>,
-            Option<Length>,
-            Option<Length>,
-        ),
-        Stop,
-    > {
-        // A bare number up to 8 is feet ("a 3 window"), above that inches.
-        let read = |n: &Num| {
-            let unit = if !n.has_unit() && n.amount().is_some_and(|a| a > 8.0) {
-                Unit::Inches
-            } else {
-                Unit::Feet
-            };
-            n.length(unit)
-        };
-        let nums = self.with_role(&["size", "width", "height", "from_left", "from_right"])?;
-        let role = |r: &[&str]| {
-            nums.iter()
-                .find(|(x, _)| r.contains(&x.as_str()))
-                .and_then(|(_, n)| read(n))
-        };
-        let mut width = self
-            .pair()
-            .and_then(|(w, _)| read(w))
-            .or(role(&["width", "size"]));
-        let height = self.pair().and_then(|(_, h)| read(h)).or(role(&["height"]));
-        if let (OpeningKind::Door, Some(w)) = (kind, width) {
-            let inches = w.as_inches_f64();
-            if inches.fract() == 0.0 && SLAB_WIDTHS.contains(&(inches as i64)) {
-                let rough = w + Length::from_sixteenths(40);
-                self.assumed
-                    .push(format!("A {w} door needs a {rough} rough opening"));
-                width = Some(rough);
-            }
-        }
-        Ok((width, height, role(&["from_left"]), role(&["from_right"])))
-    }
-
-    fn change_opening(&mut self) -> Out {
-        let openings = self.openings();
-        if openings.is_empty() {
-            return Err(Stop::Problem("There are no openings to change.".into()));
-        }
-        let pick = self.pick("which")?;
-        let ((wall, index), ..) = openings
-            .into_iter()
-            .find(|(_, l, _)| *l == pick)
-            .expect("picks are checked against the options");
-        let b = self
-            .project
-            .building
-            .as_ref()
-            .expect("openings are on a building");
-        let o = self
-            .project
-            .walls
-            .iter()
-            .find(|w| w.id == wall.id())
-            .and_then(|w| w.openings.get(index))
-            .expect("picks are checked against the options")
-            .clone();
-        let (width, height, from_left, from_right) = self.opening_numbers(o.kind)?;
-        if width.is_none() && height.is_none() && from_left.is_none() && from_right.is_none() {
-            return Err(Stop::Problem(format!(
-                "Say the new size or place, like \"make the {} 36x80\".",
-                kind_name(o.kind)
-            )));
-        }
-        let new = New {
-            wall,
-            kind: o.kind,
-            width: width.unwrap_or(o.width),
-            height: height.unwrap_or(o.height),
-            sill: o.sill_height,
-            header: o.header,
-            replaces: Some(index),
-        };
-        let room = wall.length(b) - new.width;
-        let offsets = match (from_left, from_right) {
-            (Some(at), _) => vec![at],
-            (None, Some(at)) => vec![wall.length(b) - at - new.width],
-            (None, None) => {
-                // Grow or shrink about its middle.
-                let middle = o.offset + o.width.mul_div(1, 2);
-                let start = middle - new.width.mul_div(1, 2);
-                if new.width != o.width {
-                    self.assumed.push("Kept centered where it was".into());
-                }
-                nearest(start, Length::ZERO, room)
-            }
-        };
-        let project = self.project.clone();
-        self.fit(&project, &new, &offsets)
-            .map(|e| vec![e])
-            .map_err(Stop::Problem)
-    }
-
-    fn remove_opening(&mut self) -> Out {
-        let openings = self.openings();
-        if openings.is_empty() {
-            return Err(Stop::Problem("There are no openings to remove.".into()));
-        }
-        let pick = self.pick("which")?;
-        let ((wall, index), ..) = openings
-            .into_iter()
-            .find(|(_, l, _)| *l == pick)
-            .expect("picks are checked against the options");
-        Ok(vec![Edit::RemoveOpening { wall, index }])
-    }
 }
 
-/// An opening about to be added, before it has a place.
+/// An opening about to be added or changed, before it has a place.
 struct New {
     wall: Side,
     kind: OpeningKind,

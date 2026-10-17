@@ -1338,3 +1338,26 @@ tbody tr.highlight {
   padding: 10px 16px 12px;
   background: var(--surface);
 }
+.link-button {
+  padding: 0;
+  margin-left: 6px;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.panel-section.flash {
+  animation: flash 1.6s ease-out;
+}
+@keyframes flash {
+  0%,
+  30% {
+    background: var(--accent-soft);
+  }
+  100% {
+    background: transparent;
+  }
+}

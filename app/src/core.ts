@@ -380,6 +380,8 @@ export interface EditQuestion {
 /** One clause of a request and what it came to. */
 export interface EditStep {
   text: string;
+  /** What in the design it changes, once that's settled, such as `width` or `front-1`. */
+  target: string | null;
   /** Each change in builder English. */
   changes: string[];
   assumed: string[];
@@ -400,9 +402,9 @@ export function describeDesign(project: ProjectJson): string {
   return wasm.describe_design(JSON.stringify(forCore(project)));
 }
 
-/** Every question about a request, for Jev to answer in one call. */
-export function editQuestions(project: ProjectJson, request: string): EditAsk[] {
-  return JSON.parse(wasm.edit_questions(JSON.stringify(forCore(project)), request));
+/** The questions Jev should answer next about a request, given the answers so far. Empty when done. */
+export function editQuestions(project: ProjectJson, request: string, answers: Record<string, EditAnswer>): EditAsk[] {
+  return JSON.parse(wasm.edit_questions(JSON.stringify(forCore(project)), request, JSON.stringify(answers)));
 }
 
 /** What a request comes to with the answers so far. */

@@ -36,23 +36,31 @@ doesn't have are skipped.
 ### Changes in plain English (prototype)
 
 ```sh
-cargo run -p sticks-cli -- edit examples/shed.toml "add a window" --questions > questions.json
-# a classifier answers them, as {"0.intent": {"pick": "add_opening", "confidence": 0.98}, ...}
+cargo run -p sticks-cli -- edit examples/shed.toml "add a window" --questions
+# a classifier answers them into answers.json, as {"0.target": {"pick": "new_opening", "confidence": 0.98}}
+cargo run -p sticks-cli -- edit examples/shed.toml "add a window" --answers answers.json --questions
+# ...and again until --questions prints [], then
 cargo run -p sticks-cli -- edit examples/shed.toml "add a window" --answers answers.json --answer 0.wall=back --write
 ```
 
 Rust reads only the notation: it splits the request into clauses and reads
 lengths (`20 ft`, `3' 6"`), pitches (`4 in 12`) and sizes (`12x16`, `2x6`).
-The meaning comes from a classifier: `--questions` lists one batch of
-multiple-choice questions per request (what kind of change, which wall,
-window or door, what each number is for). Questions the request may not
-answer, such as which wall, also offer "the request doesn't say". `edit`
-turns answers at 80% confidence or more into
-typed edits (`sticks-intent`). Anything less sure, or not in the request,
-comes back as a question for you, answered with `--answer ID=LABEL`. Rust then
-places the edits, sliding a new opening to the nearest spot that frames and
-giving a door up to 4' wide a 2x6 header if that's what fits under the top
-plates. It frames the result and shows the change in boards and sheets.
+The meaning comes from a classifier answering multiple-choice questions that
+Rust builds from the design. First, what does each clause change? The options
+are every part of the design that can change, with its value now ("The front
+wall's door, 3' 2-1/2" x 6' 10-1/2", 7' 3" from the left end"), plus a new
+opening. Then that target's own questions: what to do to it (set it, bigger
+or smaller, resize, move, remove), where (centered, an end, beside another
+opening, one on each side, spread out), how many, and what each number is
+for. `--questions` prints what the classifier should answer next, given
+`--answers` so far, so a request takes two rounds. Questions the request may
+not answer, such as which wall, also offer "the request doesn't say".
+`edit` turns answers at 80% confidence or more into typed edits
+(`sticks-intent`). Anything less sure, or not in the request, comes back as a
+question for you, answered with `--answer ID=LABEL`. Rust then places the
+edits, sliding an opening to the nearest spot that frames and giving a door
+up to 4' wide a 2x6 header if that's what fits under the top plates. It
+frames the result and shows the change in boards and sheets.
 `--json` prints the same for a program, and `--write` saves once it frames
 (comments in the file are not kept).
 
