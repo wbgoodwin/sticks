@@ -133,6 +133,88 @@ pub fn pieces(a: Length, b: Length, joints: &[Length]) -> Vec<(Length, Length)> 
     out
 }
 
+/// Joints for each ply of a built-up beam from 0 to `width`, over
+/// `supports`, each ply's joints kept off the others' where it can be. The
+/// flag is set when the first two plies had to share their joints.
+pub fn ply_joints(
+    width: Length,
+    plies: u8,
+    supports: &[Length],
+    longest: Length,
+) -> Option<(Vec<Vec<Length>>, bool)> {
+    let mut out: Vec<Vec<Length>> = Vec::new();
+    let mut shared = false;
+    for p in 0..plies {
+        let avoid: Vec<Length> = out.iter().flatten().copied().collect();
+        let joints = split_run(
+            Length::ZERO,
+            width,
+            |s| s <= longest,
+            supports,
+            &avoid,
+            Length::inches(1),
+        )
+        .or_else(|| {
+            split_run(
+                Length::ZERO,
+                width,
+                |s| s <= longest,
+                supports,
+                &[],
+                Length::ZERO,
+            )
+        })?;
+        if p == 1 && out[0] == joints && !joints.is_empty() {
+            shared = true;
+        }
+        out.push(joints);
+    }
+    Some((out, shared))
+}
+
+/// Whole sheets laid in rows across a `width` by `depth` area, `length`
+/// along `x` and `across` along `y`, from the layout end. Every other row
+/// starts with a half sheet so end joints stagger.
+pub fn sheet_rows(
+    width: Length,
+    depth: Length,
+    length: Length,
+    across: Length,
+    from: LayoutStart,
+) -> Vec<Rect> {
+    let mut out = Vec::new();
+    let mut row_y = Length::ZERO;
+    let mut row = 0;
+    while row_y < depth {
+        let h = across.min(depth - row_y);
+        let mut x = Length::ZERO;
+        let mut first = true;
+        while x < width {
+            let full = if first && row % 2 == 1 {
+                half(length)
+            } else {
+                length
+            };
+            first = false;
+            let w = full.min(width - x);
+            let left = match from {
+                LayoutStart::Left => x,
+                LayoutStart::Right => width - x - w,
+            };
+            out.push(Rect {
+                x: left,
+                y: row_y,
+                w,
+                h,
+            });
+            x += w;
+        }
+        row_y += h;
+        row += 1;
+    }
+    out
+}
+
 pub fn half(l: Length) -> Length {
     Length::from_sixteenths(l.sixteenths() / 2)
 }

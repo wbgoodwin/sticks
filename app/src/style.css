@@ -793,6 +793,22 @@ button:focus-visible {
   fill: var(--fascia);
   --swatch: var(--fascia);
 }
+.kind-gable_stud {
+  fill: var(--stud);
+  --swatch: var(--stud);
+}
+.kind-ridge {
+  fill: var(--header);
+  --swatch: var(--header);
+}
+.kind-collar_tie {
+  fill: var(--king);
+  --swatch: var(--king);
+}
+.kind-decking {
+  fill: var(--fascia);
+  --swatch: var(--fascia);
+}
 
 .splice {
   stroke: var(--danger);

@@ -52,7 +52,7 @@ pub struct OpeningOutline {
 pub struct FramedWall {
     pub id: String,
     pub length: Length,
-    /// The taller of the two end heights.
+    /// The highest point of its framing: the taller end, or a gable's peak.
     pub height: Length,
     pub left_height: Length,
     pub right_height: Length,

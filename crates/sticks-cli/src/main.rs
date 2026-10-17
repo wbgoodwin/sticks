@@ -27,14 +27,15 @@ enum Command {
     /// Frame the walls, floor and roof and print their members and layout marks.
     Frame {
         project: PathBuf,
-        /// Only this part: a wall's id, `floor` or `roof`.
+        /// Only this part: a wall's id, `floor`, `roof`, `porch` or `sheathing`.
         #[arg(long)]
         part: Option<String>,
     },
     /// Plan which stock boards to buy and how to cut every piece from them.
     Cuts { project: PathBuf },
     /// Write the shopping list and cut list as CSV, an SVG drawing of every
-    /// wall, the floor and the roof, and a printable build packet.
+    /// wall, the floor, roof, porch and sheathing, and a printable build
+    /// packet.
     Build {
         project: PathBuf,
         /// Directory to write into; created if missing.
@@ -93,8 +94,18 @@ fn frame(project: &Project, only: Option<&str>) -> Result<(), String> {
         print!("{}", text::roof(roof, from));
         shown = true;
     }
+    if let Some(Ok(porch)) = f.porch.as_ref().filter(|_| want("porch")) {
+        print!("{}", text::porch(porch, from));
+        shown = true;
+    }
+    if let Some(Ok(s)) = f.sheathing.as_ref().filter(|_| want("sheathing")) {
+        print!("{}", text::sheathing(s));
+        shown = true;
+    }
     match (only, shown) {
-        (Some(part), false) => Err(format!("no wall, floor or roof called {part:?}")),
+        (Some(part), false) => Err(format!(
+            "no wall, floor, roof, porch or sheathing called {part:?}"
+        )),
         _ => Ok(()),
     }
 }
@@ -144,10 +155,34 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             "roof.svg".to_string(),
             sticks_export::roof_svg(name, roof, from),
         ));
+        for (i, r) in roof.rafters.iter().enumerate() {
+            let file = if i == 0 {
+                "rafter.svg".to_string()
+            } else {
+                format!("rafter-{}.svg", i + 1)
+            };
+            files.push((file, sticks_export::rafter_svg(name, r)));
+        }
+    }
+    if let Some(Ok(porch)) = &f.porch {
         files.push((
-            "rafter.svg".to_string(),
-            sticks_export::rafter_svg(name, roof),
+            "porch.svg".to_string(),
+            sticks_export::porch_svg(name, porch, from),
         ));
+        files.push((
+            "porch-rafter.svg".to_string(),
+            sticks_export::rafter_svg(name, &porch.rafter),
+        ));
+        if let Some(svg) = sticks_export::deck_svg(name, porch, from) {
+            files.push(("deck.svg".to_string(), svg));
+        }
+    }
+    if let Some(Ok(s)) = &f.sheathing {
+        for (file, roofs) in [("wall-sheathing.svg", false), ("roof-sheathing.svg", true)] {
+            if let Some(svg) = sticks_export::sheathing_svg(name, s, roofs) {
+                files.push((file.to_string(), svg));
+            }
+        }
     }
     files.push((
         "print.html".to_string(),
@@ -206,7 +241,19 @@ fn check(project: &Project) {
         );
     }
     if let Some(r) = &project.roof {
-        println!("  roof: lean-to at {}, {} rafters", r.pitch, r.rafter);
+        let kind = match r.kind {
+            sticks_core::RoofKind::LeanTo => "lean-to",
+            sticks_core::RoofKind::Gable => "gable",
+        };
+        println!("  roof: {kind} at {}, {} rafters", r.pitch, r.rafter);
+    }
+    if let Some(p) = &project.porch {
+        let deck = if p.deck.is_some() { " with a deck" } else { "" };
+        println!("  porch: {} deep on {} posts{deck}", p.depth, p.post);
+    }
+    if let Some(s) = &project.sheathing {
+        let t = |l: Option<sticks_core::Length>| l.map_or("none".to_string(), |l| format!("{l:#}"));
+        println!("  sheathing: walls {}, roof {}", t(s.wall), t(s.roof));
     }
     for wall in &project.walls {
         let size = match (wall.length, wall.height) {

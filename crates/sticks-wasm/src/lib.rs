@@ -68,8 +68,8 @@ pub fn model3d(project_json: &str) -> Result<String, JsError> {
     model_json(project_json).map_err(|e| JsError::new(&e))
 }
 
-/// One printable drawing as SVG: a wall by its id, or `floor`, `subfloor`,
-/// `roof` or `rafter`.
+/// One printable drawing as SVG: a wall by its id, or one of the plan
+/// drawings `frame` lists, such as `floor`, `roof` or `porch`.
 #[wasm_bindgen]
 pub fn drawing(project_json: &str, which: &str) -> Result<String, JsError> {
     drawing_svg(project_json, which).map_err(|e| JsError::new(&e))
@@ -86,6 +86,27 @@ struct FrameView {
     walls: Vec<WallView>,
     floor: Option<PlanView>,
     roof: Option<PlanView>,
+    porch: Option<PlanView>,
+    sheathing: Option<SheathingView>,
+    /// Printable drawings besides the walls, in order.
+    drawings: Vec<DrawingView>,
+}
+
+#[derive(Serialize)]
+struct DrawingView {
+    /// What `drawing` takes, such as `roof` or `porch-rafter`.
+    id: String,
+    name: String,
+    /// The part it shows, for its members and warnings: `floor`, `roof`,
+    /// `porch` or `sheathing`.
+    part: String,
+}
+
+#[derive(Serialize)]
+struct SheathingView {
+    pieces: usize,
+    warnings: Vec<String>,
+    error: Option<String>,
 }
 
 /// The floor or roof framing in plan, seen from above.
@@ -314,6 +335,7 @@ fn framed(project_json: &str) -> Result<(Project, FramedProject), String> {
 
 pub fn frame_json(project_json: &str) -> Result<String, String> {
     let (project, framed) = framed(project_json)?;
+    let drawings = drawing_list(&framed);
     // Walls come back in the order frame_project lists them.
     let walls = framed
         .walls
@@ -349,7 +371,85 @@ pub fn frame_json(project_json: &str) -> Result<String, String> {
         Ok(f) => plan_view(f.width, f.depth, &f.members, f.warnings),
         Err(e) => plan_error(e.reason),
     });
-    serde_json::to_string(&FrameView { walls, floor, roof }).map_err(|e| e.to_string())
+    let porch = framed.porch.map(|r| match r {
+        Ok(p) => {
+            let mut members = p.members.clone();
+            let mut warnings = p.warnings.clone();
+            if let Some(d) = &p.deck {
+                members.extend(d.members.iter().cloned());
+                warnings.extend(d.warnings.iter().map(|w| format!("deck: {w}")));
+            }
+            plan_view(p.width, p.depth, &members, warnings)
+        }
+        Err(e) => plan_error(e.reason),
+    });
+    let sheathing = framed.sheathing.map(|r| match r {
+        Ok(s) => SheathingView {
+            pieces: s.panels().count(),
+            warnings: s.warnings,
+            error: None,
+        },
+        Err(e) => SheathingView {
+            pieces: 0,
+            warnings: Vec::new(),
+            error: Some(e.reason),
+        },
+    });
+    serde_json::to_string(&FrameView {
+        walls,
+        floor,
+        roof,
+        porch,
+        sheathing,
+        drawings,
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// Every plan drawing the framed project can print, by id.
+fn drawing_list(framed: &FramedProject) -> Vec<DrawingView> {
+    let mut out = Vec::new();
+    let mut add = |id: &str, name: &str, part: &str| {
+        out.push(DrawingView {
+            id: id.to_string(),
+            name: name.to_string(),
+            part: part.to_string(),
+        })
+    };
+    if framed.floor.is_some() {
+        add("floor", "Floor", "floor");
+        add("subfloor", "Subfloor", "floor");
+    }
+    if let Some(roof) = &framed.roof {
+        add("roof", "Roof", "roof");
+        match roof {
+            Ok(r) if r.rafters.len() > 1 => {
+                add("rafter", "Front rafter", "roof");
+                add("rafter-2", "Back rafter", "roof");
+            }
+            _ => add("rafter", "Rafter", "roof"),
+        }
+    }
+    if let Some(porch) = &framed.porch {
+        add("porch", "Porch", "porch");
+        add("porch-rafter", "Porch rafter", "porch");
+        if matches!(porch, Ok(p) if p.deck.is_some()) {
+            add("deck", "Deck", "porch");
+        }
+    }
+    if let Some(s) = &framed.sheathing {
+        let (walls, roofs) = match s {
+            Ok(s) => (!s.walls.is_empty(), !s.roofs.is_empty()),
+            Err(_) => (true, false),
+        };
+        if walls {
+            add("wall-sheathing", "Wall sheathing", "sheathing");
+        }
+        if roofs {
+            add("roof-sheathing", "Roof sheathing", "sheathing");
+        }
+    }
+    out
 }
 
 fn plan_view(width: Length, depth: Length, members: &[Placed], warnings: Vec<String>) -> PlanView {
@@ -440,16 +540,42 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
                 sticks_export::subfloor_svg(name, &floor)
             })
         }
-        "roof" | "rafter" => {
+        "roof" | "rafter" | "rafter-2" => {
             let roof = framed
                 .roof
                 .ok_or("this project has no roof")?
                 .map_err(|e| e.reason)?;
-            Ok(if which == "roof" {
-                sticks_export::roof_svg(name, &roof, from)
-            } else {
-                sticks_export::rafter_svg(name, &roof)
-            })
+            match which {
+                "roof" => Ok(sticks_export::roof_svg(name, &roof, from)),
+                _ => {
+                    let i = usize::from(which == "rafter-2");
+                    let r = roof
+                        .rafters
+                        .get(i)
+                        .ok_or("this roof has one kind of rafter")?;
+                    Ok(sticks_export::rafter_svg(name, r))
+                }
+            }
+        }
+        "porch" | "porch-rafter" | "deck" => {
+            let porch = framed
+                .porch
+                .ok_or("this project has no porch")?
+                .map_err(|e| e.reason)?;
+            match which {
+                "porch" => Ok(sticks_export::porch_svg(name, &porch, from)),
+                "porch-rafter" => Ok(sticks_export::rafter_svg(name, &porch.rafter)),
+                _ => sticks_export::deck_svg(name, &porch, from)
+                    .ok_or_else(|| "this porch has no deck".to_string()),
+            }
+        }
+        "wall-sheathing" | "roof-sheathing" => {
+            let s = framed
+                .sheathing
+                .ok_or("this project has no sheathing")?
+                .map_err(|e| e.reason)?;
+            sticks_export::sheathing_svg(name, &s, which == "roof-sheathing")
+                .ok_or_else(|| "nothing is sheathed there".to_string())
         }
         id => {
             let i = wall_ids(&project)
@@ -616,13 +742,38 @@ mod tests {
         assert!(solids.iter().any(|s| s["kind"] == "pier"));
         assert_eq!(m["bounds"].as_array().unwrap().len(), 2);
 
-        for which in ["front", "left", "floor", "subfloor", "roof", "rafter"] {
+        let drawings: Vec<&str> = out["drawings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            drawings,
+            [
+                "floor",
+                "subfloor",
+                "roof",
+                "rafter",
+                "porch",
+                "porch-rafter",
+                "deck",
+                "wall-sheathing",
+                "roof-sheathing"
+            ]
+        );
+        assert!(out["porch"]["error"].is_null());
+        assert!(out["sheathing"]["pieces"].as_u64().unwrap() > 20);
+        assert!(solids.iter().any(|s| s["kind"] == "sheathing"));
+        assert!(solids.iter().any(|s| s["part"] == "deck"));
+        for which in ["front", "left"].iter().chain(&drawings) {
             assert!(
                 drawing_svg(&json, which).unwrap().starts_with("<svg"),
                 "{which}"
             );
         }
-        assert!(drawing_svg(&json, "porch").is_err());
+        assert!(drawing_svg(&json, "rafter-2").is_err());
+        assert!(drawing_svg(&json, "garage").is_err());
         assert!(print_html(&json).unwrap().contains("Shopping list"));
     }
 

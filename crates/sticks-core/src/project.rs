@@ -17,7 +17,7 @@ pub struct Project {
     pub rules: Rules,
     #[serde(default, rename = "stock", skip_serializing_if = "Vec::is_empty")]
     pub stock: Vec<Stock>,
-    /// Sheet goods on offer (subfloor, later sheathing).
+    /// Sheet goods on offer (subfloor and sheathing).
     #[serde(default, rename = "sheet", skip_serializing_if = "Vec::is_empty")]
     pub sheets: Vec<SheetStock>,
     /// The footprint of a rectangular building. When present, its four outside
@@ -28,6 +28,10 @@ pub struct Project {
     pub floor: Option<Floor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roof: Option<Roof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub porch: Option<Porch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheathing: Option<Sheathing>,
     #[serde(default, rename = "wall", skip_serializing_if = "Vec::is_empty")]
     pub walls: Vec<Wall>,
 }
@@ -42,7 +46,8 @@ pub struct Building {
     /// Outside to outside, front to back.
     pub depth: Length,
     /// The front wall, subfloor to top of cap plate. With a lean-to roof this
-    /// is the high wall, and the back and side walls follow the pitch.
+    /// is the high wall, and the back and side walls follow the pitch. Under
+    /// a gable roof every wall is this tall and the gables sit on the sides.
     pub height: Length,
 }
 
@@ -118,9 +123,17 @@ pub struct Roof {
     /// Level distance the rafters run past the back wall. Default 12".
     #[serde(default = "default_overhang")]
     pub back_overhang: Length,
-    /// Fascia size, nailed to the rafter tails. Defaults to the rafter size.
+    /// Fascia size, nailed to the rafter tails. Defaults to two sizes up
+    /// from the rafter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fascia: Option<Nominal>,
+    /// Gable roofs: the ridge board. Defaults to two sizes up from the rafter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ridge: Option<Nominal>,
+    /// Gable roofs: collar ties across rafter pairs, in the upper third.
+    /// Default 2x4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collar_tie: Option<Nominal>,
 }
 
 fn default_rafter() -> Nominal {
@@ -137,6 +150,108 @@ pub enum RoofKind {
     /// A single slope, high at the front wall and low at the back.
     #[default]
     LeanTo,
+    /// Two slopes meeting at a ridge that runs along the front, with the
+    /// gables over the side walls.
+    Gable,
+}
+
+/// A covered porch across the front of the building: posts on piers, a beam
+/// on the posts, and a roof hung from a ledger on the front wall that slopes
+/// down to the beam.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Porch {
+    /// From the front wall's outside face to the outside of the posts.
+    /// Default 6'.
+    pub depth: Length,
+    /// Post size. Default 4x4.
+    pub post: Nominal,
+    /// Most room between posts, center to center. Default 8'.
+    pub post_spacing: Length,
+    /// Beam size. Default 2x8.
+    pub beam: Nominal,
+    /// Boards laminated into the beam. Default 2.
+    pub beam_plies: u8,
+    /// Rafter size. Defaults to the roof's rafters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rafter: Option<Nominal>,
+    /// Defaults to the roof's pitch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<Pitch>,
+    /// Level distance the rafters run past the beam. Default 12".
+    pub overhang: Length,
+    /// Ledger size. Defaults to two sizes up from the rafter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ledger: Option<Nominal>,
+    /// Top of the ledger above the subfloor. Defaults to just under the front
+    /// wall's top plates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ledger_height: Option<Length>,
+    /// A deck under the porch roof. Leave it out for open ground.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deck: Option<Deck>,
+}
+
+/// A porch deck a step below the subfloor: joists hung from a ledger on the
+/// floor's front rim, out to a rim over a beam on piers under the porch
+/// posts, with decking boards across the joists. The posts stand on it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Deck {
+    /// Joist, rim and ledger size. Defaults to the floor's joists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub joist: Option<Nominal>,
+    /// Beam size, under the outer rim. Default 4x6.
+    pub beam: Nominal,
+    /// Decking boards, laid along the front. Default 5/4x6.
+    pub decking: Nominal,
+    /// Space between decking boards. Default 1/8".
+    pub gap: Length,
+    /// How far the top of the decking sits below the subfloor. Default 1".
+    pub step_down: Length,
+}
+
+impl Default for Deck {
+    fn default() -> Self {
+        Deck {
+            joist: None,
+            beam: Nominal::new(4, 6),
+            decking: "5/4x6".parse().expect("5/4x6 is a lumber size"),
+            gap: Length::from_sixteenths(2),
+            step_down: Length::inches(1),
+        }
+    }
+}
+
+impl Default for Porch {
+    fn default() -> Self {
+        Porch {
+            depth: Length::feet(6),
+            post: Nominal::new(4, 4),
+            post_spacing: Length::feet(8),
+            beam: Nominal::new(2, 8),
+            beam_plies: 2,
+            rafter: None,
+            pitch: None,
+            overhang: Length::inches(12),
+            ledger: None,
+            ledger_height: None,
+            deck: None,
+        }
+    }
+}
+
+/// Sheathing on the outside walls and the roof. Leave a thickness out to skip
+/// that part.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Sheathing {
+    /// Wall sheathing thickness, such as 7/16".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wall: Option<Length>,
+    /// Roof sheathing thickness, such as 1/2". Also covers the porch roof.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roof: Option<Length>,
 }
 
 /// A roof pitch: inches of rise per 12" of level run.
@@ -189,7 +304,7 @@ impl FromStr for Pitch {
         let rise: Length = rise.trim().parse().map_err(|_| bad())?;
         if rise <= Length::ZERO || rise >= Length::inches(24) {
             return Err(format!(
-                "{s:?} is outside what a lean-to can use; pick a rise between 0 and 24"
+                "{s:?} is outside what Sticks can frame; pick a rise between 0 and 24"
             ));
         }
         Ok(Pitch { rise })

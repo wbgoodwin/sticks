@@ -1,4 +1,4 @@
-//! Cutting sheet goods (subfloor, later sheathing) from whole sheets.
+//! Cutting sheet goods (subfloor and sheathing) from whole sheets.
 //!
 //! Pieces are packed onto sheets in shelves: tallest pieces first, each shelf
 //! as tall as its first piece and filled along the sheet's length. Pieces in
@@ -187,6 +187,7 @@ mod tests {
     fn piece(n: usize, length: i64, width: i64) -> SheetPiece {
         SheetPiece {
             label: format!("SF{n:02}"),
+            used_for: sticks_core::SheetUse::Subfloor,
             thickness: Length::from_sixteenths(12),
             length: Length::inches(length),
             width: Length::inches(width),

@@ -8,10 +8,13 @@
 use serde::Serialize;
 use sticks_core::{
     longest_board, Building, Floor, FloorSupport, LayoutStart, Length, MemberKind, Rules,
-    SheetPiece, SheetStock, Stock,
+    SheetPiece, SheetStock, SheetUse, Stock,
 };
 
-use crate::layout::{half, on_center, pieces, placed, split_run, LayoutMark, Placed, Rect, Splice};
+use crate::layout::{
+    half, on_center, pieces, placed, ply_joints, sheet_rows, split_run, LayoutMark, Placed, Rect,
+    Splice,
+};
 use crate::FramingError;
 
 /// Clear space between two joists, where foam board or insulation goes.
@@ -22,7 +25,7 @@ pub struct Bay {
     pub width: Length,
 }
 
-/// A piece of subfloor and where it goes.
+/// A piece of subfloor and where it goes, in plan.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PlacedSheet {
     pub piece: SheetPiece,
@@ -234,27 +237,7 @@ pub fn frame_floor(
         centers.clone()
     };
     let beam_longest = longest_board(stock, floor.beam, rules.end_trim);
-    let mut ply_joints: Vec<Vec<Length>> = Vec::new();
-    for p in 0..floor.beam_plies {
-        let avoid: Vec<Length> = ply_joints.iter().flatten().copied().collect();
-        let joints = split_run(
-            Length::ZERO,
-            width,
-            |s| s <= beam_longest,
-            &supports,
-            &avoid,
-            Length::inches(1),
-        )
-        .or_else(|| {
-            split_run(
-                Length::ZERO,
-                width,
-                |s| s <= beam_longest,
-                &supports,
-                &[],
-                Length::ZERO,
-            )
-        })
+    let (ply_joints, shared) = ply_joints(width, floor.beam_plies, &supports, beam_longest)
         .ok_or_else(|| {
             let over = if piers_used { "pier" } else { "joist" };
             fail(format!(
@@ -263,14 +246,12 @@ pub fn frame_floor(
                 floor.beam
             ))
         })?;
-        if p == 1 && ply_joints[0] == joints && !joints.is_empty() {
-            warnings.push(format!(
-                "the {} plies are spliced over the same {}; more piers would let the joints stagger",
-                kind.name(),
-                if piers_used { "pier" } else { "joist" }
-            ));
-        }
-        ply_joints.push(joints);
+    if shared {
+        warnings.push(format!(
+            "the {} plies are spliced over the same {}; more piers would let the joints stagger",
+            kind.name(),
+            if piers_used { "pier" } else { "joist" }
+        ));
     }
     for (i, &y) in beam_y.iter().enumerate() {
         for (p, joints) in ply_joints.iter().enumerate() {
@@ -310,44 +291,21 @@ pub fn frame_floor(
         .find(|s| s.thickness == floor.subfloor)
         .cloned()
         .unwrap_or_else(|| SheetStock::standard(floor.subfloor));
-    let mut subfloor = Vec::new();
-    let mut row_y = Length::ZERO;
-    let mut row = 0;
-    while row_y < depth {
-        let h = sheet.width.min(depth - row_y);
-        let mut x = Length::ZERO;
-        let mut first = true;
-        while x < width {
-            let full = if first && row % 2 == 1 {
-                half(sheet.length)
-            } else {
-                sheet.length
-            };
-            first = false;
-            let w = full.min(width - x);
-            let left = match rules.layout_from {
-                LayoutStart::Left => x,
-                LayoutStart::Right => width - x - w,
-            };
-            subfloor.push(PlacedSheet {
+    let subfloor: Vec<PlacedSheet> =
+        sheet_rows(width, depth, sheet.length, sheet.width, rules.layout_from)
+            .into_iter()
+            .enumerate()
+            .map(|(i, rect)| PlacedSheet {
                 piece: SheetPiece {
-                    label: format!("floor-SF{:02}", subfloor.len() + 1),
+                    label: format!("floor-SF{:02}", i + 1),
+                    used_for: SheetUse::Subfloor,
                     thickness: sheet.thickness,
-                    length: w,
-                    width: h,
+                    length: rect.w,
+                    width: rect.h,
                 },
-                rect: Rect {
-                    x: left,
-                    y: row_y,
-                    w,
-                    h,
-                },
-            });
-            x += w;
-        }
-        row_y += h;
-        row += 1;
-    }
+                rect,
+            })
+            .collect();
     let mut missed: Vec<Length> = subfloor
         .iter()
         .flat_map(|s| [s.rect.x, s.rect.right()])

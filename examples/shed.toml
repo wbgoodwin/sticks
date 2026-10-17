@@ -1,6 +1,7 @@
 # Reference design from the PRD: an 18x14 lean-to shed, 10' tall at the
-# front, on piers. The roof pitch is still an open question, so 3:12 is a
-# placeholder; the back and side walls take their heights from it.
+# front, on piers, with a covered porch and deck across the front. The roof
+# is 2:12, which brings the back wall to 7' 8-9/16"; the side walls rake
+# between the two.
 name = "Backyard shed"
 
 [rules]
@@ -22,10 +23,28 @@ support = "piers"
 pier_spacing = "6'"
 
 [roof]
-pitch = "3:12"
+pitch = "2:12"
 rafter = "2x6"
 front_overhang = "12\""
 back_overhang = "12\""
+
+# A porch across the front: 4x4 posts on a deck a step below the shed floor,
+# carrying a doubled 2x8 beam and a roof hung from a ledger on the front wall.
+[porch]
+depth = "6'"
+post = "4x4"
+beam = "2x8"
+beam_plies = 2
+
+[porch.deck]
+beam = "4x6"
+decking = "5/4x6"
+step_down = "1\""
+
+# 7/16" sheathing under the cedar shingle siding, 1/2" on the roofs.
+[sheathing]
+wall = "7/16\""
+roof = "1/2\""
 
 [[stock]]
 size = "2x4"
@@ -37,6 +56,12 @@ lengths = ["8'", "10'", "12'", "14'", "16'", "18'"]
 
 [[sheet]]
 thickness = "3/4\""    # subfloor
+
+[[sheet]]
+thickness = "7/16\""   # wall sheathing
+
+[[sheet]]
+thickness = "1/2\""    # roof sheathing
 
 # The building's walls (front, back, left, right) take their size from
 # [building]; list one here only to add openings or tees.

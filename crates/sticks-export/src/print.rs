@@ -7,7 +7,10 @@ use sticks_core::Project;
 use sticks_cutlist::CutList;
 use sticks_rules::FramedProject;
 
-use crate::svg::{floor_svg, rafter_svg, roof_svg, subfloor_svg, wall_svg, NOTICE};
+use crate::svg::{
+    deck_svg, floor_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg, wall_svg,
+    NOTICE,
+};
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -121,11 +124,21 @@ td.num, th.num {{ text-align: right; }}
         }
         out.push_str("</table>\n");
     }
+    let mut piers = Vec::new();
     if let Some(Ok(floor)) = &framed.floor {
+        piers.push(format!("{} under the floor", floor.piers.len()));
+    }
+    if let Some(Ok(porch)) = &framed.porch {
+        match &porch.deck {
+            Some(d) => piers.push(format!("{} under the porch deck", d.piers.len())),
+            None => piers.push(format!("{} under the porch posts", porch.piers.len())),
+        }
+    }
+    if !piers.is_empty() {
         let _ = writeln!(
             out,
-            "<h2>Piers</h2>\n<p>{} piers, positions on the floor framing plan.</p>",
-            floor.piers.len()
+            "<h2>Piers</h2>\n<p>{}; positions on the framing plans.</p>",
+            piers.join(", ")
         );
     }
     let mut warnings: Vec<String> = Vec::new();
@@ -137,6 +150,15 @@ td.num, th.num {{ text-align: right; }}
     }
     if let Some(Ok(r)) = &framed.roof {
         warnings.extend(r.warnings.iter().map(|x| format!("Roof: {x}")));
+    }
+    if let Some(Ok(p)) = &framed.porch {
+        warnings.extend(p.warnings.iter().map(|x| format!("Porch: {x}")));
+        if let Some(d) = &p.deck {
+            warnings.extend(d.warnings.iter().map(|x| format!("Porch deck: {x}")));
+        }
+    }
+    if let Some(Ok(s)) = &framed.sheathing {
+        warnings.extend(s.warnings.iter().map(|x| format!("Sheathing: {x}")));
     }
     if !warnings.is_empty() {
         out.push_str("<h2>Worth a second look</h2>\n<ul>\n");
@@ -159,7 +181,23 @@ td.num, th.num {{ text-align: right; }}
     }
     if let Some(Ok(roof)) = &framed.roof {
         page(roof_svg(&project.name, roof, from));
-        page(rafter_svg(&project.name, roof));
+        for r in &roof.rafters {
+            page(rafter_svg(&project.name, r));
+        }
+    }
+    if let Some(Ok(porch)) = &framed.porch {
+        page(porch_svg(&project.name, porch, from));
+        page(rafter_svg(&project.name, &porch.rafter));
+        if let Some(svg) = deck_svg(&project.name, porch, from) {
+            page(svg);
+        }
+    }
+    if let Some(Ok(sheathing)) = &framed.sheathing {
+        for roofs in [false, true] {
+            if let Some(svg) = sheathing_svg(&project.name, sheathing, roofs) {
+                page(svg);
+            }
+        }
     }
 
     out.push_str("<section class=\"page text\">\n<h1>Cut list</h1>\n<div class=\"boards\">\n");
@@ -205,10 +243,11 @@ td.num, th.num {{ text-align: right; }}
         for (i, c) in sheet.pieces.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "<tr><td>{}.</td><td class=\"num\">{}</td><td>{}</td><td>subfloor</td></tr>",
+                "<tr><td>{}.</td><td class=\"num\">{}</td><td>{}</td><td>{}</td></tr>",
                 i + 1,
                 esc(&format!("{:#} x {:#}", c.piece.length, c.piece.width)),
-                esc(&c.piece.label)
+                esc(&c.piece.label),
+                c.piece.used_for.name()
             );
         }
         out.push_str("</table></div>\n");
@@ -236,8 +275,10 @@ mod tests {
         )
         .unwrap();
         let html = print_html(&p, &framed, &cl);
-        // Cover, four walls, floor, subfloor, roof, rafter, cut list.
-        assert_eq!(html.matches("<section class=\"page").count(), 10);
+        // Cover, four walls, floor, subfloor, roof, rafter, porch, porch
+        // rafter, deck, wall and roof sheathing, cut list.
+        assert_eq!(html.matches("<section class=\"page").count(), 15);
+        assert!(html.contains("wall sheathing</td>"));
         assert!(html.contains("<h2>Shopping list</h2>"));
         assert!(html.contains("3/4&quot; sheet"));
         assert!(html.contains("birdsmouth"));

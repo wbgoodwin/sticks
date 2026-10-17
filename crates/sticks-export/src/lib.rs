@@ -7,7 +7,10 @@ use sticks_core::{Cut, Length};
 use sticks_cutlist::CutList;
 
 pub use print::print_html;
-pub use svg::{floor_svg, rafter_svg, roof_svg, subfloor_svg, wall_svg, NOTICE};
+pub use svg::{
+    deck_svg, floor_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg, wall_svg,
+    NOTICE,
+};
 
 /// The shopping list: one row per size and stock length.
 pub fn bom_csv(cut_list: &CutList) -> String {
@@ -93,7 +96,7 @@ pub fn cut_list_csv(cut_list: &CutList) -> String {
                     format!("{} x {}", sheet.width, sheet.length),
                     (i + 1).to_string(),
                     c.piece.label.clone(),
-                    "subfloor".to_string(),
+                    c.piece.used_for.name().to_string(),
                     format!("{:#} x {:#}", c.piece.length, c.piece.width),
                     String::new(),
                     String::new(),

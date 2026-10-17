@@ -8,7 +8,7 @@ const KEY = "sticks.project.v2";
 export type Template = "shed" | "wall";
 
 export const TEMPLATES: [Template, string][] = [
-  ["shed", "Lean-to shed"],
+  ["shed", "Reference shed"],
   ["wall", "Single wall"],
 ];
 
@@ -68,8 +68,8 @@ export function newStock(size: string): StockJson {
 
 /** The fascia the core uses when the roof names none: two sizes up from the rafter. */
 export function fascia(rafter: string): string {
-  const [t, w] = rafter.split("x").map(Number);
-  return `${t}x${w + 2}`;
+  const [t, w] = rafter.split("x");
+  return `${t}x${Number(w) + 2}`;
 }
 
 /** Every lumber size the frame cuts. */
@@ -77,28 +77,35 @@ export function sizesUsed(project: ProjectJson): string[] {
   const sizes = [project.rules.wall_lumber, ...project.wall.flatMap((w) => w.opening.map((o) => o.header))];
   if (project.floor) sizes.push(project.floor.joist, project.floor.beam);
   if (project.roof) sizes.push(project.roof.rafter, project.roof.fascia ?? fascia(project.roof.rafter));
+  if (project.porch) {
+    const p = project.porch;
+    sizes.push(p.post ?? "4x4", p.beam ?? "2x8");
+    if (p.deck) sizes.push(p.deck.decking ?? "5/4x6", p.deck.beam ?? "4x6");
+  }
   return [...new Set(sizes)];
 }
 
 /**
  * Adds stock for any lumber size the frame uses but the yard list lacks, and
- * sheets for the subfloor, so everything can be priced. Returns whether
- * anything was added.
+ * sheets for the subfloor and sheathing, so everything can be priced.
+ * `framed` adds the sizes of members the core framed, such as a porch's
+ * defaults. Returns whether anything was added.
  */
-export function ensureStock(project: ProjectJson): boolean {
+export function ensureStock(project: ProjectJson, framed: string[] = []): boolean {
   project.stock ??= [];
   const stock = project.stock;
   let added = false;
-  for (const size of sizesUsed(project)) {
+  for (const size of new Set([...sizesUsed(project), ...framed])) {
     if (!stock.some((s) => s.size === size)) {
       stock.push(newStock(size));
       added = true;
     }
   }
   if (added) stock.sort((a, b) => sizeOrder(a.size) - sizeOrder(b.size));
-  if (project.floor) {
+  const thicknesses = [project.floor?.subfloor, project.sheathing?.wall, project.sheathing?.roof];
+  for (const thickness of thicknesses) {
+    if (!thickness) continue;
     project.sheet ??= [];
-    const thickness = project.floor.subfloor;
     if (!project.sheet.some((s) => s.thickness === thickness)) {
       project.sheet.push({ thickness, length: "8'", width: "4'" });
       added = true;
@@ -107,9 +114,11 @@ export function ensureStock(project: ProjectJson): boolean {
   return added;
 }
 
+/** Thin boards first, then narrow: 5/4x6 sorts between 1x and 2x. */
 function sizeOrder(size: string): number {
-  const [t, w] = size.split("x").map(Number);
-  return t * 100 + w;
+  const [t, w] = size.split("x");
+  const [n, d] = t.split("/").map(Number);
+  return (d ? n / d : n) * 100 + Number(w);
 }
 
 /** The saved project, or null when there is none or it can't be read. */
