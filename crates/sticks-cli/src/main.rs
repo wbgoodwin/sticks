@@ -1,5 +1,6 @@
 //! The `sticks` command: the same flow as the app, driven by a project file.
 
+mod edit;
 mod text;
 
 use std::path::{Path, PathBuf};
@@ -42,6 +43,21 @@ enum Command {
         #[arg(long, default_value = "build")]
         out: PathBuf,
     },
+    /// Change the design with a plain-English request, such as
+    /// "make it 20' wide and add a window on the left wall", and preview it.
+    Edit {
+        project: PathBuf,
+        request: String,
+        /// Answer a question from an earlier run, as `ID=LABEL`.
+        #[arg(long = "answer", value_name = "ID=LABEL")]
+        answers: Vec<String>,
+        /// Print the reading of the request and the preview as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Save the changed design back to the project file.
+        #[arg(long)]
+        write: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -52,6 +68,13 @@ fn main() -> ExitCode {
             .and_then(|p| plan(&p))
             .map(|cl| print!("{}", text::cut_list(&cl))),
         Command::Build { project, out } => load(&project).and_then(|p| build(&p, &out)),
+        Command::Edit {
+            project,
+            request,
+            answers,
+            json,
+            write,
+        } => load(&project).and_then(|p| edit::run(&p, &project, &request, &answers, json, write)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -110,7 +133,7 @@ fn frame(project: &Project, only: Option<&str>) -> Result<(), String> {
     }
 }
 
-fn plan(project: &Project) -> Result<CutList, String> {
+pub(crate) fn plan(project: &Project) -> Result<CutList, String> {
     plan_framed(project, &framed(project)?)
 }
 

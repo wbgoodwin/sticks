@@ -12,6 +12,7 @@ repository = "https://github.com/wbgoodwin/sticks"
 sticks-core = { path = "crates/sticks-core" }
 sticks-rules = { path = "crates/sticks-rules" }
 sticks-cutlist = { path = "crates/sticks-cutlist" }
+sticks-intent = { path = "crates/sticks-intent" }
 sticks-export = { path = "crates/sticks-export" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

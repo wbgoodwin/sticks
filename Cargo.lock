@@ -494,9 +494,11 @@ name = "sticks-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "serde_json",
  "sticks-core",
  "sticks-cutlist",
  "sticks-export",
+ "sticks-intent",
  "sticks-rules",
 ]
 
@@ -528,6 +530,17 @@ dependencies = [
  "sticks-core",
  "sticks-cutlist",
  "sticks-rules",
+]
+
+[[package]]
+name = "sticks-intent"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sticks-core",
+ "sticks-rules",
+ "thiserror",
 ]
 
 [[package]]

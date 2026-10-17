@@ -10,6 +10,8 @@ sticks-core.workspace = true
 sticks-rules.workspace = true
 sticks-cutlist.workspace = true
 sticks-export.workspace = true
+sticks-intent.workspace = true
+serde_json.workspace = true
 clap.workspace = true
 
 [[bin]]

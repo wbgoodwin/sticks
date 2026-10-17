@@ -33,6 +33,25 @@ when the back rafters differ), `porch.svg`, `porch-rafter.svg`, `deck.svg`,
 packet as one page to print, letter size, landscape. Parts the project
 doesn't have are skipped.
 
+### Changes in plain English (prototype)
+
+```sh
+cargo run -p sticks-cli -- edit examples/shed.toml "make it 20' wide and add a window on the left wall"
+cargo run -p sticks-cli -- edit examples/shed.toml "add a window" --answer 0.wall=back --write
+```
+
+`edit` reads the request into typed edits (`sticks-intent`), applies them to a
+copy, frames it and shows the change in boards and sheets. Rust settles every
+number, unit and keyword it can. What words don't settle comes back as a
+question with fixed options, built from the current design, plus each answer's
+`--answer ID=LABEL`. `--json` prints the same for a program to answer, and
+`--write` saves once it frames (comments in the file are not kept).
+
+`app/scripts/jev-probe.ts` sends those questions to
+[Jev](https://docs.typesafe.ai/introduction/quickstart) and takes its pick
+only when it's confident: `cargo build -p sticks-cli`, then
+`TYPESAFE_API_KEY=... npm run probe:jev` in `app/`.
+
 ## Project file
 
 `examples/shed.toml` is the reference shed from the PRD. A `[building]` gives
