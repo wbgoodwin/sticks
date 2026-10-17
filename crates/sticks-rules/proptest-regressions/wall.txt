@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 18b53c1e703cad2b6e23e4f885f035f3708d5f40d1c21d8d57523bb060946a82 # shrinks to (wall, rules) = (Wall { id: "P", length: Some(Length(1600)), height: Some(Length(1488)), left_end: Some(Corner), right_end: Some(Plain), tees: [], openings: [Opening { kind: Door, offset: Length(376), width: Length(4), height: Length(384), sill_height: Length(0), header: Nominal { thickness: 2, width: 6 } }] }, Rules { on_center: Length(256), kerf: Length(2), end_trim: Length(0), wall_lumber: Nominal { thickness: 2, width: 4 }, layout_from: Right, corner_style: ThreeStud }), drop = 0, low_right = false

@@ -1,5 +1,6 @@
-# Reference design from the PRD: 18x14 lean-to shed. Back wall height and
-# roof pitch are still open questions, so only the front wall is filled in.
+# Reference design from the PRD: an 18x14 lean-to shed, 10' tall at the
+# front, on piers. The roof pitch is still an open question, so 3:12 is a
+# placeholder; the back and side walls take their heights from it.
 name = "Backyard shed"
 
 [rules]
@@ -8,16 +9,39 @@ kerf = "1/8\""
 wall_lumber = "2x4"
 layout_from = "left"
 
+[building]
+width = "18'"          # along the front wall
+depth = "14'"
+height = "10'"         # the front wall; the roof slopes down to the back
+
+[floor]
+joist = "2x6"
+beam = "4x6"
+beams = 3              # front, middle and back
+support = "piers"
+pier_spacing = "6'"
+
+[roof]
+pitch = "3:12"
+rafter = "2x6"
+front_overhang = "12\""
+back_overhang = "12\""
+
 [[stock]]
 size = "2x4"
 lengths = ["8'", "10'", "12'", "16'"]
 
+[[stock]]
+size = "2x6"
+lengths = ["8'", "10'", "12'", "14'", "16'", "18'"]
+
+[[sheet]]
+thickness = "3/4\""    # subfloor
+
+# The building's walls (front, back, left, right) take their size from
+# [building]; list one here only to add openings or tees.
 [[wall]]
 id = "front"
-length = "18'"
-height = "10'"
-left_end = "corner"      # the front wall runs through both corners
-right_end = "corner"
 
 [[wall.opening]]
 kind = "door"
