@@ -436,6 +436,18 @@ button:focus-visible {
   --swatch: var(--blocking);
 }
 
+.splice {
+  stroke: var(--danger);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+.splice-text {
+  fill: var(--danger);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
 .rough-opening {
   fill: none;
   stroke: var(--text-3);

@@ -2,10 +2,20 @@
 //!
 //! Coordinates are the wall's elevation seen from outside: `x` runs from the
 //! wall's left end, `y` from the bottom of the bottom plate.
+//!
+//! A wall may be level or a rake wall, whose top runs straight from one
+//! height at its left end to another at its right, as under a lean-to roof.
+//! In a rake wall the top and cap plates follow the slope and every stud
+//! gets an angled top cut.
 
 use serde::Serialize;
 use sticks_core::{
-    LayoutStart, Length, Member, MemberKind, Nominal, Opening, OpeningKind, Rules, Wall, WallEnd,
+    longest_board, tenths_of_degree, Cut, LayoutStart, Length, MemberKind, Nominal, Opening,
+    OpeningKind, Rules, Stock, Wall, WallEnd,
+};
+
+use crate::layout::{
+    half, on_center, overlaps, pieces, placed, split_run, spread, LayoutMark, Placed, Rect, Splice,
 };
 
 /// Spacer blocks in a three-stud corner: how many, and how long each is.
@@ -13,36 +23,28 @@ const CORNER_BLOCKS: i64 = 3;
 const CORNER_BLOCK_LENGTH: Length = Length::inches(12);
 /// Cripples shorter than this are hard to nail without splitting.
 const SHORT_CRIPPLE: Length = Length::inches(3);
+/// Joints in the top plate and the cap plate stay at least this far apart.
+pub const PLATE_JOINT_OFFSET: Length = Length::inches(24);
 
-/// An axis-aligned rectangle in a wall elevation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct Rect {
-    pub x: Length,
-    pub y: Length,
-    pub w: Length,
-    pub h: Length,
+/// The outline a wall is framed to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WallShape {
+    pub length: Length,
+    /// Subfloor to top of cap plate at the wall's left end.
+    pub left_height: Length,
+    /// Subfloor to top of cap plate at the wall's right end.
+    pub right_height: Length,
+    pub left_end: WallEnd,
+    pub right_end: WallEnd,
 }
 
-impl Rect {
-    fn right(&self) -> Length {
-        self.x + self.w
-    }
-}
-
-/// A member and where it sits in the elevation.
+/// A rough opening as drawn in the elevation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Placed {
-    pub member: Member,
+pub struct OpeningOutline {
+    pub kind: OpeningKind,
+    /// `Door 1`, `Penetration 2`: numbered in the order the project lists them.
+    pub name: String,
     pub rect: Rect,
-}
-
-/// A measurement for build day: where a vertical member's near edge lands,
-/// measured from the end the layout starts at.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct LayoutMark {
-    pub label: String,
-    pub kind: MemberKind,
-    pub at: Length,
 }
 
 /// Everything generated for one wall.
@@ -50,18 +52,25 @@ pub struct LayoutMark {
 pub struct FramedWall {
     pub id: String,
     pub length: Length,
+    /// The taller of the two end heights.
     pub height: Length,
+    pub left_height: Length,
+    pub right_height: Length,
     pub members: Vec<Placed>,
     /// Vertical members, ordered from the layout end.
     pub marks: Vec<LayoutMark>,
+    /// Plate joints, each centered on a stud.
+    pub splices: Vec<Splice>,
+    pub openings: Vec<OpeningOutline>,
     /// Things that frame but deserve a second look.
     pub warnings: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("wall {wall}: {reason}")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, thiserror::Error)]
+#[error("{part}: {reason}")]
 pub struct FramingError {
-    pub wall: String,
+    /// What failed to frame, such as `wall front`, `floor` or `roof`.
+    pub part: String,
     pub reason: String,
 }
 
@@ -70,7 +79,10 @@ struct Vertical {
     kind: MemberKind,
     x: Length,
     y: Length,
+    /// Height to the long point of the top.
     h: Length,
+    /// Whether the top meets the top plate, and so takes its slope.
+    to_plate: bool,
 }
 
 /// A horizontal member before it gets a label.
@@ -90,19 +102,119 @@ struct Framed<'a> {
     blocked: bool,
 }
 
-pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError> {
+/// The line along the top of the wall, and the plates under it.
+struct Top {
+    len: Length,
+    left: Length,
+    right: Length,
+    /// Plumb thickness of one plate: more than its actual thickness on a slope.
+    plate: Length,
+}
+
+impl Top {
+    fn new(shape: &WallShape, t: Length) -> Top {
+        let rise = (shape.right_height - shape.left_height).as_inches_f64();
+        let run = shape.length.as_inches_f64();
+        let plate = if rise == 0.0 {
+            t
+        } else {
+            Length::from_inches_f64(t.as_inches_f64() * (1.0 + (rise / run).powi(2)).sqrt())
+        };
+        Top {
+            len: shape.length,
+            left: shape.left_height,
+            right: shape.right_height,
+            plate,
+        }
+    }
+
+    fn sloped(&self) -> bool {
+        self.left != self.right
+    }
+
+    /// Top of the cap plate at `x`.
+    fn at(&self, x: Length) -> Length {
+        self.left + (self.right - self.left).mul_div(x.sixteenths(), self.len.sixteenths().max(1))
+    }
+
+    /// Bottom of the top plate at `x`: where studs end.
+    fn studs_end(&self, x: Length) -> Length {
+        self.at(x) - self.plate * 2
+    }
+
+    /// Short and long point of a stud's top across `[x, x + t]`.
+    fn column(&self, x: Length, t: Length) -> (Length, Length) {
+        let (a, b) = (self.studs_end(x), self.studs_end(x + t));
+        (a.min(b), a.max(b))
+    }
+
+    /// Lowest point of the top plate's underside over `[a, b]`.
+    fn lowest(&self, a: Length, b: Length) -> Length {
+        self.studs_end(a).min(self.studs_end(b))
+    }
+
+    /// The slope's angle from level, in tenths of a degree.
+    fn angle(&self) -> i32 {
+        tenths_of_degree((self.right - self.left).abs(), self.len)
+    }
+
+    /// Length along the slope for a level `span`.
+    fn along(&self, span: Length) -> Length {
+        if !self.sloped() {
+            return span;
+        }
+        let rise = (self.right - self.left).as_inches_f64() / self.len.as_inches_f64();
+        Length::from_inches_f64(span.as_inches_f64() * (1.0 + rise * rise).sqrt())
+    }
+}
+
+impl WallShape {
+    /// The shape a free-standing wall gives in its own fields.
+    pub fn of(wall: &Wall) -> Result<WallShape, String> {
+        let length = wall
+            .length
+            .ok_or_else(|| "give the wall a length".to_string())?;
+        let height = wall
+            .height
+            .ok_or_else(|| "give the wall a height".to_string())?;
+        Ok(WallShape {
+            length,
+            left_height: height,
+            right_height: height,
+            left_end: wall.left_end.unwrap_or_default(),
+            right_end: wall.right_end.unwrap_or_default(),
+        })
+    }
+}
+
+/// Frames a wall that gives its own length and height.
+pub fn frame_wall(wall: &Wall, rules: &Rules, stock: &[Stock]) -> Result<FramedWall, FramingError> {
+    let shape = WallShape::of(wall).map_err(|reason| FramingError {
+        part: format!("wall {}", wall.id),
+        reason,
+    })?;
+    frame_wall_shaped(wall, &shape, rules, stock)
+}
+
+/// Frames a wall to `shape`, taking its openings and tees from `wall`. Plates
+/// longer than the longest stock board are split with joints on studs.
+pub fn frame_wall_shaped(
+    wall: &Wall,
+    shape: &WallShape,
+    rules: &Rules,
+    stock: &[Stock],
+) -> Result<FramedWall, FramingError> {
     let fail = |reason: String| FramingError {
-        wall: wall.id.clone(),
+        part: format!("wall {}", wall.id),
         reason,
     };
     let lumber = rules.wall_lumber;
     let t = lumber.actual_thickness();
     let depth = lumber.actual_width();
-    let len = wall.length;
-    let height = wall.height;
-    let stud_len = height - t * 3;
+    let len = shape.length;
+    let height = shape.left_height.max(shape.right_height);
+    let top = Top::new(shape, t);
     let plate_top = t;
-    let top_plate_bottom = height - t * 2;
 
     if rules.on_center < t * 2 {
         return Err(fail(format!(
@@ -110,52 +222,52 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
             rules.on_center
         )));
     }
-    if stud_len <= Length::ZERO {
+    if len <= Length::ZERO {
+        return Err(fail("needs a length".to_string()));
+    }
+    let low = shape.left_height.min(shape.right_height);
+    if low - top.plate * 2 - plate_top <= Length::ZERO {
         return Err(fail(format!(
-            "{height} is too short for three {} plates",
+            "{low} is too short for three {} plates",
             lumber
         )));
     }
-    let left_reserve = end_reserve(wall.left_end, t);
-    let right_reserve = end_reserve(wall.right_end, t);
+    let left_reserve = end_reserve(shape.left_end, t);
+    let right_reserve = end_reserve(shape.right_end, t);
     if len < left_reserve + right_reserve {
         return Err(fail(format!("{len} is too short for its end studs")));
     }
 
+    // A stud from the bottom plate up to the top plate.
+    let full = |kind: MemberKind, x: Length| Vertical {
+        kind,
+        x,
+        y: plate_top,
+        h: top.column(x, t).1 - plate_top,
+        to_plate: true,
+    };
+
     // Zones that layout studs must stay out of, as [start, end) on x.
     let mut zones = vec![(Length::ZERO, left_reserve), (len - right_reserve, len)];
     let mut verticals = vec![
-        Vertical {
-            kind: MemberKind::Stud,
-            x: Length::ZERO,
-            y: plate_top,
-            h: stud_len,
-        },
-        Vertical {
-            kind: MemberKind::Stud,
-            x: len - t,
-            y: plate_top,
-            h: stud_len,
-        },
+        full(MemberKind::Stud, Length::ZERO),
+        full(MemberKind::Stud, len - t),
     ];
     let mut horizontals = Vec::new();
     for (end, block_x, backer_x) in [
-        (wall.left_end, t, t * 2),
-        (wall.right_end, len - t * 2, len - t * 3),
+        (shape.left_end, t, t * 2),
+        (shape.right_end, len - t * 2, len - t * 3),
     ] {
         if end == WallEnd::Corner {
-            verticals.push(Vertical {
-                kind: MemberKind::Stud,
-                x: backer_x,
-                y: plate_top,
-                h: stud_len,
-            });
-            for y in spread(plate_top, stud_len, CORNER_BLOCK_LENGTH, CORNER_BLOCKS) {
+            verticals.push(full(MemberKind::Stud, backer_x));
+            let span = top.column(block_x, t).0 - plate_top;
+            for y in spread(plate_top, span, CORNER_BLOCK_LENGTH, CORNER_BLOCKS) {
                 verticals.push(Vertical {
                     kind: MemberKind::Blocking,
                     x: block_x,
                     y,
                     h: CORNER_BLOCK_LENGTH,
+                    to_plate: false,
                 });
             }
         }
@@ -188,12 +300,7 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
         }
         zones.push((a, b));
         for x in [a, center + half(depth)] {
-            verticals.push(Vertical {
-                kind: MemberKind::Stud,
-                x,
-                y: plate_top,
-                h: stud_len,
-            });
+            verticals.push(full(MemberKind::Stud, x));
         }
     }
 
@@ -219,7 +326,7 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
     }
 
     // Penetrations that dodge every stud get blocking; the rest get full framing.
-    let layout = layout_positions(len, rules, t);
+    let layout = on_center(len, rules.on_center, t, rules.layout_from);
     let mut framed: Vec<Framed> = order
         .iter()
         .map(|&i| Framed {
@@ -279,10 +386,11 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
 
         let head_y = o.sill_height + o.height;
         let header_top = head_y + o.header.actual_width();
-        if header_top > top_plate_bottom {
+        let ceiling = top.lowest(o.offset - t, o.offset + o.width + t);
+        if header_top > ceiling {
             return Err(fail(format!(
                 "{name} is too tall: its {} header would end at {:#}, but the top plates start at {:#}",
-                o.header, header_top, top_plate_bottom
+                o.header, header_top, ceiling
             )));
         }
     }
@@ -291,12 +399,7 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
     let mut warnings = Vec::new();
     for &x in &layout {
         if !fixed.iter().any(|&z| overlaps((x, x + t), z)) {
-            verticals.push(Vertical {
-                kind: MemberKind::Stud,
-                x,
-                y: plate_top,
-                h: stud_len,
-            });
+            verticals.push(full(MemberKind::Stud, x));
         }
     }
 
@@ -309,12 +412,7 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
         let name = format!("{} {}", kind_name(o.kind), f.index + 1);
 
         for x in [left - t * 2, right + t] {
-            verticals.push(Vertical {
-                kind: MemberKind::KingStud,
-                x,
-                y: plate_top,
-                h: stud_len,
-            });
+            verticals.push(full(MemberKind::KingStud, x));
         }
         for x in [left - t, right] {
             verticals.push(Vertical {
@@ -322,6 +420,7 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
                 x,
                 y: plate_top,
                 h: head_y - plate_top,
+                to_plate: false,
             });
         }
 
@@ -340,27 +439,34 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
             });
         }
 
-        let top_gap = top_plate_bottom - header_top;
         let top_columns: Vec<Length> = layout
             .iter()
             .copied()
             .filter(|&x| x >= header.x && x + t <= header.right())
+            .filter(|&x| top.column(x, t).0 > header_top)
             .collect();
-        if top_gap > Length::ZERO && !top_columns.is_empty() {
-            if top_gap < SHORT_CRIPPLE {
-                warnings.push(format!(
-                    "{name}: cripples above the header are only {:#} long; a deeper header would fill the gap",
-                    top_gap
-                ));
-            }
-            for x in top_columns {
-                verticals.push(Vertical {
-                    kind: MemberKind::Cripple,
-                    x,
-                    y: header_top,
-                    h: top_gap,
-                });
-            }
+        if top_columns
+            .iter()
+            .any(|&x| top.column(x, t).0 - header_top < SHORT_CRIPPLE)
+        {
+            let shortest = top_columns
+                .iter()
+                .map(|&x| top.column(x, t).0 - header_top)
+                .min()
+                .unwrap_or_default();
+            warnings.push(format!(
+                "{name}: cripples above the header are only {:#} long; a deeper header would fill the gap",
+                shortest
+            ));
+        }
+        for x in top_columns {
+            verticals.push(Vertical {
+                kind: MemberKind::Cripple,
+                x,
+                y: header_top,
+                h: top.column(x, t).1 - header_top,
+                to_plate: true,
+            });
         }
 
         if o.sill_height > Length::ZERO {
@@ -394,6 +500,7 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
                     x,
                     y: plate_top,
                     h: gap,
+                    to_plate: false,
                 });
             }
         }
@@ -416,7 +523,7 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
         let below = o.sill_height - t;
         let above = o.sill_height + o.height;
         let name = format!("penetration {}", f.index + 1);
-        if below < plate_top || above + t > top_plate_bottom {
+        if below < plate_top || above + t > top.lowest(left_stud, right_stud) {
             return Err(fail(format!(
                 "{name} needs room for a block above and below it"
             )));
@@ -452,9 +559,64 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
         start = b;
     }
 
+    // Plates longer than any board are spliced over a stud, the top and cap
+    // plate joints kept apart.
+    let longest = longest_board(stock, lumber, rules.end_trim);
+    let centers: Vec<Length> = verticals
+        .iter()
+        .filter(|v| full_height(v.kind))
+        .map(|v| v.x + half(t))
+        .collect();
+    let too_long = |kind: MemberKind| {
+        fail(format!(
+            "the {} is longer than the longest {lumber} stock ({longest}) and no stud lands where it could be spliced; add longer stock",
+            kind.name()
+        ))
+    };
+    let mut splices = Vec::new();
+    let mut bottom_pieces = Vec::new();
+    for (a, b) in bottom {
+        let on_plate: Vec<Length> = centers
+            .iter()
+            .copied()
+            .filter(|&c| c - half(t) >= a && c + half(t) <= b)
+            .collect();
+        let joints = split_run(a, b, |s| s <= longest, &on_plate, &[], Length::ZERO)
+            .ok_or_else(|| too_long(MemberKind::BottomPlate))?;
+        splices.extend(joints.iter().map(|&at| Splice {
+            kind: MemberKind::BottomPlate,
+            at,
+        }));
+        bottom_pieces.extend(pieces(a, b, &joints));
+    }
+    let fits_sloped = |s: Length| top.along(s) <= longest;
+    let top_joints = split_run(Length::ZERO, len, fits_sloped, &centers, &[], Length::ZERO)
+        .ok_or_else(|| too_long(MemberKind::TopPlate))?;
+    let cap_joints = split_run(
+        Length::ZERO,
+        len,
+        fits_sloped,
+        &centers,
+        &top_joints,
+        PLATE_JOINT_OFFSET,
+    )
+    .ok_or_else(|| {
+        fail(format!(
+            "the cap plate needs a splice at least {:#} from the top plate's, over a stud, and none fits within the longest {lumber} stock ({longest}); add longer stock",
+            PLATE_JOINT_OFFSET
+        ))
+    })?;
+    for (kind, joints) in [
+        (MemberKind::TopPlate, &top_joints),
+        (MemberKind::CapPlate, &cap_joints),
+    ] {
+        splices.extend(joints.iter().map(|&at| Splice { kind, at }));
+    }
+    splices.sort_by_key(|s| s.at);
+
     let mut members = Vec::new();
     let label = |prefix: &str, n: usize, width: usize| format!("{}-{prefix}{n:0width$}", wall.id);
-    for (n, (a, b)) in bottom.into_iter().enumerate() {
+    for (n, (a, b)) in bottom_pieces.into_iter().enumerate() {
         members.push(placed(
             label("BP", n + 1, 1),
             MemberKind::BottomPlate,
@@ -468,22 +630,34 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
             false,
         ));
     }
-    for (prefix, kind, y) in [
-        ("TP", MemberKind::TopPlate, top_plate_bottom),
-        ("CP", MemberKind::CapPlate, height - t),
+    for (prefix, kind, below_top, joints) in [
+        ("TP", MemberKind::TopPlate, top.plate * 2, &top_joints),
+        ("CP", MemberKind::CapPlate, top.plate, &cap_joints),
     ] {
-        members.push(placed(
-            label(prefix, 1, 1),
-            kind,
-            lumber,
-            Rect {
-                x: Length::ZERO,
-                y,
-                w: len,
-                h: t,
-            },
-            false,
-        ));
+        for (n, (a, b)) in pieces(Length::ZERO, len, joints).into_iter().enumerate() {
+            let (ya, yb) = (top.at(a) - below_top, top.at(b) - below_top);
+            let mut p = placed(
+                label(prefix, n + 1, 1),
+                kind,
+                lumber,
+                Rect {
+                    x: a,
+                    y: ya.min(yb),
+                    w: b - a,
+                    h: (yb - ya).abs() + top.plate,
+                },
+                false,
+            );
+            if top.sloped() {
+                p.member.length = top.along(b - a);
+                let cut = Cut::Angled {
+                    tenths_of_degree: top.angle(),
+                };
+                p.member.cuts = vec![cut, cut];
+                p.outline = vec![(a, ya), (b, yb), (b, yb + top.plate), (a, ya + top.plate)];
+            }
+            members.push(p);
+        }
     }
 
     verticals.sort_by_key(|v| (v.x, v.y));
@@ -497,7 +671,7 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
             _ => (4, "B", 1),
         };
         counts[slot] += 1;
-        members.push(placed(
+        let mut p = placed(
             label(prefix, counts[slot], width),
             v.kind,
             lumber,
@@ -508,7 +682,19 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
                 h: v.h,
             },
             true,
-        ));
+        );
+        if v.to_plate && top.sloped() {
+            p.member.cuts = vec![Cut::Angled {
+                tenths_of_degree: top.angle(),
+            }];
+            p.outline = vec![
+                (v.x, v.y),
+                (v.x + t, v.y),
+                (v.x + t, top.studs_end(v.x + t)),
+                (v.x, top.studs_end(v.x)),
+            ];
+        }
+        members.push(p);
     }
 
     horizontals.sort_by_key(|h| (h.kind == MemberKind::Blocking, h.rect.x, h.rect.y));
@@ -558,47 +744,34 @@ pub fn frame_wall(wall: &Wall, rules: &Rules) -> Result<FramedWall, FramingError
     marks.sort_by_key(|m| m.at);
     marks.dedup_by_key(|m| m.at);
 
+    let openings = wall
+        .openings
+        .iter()
+        .enumerate()
+        .map(|(i, o)| OpeningOutline {
+            kind: o.kind,
+            name: format!("{} {}", capitalized(kind_name(o.kind)), i + 1),
+            rect: Rect {
+                x: o.offset,
+                y: o.sill_height,
+                w: o.width,
+                h: o.height,
+            },
+        })
+        .collect();
+
     Ok(FramedWall {
         id: wall.id.clone(),
         length: len,
         height,
+        left_height: shape.left_height,
+        right_height: shape.right_height,
         members,
         marks,
+        splices,
+        openings,
         warnings,
     })
-}
-
-fn placed(label: String, kind: MemberKind, size: Nominal, rect: Rect, vertical: bool) -> Placed {
-    Placed {
-        member: Member {
-            label,
-            kind,
-            size,
-            length: if vertical { rect.h } else { rect.w },
-            cuts: Vec::new(),
-        },
-        rect,
-    }
-}
-
-/// Left edges of on-center studs, excluding the two end studs.
-fn layout_positions(len: Length, rules: &Rules, t: Length) -> Vec<Length> {
-    let mut out = Vec::new();
-    let mut k = 1;
-    loop {
-        let center = rules.on_center * k;
-        let x = match rules.layout_from {
-            LayoutStart::Left => center - half(t),
-            LayoutStart::Right => len - center - half(t),
-        };
-        if x < t || x + t > len - t {
-            break;
-        }
-        out.push(x);
-        k += 1;
-    }
-    out.sort();
-    out
 }
 
 fn fixed_zones(base: &[(Length, Length)], framed: &[Framed], t: Length) -> Vec<(Length, Length)> {
@@ -628,31 +801,19 @@ fn header_plies(depth: Length, ply: Length) -> u8 {
     (depth.sixteenths() / ply.sixteenths()).clamp(1, 4) as u8
 }
 
-/// `n` pieces of length `piece` spread evenly from `start` over `span`.
-fn spread(start: Length, span: Length, piece: Length, n: i64) -> Vec<Length> {
-    if n == 1 {
-        return vec![start + half(span - piece)];
-    }
-    let step = (span - piece).sixteenths() / (n - 1);
-    (0..n)
-        .map(|i| start + Length::from_sixteenths(step * i))
-        .collect()
-}
-
-fn half(l: Length) -> Length {
-    Length::from_sixteenths(l.sixteenths() / 2)
-}
-
-fn overlaps(a: (Length, Length), b: (Length, Length)) -> bool {
-    a.0 < b.1 && b.0 < a.1
-}
-
 fn kind_name(kind: OpeningKind) -> &'static str {
     match kind {
         OpeningKind::Door => "door",
         OpeningKind::Window => "window",
         OpeningKind::Penetration => "penetration",
     }
+}
+
+fn capitalized(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -667,7 +828,7 @@ mod tests {
 
     fn frame(toml: &str) -> Result<FramedWall, FramingError> {
         let p = Project::from_toml(toml).unwrap();
-        frame_wall(&p.walls[0], &p.rules)
+        frame_wall(&p.walls[0], &p.rules, &p.stock)
     }
 
     fn find<'a>(w: &'a FramedWall, label: &str) -> &'a Placed {
@@ -914,6 +1075,92 @@ header = "2x4"
         assert!(err.contains("overlaps"), "{err}");
     }
 
+    #[test]
+    fn long_plates_split_over_studs() {
+        let w = frame(
+            r#"
+name = "x"
+[[stock]]
+size = "2x4"
+lengths = ["8'", "16'"]
+[[wall]]
+id = "F"
+length = "18'"
+height = "8'"
+"#,
+        )
+        .unwrap();
+        // The top plate runs a full 16' to the center of the stud at 191-1/4.
+        let tp: Vec<_> = of_kind(&w, MemberKind::TopPlate)
+            .iter()
+            .map(|p| (p.member.label.clone(), p.rect.x, p.member.length))
+            .collect();
+        assert_eq!(
+            tp,
+            [
+                ("F-TP1".to_string(), l("0"), l("16'")),
+                ("F-TP2".to_string(), l("16'"), l("24"))
+            ]
+        );
+        // The cap plate's joint is two feet or more from the top plate's.
+        let cp: Vec<_> = of_kind(&w, MemberKind::CapPlate)
+            .iter()
+            .map(|p| p.member.length)
+            .collect();
+        assert_eq!(cp, [l("160"), l("56")]);
+        assert_eq!(of_kind(&w, MemberKind::BottomPlate).len(), 2);
+        for s in &w.splices {
+            let center = s.at;
+            assert!(
+                of_kind(&w, MemberKind::Stud)
+                    .iter()
+                    .any(|p| p.rect.x + l("3/4") == center),
+                "splice at {center} isn't on a stud"
+            );
+        }
+        assert_eq!(w.splices.len(), 3);
+
+        let none = frame(
+            "name = \"x\"\n[[stock]]\nsize = \"2x4\"\nlengths = [\"8'\"]\n[[wall]]\nid = \"F\"\nlength = \"18'\"\nheight = \"8'\"\n",
+        )
+        .unwrap();
+        assert_eq!(of_kind(&none, MemberKind::TopPlate).len(), 3);
+    }
+
+    #[test]
+    fn rake_walls_follow_the_slope() {
+        let p = Project::from_toml("name = \"x\"\n[[wall]]\nid = \"R\"\n").unwrap();
+        // 3:12 over 12' drops 36".
+        let shape = WallShape {
+            length: l("12'"),
+            left_height: l("10'"),
+            right_height: l("7'"),
+            left_end: WallEnd::Plain,
+            right_end: WallEnd::Plain,
+        };
+        let w = frame_wall_shaped(&p.walls[0], &shape, &p.rules, &[]).unwrap();
+        assert_eq!(w.height, l("10'"));
+        // Plates are plumb-cut and run the slope: 144 * sqrt(1 + 1/16).
+        let cap = find(&w, "R-CP1");
+        assert_eq!(cap.member.length, l("148-7/16"));
+        assert_eq!(cap.member.cuts.len(), 2);
+        assert_eq!(cap.outline.len(), 4);
+        // The left end stud runs to its long point under two 1-9/16" plates.
+        let first = find(&w, "R-S01");
+        assert_eq!(first.member.length, l("120") - l("3-1/8") - l("1-1/2"));
+        assert_eq!(
+            first.member.cuts,
+            [Cut::Angled {
+                tenths_of_degree: 140
+            }]
+        );
+        let studs = of_kind(&w, MemberKind::Stud);
+        assert!(studs
+            .windows(2)
+            .all(|p| p[0].member.length > p[1].member.length));
+        assert_eq!(find(&w, "R-BP1").member.length, l("12'"));
+    }
+
     fn arb_wall() -> impl Strategy<Value = (Wall, Rules)> {
         (
             (48i64..360, 84i64..144, prop::bool::ANY, prop::bool::ANY),
@@ -953,10 +1200,10 @@ header = "2x4"
                 let end = |c| if c { WallEnd::Corner } else { WallEnd::Plain };
                 let wall = Wall {
                     id: "P".into(),
-                    length: Length::inches(len),
-                    height: Length::inches(h),
-                    left_end: end(lc),
-                    right_end: end(rc),
+                    length: Some(Length::inches(len)),
+                    height: Some(Length::inches(h)),
+                    left_end: Some(end(lc)),
+                    right_end: Some(end(rc)),
                     tees: Vec::new(),
                     openings,
                 };
@@ -969,30 +1216,65 @@ header = "2x4"
         /// members in the same place and no stud bay wider than the spacing.
         #[test]
         fn framed_walls_are_sound((wall, rules) in arb_wall()) {
-            let Ok(w) = frame_wall(&wall, &rules) else { return Ok(()) };
+            let Ok(w) = frame_wall(&wall, &rules, &[]) else { return Ok(()) };
+            check_sound(&wall, &rules, &w)?;
+        }
+
+        /// The same holds for rake walls, and every plate fits stock once split.
+        #[test]
+        fn rake_walls_are_sound((wall, rules) in arb_wall(), drop in 0i64..48 * 16, low_right in any::<bool>()) {
+            let mut shape = WallShape::of(&wall).unwrap();
+            let low = shape.left_height - Length::from_sixteenths(drop);
+            if low_right { shape.right_height = low } else { shape.left_height = low }
+            let Ok(w) = frame_wall_shaped(&wall, &shape, &rules, &[]) else { return Ok(()) };
+            check_sound(&wall, &rules, &w)?;
             for p in &w.members {
-                prop_assert!(p.rect.x >= Length::ZERO && p.rect.right() <= w.length, "{}", p.member.label);
-                prop_assert!(p.rect.y >= Length::ZERO && p.rect.y + p.rect.h <= w.height, "{}", p.member.label);
-                prop_assert!(p.member.length > Length::ZERO, "{}", p.member.label);
-            }
-            let mut tall: Vec<_> = w.members.iter()
-                .filter(|p| full_height(p.member.kind))
-                .map(|p| p.rect)
-                .collect();
-            tall.sort_by_key(|r| r.x);
-            for pair in tall.windows(2) {
-                prop_assert!(pair[0].right() <= pair[1].x, "overlap at {}", pair[1].x);
-            }
-            let labels: std::collections::HashSet<_> = w.members.iter().map(|p| &p.member.label).collect();
-            prop_assert_eq!(labels.len(), w.members.len());
-            // Above every point of the wall sits a stud, cripple, or opening within one spacing.
-            for pair in tall.windows(2) {
-                let gap = pair[1].x - pair[0].right();
-                let spans_opening = wall.openings.iter().any(|o| o.offset < pair[1].x && o.offset + o.width > pair[0].right());
-                if !spans_opening {
-                    prop_assert!(gap < rules.on_center, "bay of {} at {}", gap, pair[0].x);
-                }
+                prop_assert!(p.member.length <= Length::feet(16), "{} is {}", p.member.label, p.member.length);
             }
         }
+    }
+
+    fn check_sound(wall: &Wall, rules: &Rules, w: &FramedWall) -> Result<(), TestCaseError> {
+        for p in &w.members {
+            prop_assert!(
+                p.rect.x >= Length::ZERO && p.rect.right() <= w.length,
+                "{}",
+                p.member.label
+            );
+            prop_assert!(
+                p.rect.y >= Length::ZERO && p.rect.y + p.rect.h <= w.height,
+                "{}",
+                p.member.label
+            );
+            prop_assert!(p.member.length > Length::ZERO, "{}", p.member.label);
+        }
+        let mut tall: Vec<_> = w
+            .members
+            .iter()
+            .filter(|p| full_height(p.member.kind))
+            .map(|p| p.rect)
+            .collect();
+        tall.sort_by_key(|r| r.x);
+        for pair in tall.windows(2) {
+            prop_assert!(pair[0].right() <= pair[1].x, "overlap at {}", pair[1].x);
+        }
+        let labels: std::collections::HashSet<_> =
+            w.members.iter().map(|p| &p.member.label).collect();
+        prop_assert_eq!(labels.len(), w.members.len());
+        // Above every point of the wall sits a stud, cripple, or opening within
+        // one spacing. A layout stud displaced by a king stud can leave one bay
+        // up to a stud's thickness wider.
+        let t = rules.wall_lumber.actual_thickness();
+        for pair in tall.windows(2) {
+            let gap = pair[1].x - pair[0].right();
+            let spans_opening = wall
+                .openings
+                .iter()
+                .any(|o| o.offset < pair[1].x && o.offset + o.width > pair[0].right());
+            if !spans_opening {
+                prop_assert!(gap < rules.on_center + t, "bay of {} at {}", gap, pair[0].x);
+            }
+        }
+        Ok(())
     }
 }

@@ -27,6 +27,14 @@ export const KIND_NAMES: Record<MemberKind, string> = {
   header: "Header",
   sill: "Sill",
   blocking: "Blocking",
+  rim_joist: "Rim joist",
+  joist: "Joist",
+  beam: "Beam",
+  skid: "Skid",
+  ledger: "Ledger",
+  rafter: "Rafter",
+  fascia: "Fascia",
+  post: "Post",
 };
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -49,7 +57,7 @@ export function groupKey(m: MemberView): string {
 const MARK_ROW = 54;
 const MARK_ROWS = 2;
 const MARK_GAP = 13;
-const PAD = { left: 72, right: 32, top: 64, bottom: 16 + MARK_ROW * MARK_ROWS + 28 };
+const PAD = { left: 72, right: 64, top: 64, bottom: 16 + MARK_ROW * MARK_ROWS + 28 };
 
 export function drawElevation(
   svg: SVGSVGElement,
@@ -103,27 +111,54 @@ export function drawElevation(
     const spot = `${m.x_16},${m.y_16},${m.w_16},${m.h_16}`;
     if (drawn.has(spot)) continue;
     drawn.add(spot);
-    const rect = el("rect", {
+    const data = {
       class: `member kind-${m.kind}`,
-      x: X(m.x_16),
-      y: Y(m.y_16 + m.h_16),
-      width: Math.max(1, (m.w_16 / 16) * s),
-      height: Math.max(1, (m.h_16 / 16) * s),
       "data-label": m.label,
       "data-group": groupKey(m),
       "data-plies": plies.get(spot) ?? 1,
-    });
-    members.append(rect);
+    };
+    // Sloped plates and studs with an angled top come with their corners.
+    const shape =
+      m.outline_16.length > 0
+        ? el("polygon", { ...data, points: m.outline_16.map(([x, y]) => `${X(x)},${Y(y)}`).join(" ") })
+        : el("rect", {
+            ...data,
+            x: X(m.x_16),
+            y: Y(m.y_16 + m.h_16),
+            width: Math.max(1, (m.w_16 / 16) * s),
+            height: Math.max(1, (m.h_16 / 16) * s),
+          });
+    members.append(shape);
   }
   svg.append(members);
+
+  // Plate splices: a red line across each piece that starts at the joint.
+  const splices = el("g", { class: "splices" });
+  for (const sp of wall.splices) {
+    for (const m of wall.members.filter((v) => v.kind === sp.kind && v.x_16 === sp.at_16)) {
+      const ys = m.outline_16.length > 0 ? m.outline_16.filter(([x]) => x === sp.at_16).map(([, y]) => y) : [m.y_16, m.y_16 + m.h_16];
+      const x = X(sp.at_16);
+      splices.append(
+        el("line", { class: "splice", x1: x, y1: Y(Math.min(...ys)) + 4, x2: x, y2: Y(Math.max(...ys)) - 4 }),
+      );
+    }
+    const label = el("text", { class: "splice-text", x: X(sp.at_16), y: sp.kind === "bottom_plate" ? Y(0) + 14 : Y(wall.height_16) - 8 }, "splice");
+    label.append(el("title", {}, `${KIND_NAMES[sp.kind]} splice at ${sp.at}, centered on a stud`));
+    splices.append(label);
+  }
+  svg.append(splices);
 
   // Overall length, above the wall.
   const top = Y(wall.height_16) - 28;
   svg.append(dimension(X(0), top, X(wall.length_16), top, formatLength(wall.length_16), "h"));
 
-  // Height, left of the wall.
+  // Height, left of the wall, and at the right too when the top slopes.
   const left = X(0) - 32;
-  svg.append(dimension(left, Y(0), left, Y(wall.height_16), formatLength(wall.height_16), "v"));
+  svg.append(dimension(left, Y(0), left, Y(wall.left_height_16), formatLength(wall.left_height_16), "v"));
+  if (wall.right_height_16 !== wall.left_height_16) {
+    const right = X(wall.length_16) + 32;
+    svg.append(dimension(right, Y(0), right, Y(wall.right_height_16), formatLength(wall.right_height_16), "v"));
+  }
 
   // Layout marks along the bottom plate. Close marks drop to a second row.
   const marks = el("g", { class: "marks" });

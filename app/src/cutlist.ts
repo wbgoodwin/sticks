@@ -79,10 +79,13 @@ function notes(plan: CutListView, extra: string[]): string {
   const items = [...extra];
   for (const p of plan.too_long) {
     items.push(
-      `${esc(p.label)} (${p.size} ${(KIND_NAMES[p.kind] ?? p.kind).toLowerCase()}, ${esc(p.length)}) is longer than any ${p.size} stock, so it isn't on the list. Add a longer stock length for now; splitting long plates over studs is coming next.`,
+      `${esc(p.label)} (${p.size} ${(KIND_NAMES[p.kind] ?? p.kind).toLowerCase()}, ${esc(p.length)}) is longer than any ${p.size} stock, so it isn't on the list. Add a longer stock length to cut it in one piece.`,
     );
   }
-  for (const id of plan.skipped_walls) items.push(`Wall ${esc(id)} doesn't frame yet, so its pieces aren't included.`);
+  for (const part of plan.skipped) {
+    const name = part.charAt(0).toUpperCase() + part.slice(1);
+    items.push(`${esc(name)} doesn't frame yet, so its pieces aren't included.`);
+  }
   if (items.length === 0) return "";
   return `<ul class="warnings">${items.map((t) => `<li>${t}</li>`).join("")}</ul>`;
 }

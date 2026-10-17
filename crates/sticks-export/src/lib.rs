@@ -1,9 +1,13 @@
-//! CSV, SVG elevation and printable-page exports.
-//!
-//! CSV is in place; elevations and printable pages come in milestone M3.
+//! CSV, SVG drawings and the printable build packet.
+
+pub mod print;
+pub mod svg;
 
 use sticks_core::{Cut, Length};
 use sticks_cutlist::CutList;
+
+pub use print::print_html;
+pub use svg::{floor_svg, rafter_svg, roof_svg, subfloor_svg, wall_svg, NOTICE};
 
 /// The shopping list: one row per size and stock length.
 pub fn bom_csv(cut_list: &CutList) -> String {
@@ -19,6 +23,19 @@ pub fn bom_csv(cut_list: &CutList) -> String {
                 line.size.to_string(),
                 line.length.to_string(),
                 feet(line.length),
+                line.count.to_string(),
+                dollars(line.unit_price_cents.map(u64::from)),
+                dollars(line.total_cents),
+            ],
+        );
+    }
+    for line in cut_list.sheet_bom() {
+        row(
+            &mut out,
+            [
+                format!("{:#} sheet", line.thickness),
+                format!("{} x {}", line.width, line.length),
+                String::new(),
                 line.count.to_string(),
                 dollars(line.unit_price_cents.map(u64::from)),
                 dollars(line.total_cents),
@@ -62,6 +79,25 @@ pub fn cut_list_csv(cut_list: &CutList) -> String {
                     } else {
                         String::new()
                     },
+                ],
+            );
+        }
+    }
+    for sheet in &cut_list.sheets {
+        for (i, c) in sheet.pieces.iter().enumerate() {
+            row(
+                &mut out,
+                [
+                    sheet.id.clone(),
+                    format!("{:#} sheet", sheet.thickness),
+                    format!("{} x {}", sheet.width, sheet.length),
+                    (i + 1).to_string(),
+                    c.piece.label.clone(),
+                    "subfloor".to_string(),
+                    format!("{:#} x {:#}", c.piece.length, c.piece.width),
+                    String::new(),
+                    String::new(),
+                    String::new(),
                 ],
             );
         }
@@ -120,18 +156,7 @@ fn dollars(cents: Option<u64>) -> String {
 
 fn cuts(cuts: &[Cut]) -> String {
     cuts.iter()
-        .map(|c| match c {
-            Cut::Square => "square".to_string(),
-            Cut::Angled { tenths_of_degree } => {
-                format!(
-                    "{}.{} deg",
-                    tenths_of_degree / 10,
-                    (tenths_of_degree % 10).abs()
-                )
-            }
-            Cut::Birdsmouth => "birdsmouth".to_string(),
-            Cut::Plumb => "plumb".to_string(),
-        })
+        .map(Cut::describe)
         .collect::<Vec<_>>()
         .join("; ")
 }

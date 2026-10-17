@@ -1,7 +1,16 @@
 //! Framing generators for floors, walls, openings and roofs.
-//!
-//! Walls are in place; floors and roofs come in milestone M3.
 
+pub mod building;
+pub mod floor;
+pub mod layout;
+pub mod roof;
 pub mod wall;
 
-pub use wall::{frame_wall, FramedWall, FramingError, LayoutMark, Placed, Rect};
+pub use building::{frame_project, FramedProject, SIDES};
+pub use floor::{frame_floor, Bay, FramedFloor, Pier, PlacedSheet};
+pub use layout::{LayoutMark, Placed, Rect, Splice};
+pub use roof::{frame_roof, lean_to_heights, FramedRoof, LeanToHeights, RafterDetail};
+pub use wall::{
+    frame_wall, frame_wall_shaped, FramedWall, FramingError, OpeningOutline, WallShape,
+    PLATE_JOINT_OFFSET,
+};

@@ -45,6 +45,28 @@ impl Length {
         Length(self.0.abs())
     }
 
+    /// The nearest sixteenth to a length in decimal inches. For lengths that
+    /// come out of trigonometry, such as a rafter on a pitch.
+    pub fn from_inches_f64(inches: f64) -> Self {
+        Length((inches * PER_INCH as f64).round() as i64)
+    }
+
+    /// `self * num / den`, rounded to the nearest sixteenth (halves away from
+    /// zero). Exact for rational ratios such as a roof pitch.
+    pub fn mul_div(self, num: i64, den: i64) -> Self {
+        let n = self.0 as i128 * num as i128;
+        let d = den as i128;
+        let q = n / d;
+        let r = n % d;
+        let round_up = (r.abs() * 2) >= d.abs();
+        let q = if round_up {
+            q + if (n < 0) != (d < 0) { -1 } else { 1 }
+        } else {
+            q
+        };
+        Length(q as i64)
+    }
+
     /// How you'd read it off a tape: inches under 10' (`92-5/8"`), feet and
     /// inches beyond (`18'`, `10' 3-1/2"`).
     pub fn to_tape_string(self) -> String {
@@ -281,6 +303,25 @@ mod tests {
 
     fn p(s: &str) -> Length {
         s.parse().unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn mul_div_rounds_to_the_nearest_sixteenth() {
+        // 164-1/2" of run at 3:12 drops 41-1/8".
+        assert_eq!(p("164-1/2").mul_div(3, 12), p("41-1/8"));
+        assert_eq!(
+            Length::from_sixteenths(5).mul_div(1, 2),
+            Length::from_sixteenths(3)
+        );
+        assert_eq!(
+            Length::from_sixteenths(-5).mul_div(1, 2),
+            Length::from_sixteenths(-3)
+        );
+        assert_eq!(
+            Length::from_sixteenths(4).mul_div(1, 3),
+            Length::from_sixteenths(1)
+        );
+        assert_eq!(Length::from_inches_f64(197.904), p("197-7/8"));
     }
 
     #[test]

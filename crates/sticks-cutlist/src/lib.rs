@@ -11,15 +11,22 @@
 //! board is then cut down to the cheapest stock length that still holds it.
 //!
 //! Pieces longer than the longest stock are never split here; they come back
-//! in [`CutList::too_long`] so the frame can be changed instead.
+//! in [`CutList::too_long`] so the frame can be changed instead. The framing
+//! rules already split plates, rims, beams and fascia over their supports.
+//!
+//! Sheet goods (the subfloor) are planned separately in [`sheets`] and ride
+//! along on the same [`CutList`] so the shopping list and total cover both.
+
+pub mod sheets;
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use sticks_core::{Length, Member, Nominal, Rules, Stock};
+use sticks_core::{Length, Member, Nominal, Rules, SheetPiece, SheetStock, Stock};
 
+pub use sheets::{plan_sheets, sheet_bom, Sheet, SheetCut, SheetLine};
 /// Stock lengths assumed for a size the project lists no stock for.
-pub const DEFAULT_STOCK_FEET: [i64; 5] = [8, 10, 12, 14, 16];
+pub use sticks_core::DEFAULT_STOCK_FEET;
 
 /// One stock board and the pieces cut from it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -56,6 +63,7 @@ pub struct BomLine {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Summary {
     pub boards: usize,
+    pub sheets: usize,
     /// Pieces cut, which is also what a one-piece-per-board takeoff buys.
     pub pieces: usize,
     /// Total cost, when every board bought has a price.
@@ -76,6 +84,8 @@ pub struct CutList {
     pub boards: Vec<Board>,
     /// Pieces longer than the longest stock board of their size.
     pub too_long: Vec<Member>,
+    /// Whole sheets of subfloor and the pieces cut from them.
+    pub sheets: Vec<Sheet>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -94,6 +104,12 @@ pub enum CutListError {
     Duplicate { size: Nominal },
     #[error("kerf and end trim can't be negative")]
     Negative,
+    #[error("{label} is bigger than a {length} x {width} sheet")]
+    SheetTooSmall {
+        label: String,
+        length: Length,
+        width: Length,
+    },
 }
 
 /// A stock length on offer and what it costs.
@@ -171,10 +187,29 @@ pub fn cut_list(
         end_trim: rules.end_trim,
         boards,
         too_long,
+        sheets: Vec::new(),
     })
 }
 
+/// [`cut_list`] for the lumber, plus whole sheets for `sheet_pieces`.
+pub fn cut_list_with_sheets(
+    members: &[Member],
+    sheet_pieces: &[SheetPiece],
+    stock: &[Stock],
+    sheet_stock: &[SheetStock],
+    rules: &Rules,
+) -> Result<CutList, CutListError> {
+    let mut cl = cut_list(members, stock, rules)?;
+    cl.sheets = plan_sheets(sheet_pieces, sheet_stock)?;
+    Ok(cl)
+}
+
 impl CutList {
+    /// Sheet goods on the shopping list.
+    pub fn sheet_bom(&self) -> Vec<SheetLine> {
+        sheet_bom(&self.sheets)
+    }
+
     /// The shopping list: boards grouped by size and stock length.
     pub fn bom(&self) -> Vec<BomLine> {
         let mut lines: Vec<BomLine> = Vec::new();
@@ -212,7 +247,9 @@ impl CutList {
         let total_cents = self
             .boards
             .iter()
-            .map(|b| b.price_cents.map(u64::from))
+            .map(|b| b.price_cents)
+            .chain(self.sheets.iter().map(|s| s.price_cents))
+            .map(|p| p.map(u64::from))
             .sum::<Option<u64>>();
         let waste_percent = if bought > Length::ZERO {
             (bought - used).sixteenths() as f64 * 100.0 / bought.sixteenths() as f64
@@ -221,8 +258,9 @@ impl CutList {
         };
         Summary {
             boards: self.boards.len(),
+            sheets: self.sheets.len(),
             pieces,
-            total_cents: if self.boards.is_empty() {
+            total_cents: if self.boards.is_empty() && self.sheets.is_empty() {
                 None
             } else {
                 total_cents
@@ -538,16 +576,28 @@ mod tests {
     }
 
     #[test]
-    fn shed_walls_need_fewer_boards_than_one_per_piece() {
+    fn the_whole_shed_needs_fewer_boards_than_one_per_piece() {
         let project = Project::from_toml(include_str!("../../../examples/shed.toml")).unwrap();
-        let members: Vec<_> = project
-            .walls
-            .iter()
-            .flat_map(|w| sticks_rules::frame_wall(w, &project.rules).unwrap().members)
-            .map(|p| p.member)
-            .collect();
-        let cl = cut_list(&members, &project.stock, &project.rules).unwrap();
+        let framed = sticks_rules::frame_project(&project).unwrap();
+        assert!(framed.errors().is_empty());
+        let members = framed.members();
+        let cl = cut_list_with_sheets(
+            &members,
+            &framed.sheet_pieces(),
+            &project.stock,
+            &project.sheets,
+            &project.rules,
+        )
+        .unwrap();
         assert_accounted_for(&members, &cl);
+        // Plates, rims, beams and fascia are split, so everything fits stock.
+        assert!(cl.too_long.is_empty(), "{:?}", cl.too_long);
+        // 252 sq ft of floor is at least eight 4x8 sheets.
+        assert!(
+            cl.sheets.len() >= 8 && cl.sheets.len() <= 10,
+            "{}",
+            cl.sheets.len()
+        );
         let s = cl.summary();
         assert!(
             s.boards < s.pieces,

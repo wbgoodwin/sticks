@@ -8,3 +8,4 @@ repository.workspace = true
 [dependencies]
 sticks-core.workspace = true
 sticks-cutlist.workspace = true
+sticks-rules.workspace = true

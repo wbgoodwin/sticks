@@ -5,9 +5,12 @@ pub mod lumber;
 pub mod project;
 pub mod units;
 
-pub use lumber::{Cut, Member, MemberKind, Nominal};
+pub use lumber::{
+    longest_board, tenths_of_degree, Cut, Member, MemberKind, Nominal, SheetPiece,
+    DEFAULT_STOCK_FEET,
+};
 pub use project::{
-    CornerStyle, LayoutStart, Opening, OpeningKind, Project, ProjectError, Rules, Stock, Wall,
-    WallEnd,
+    Building, CornerStyle, Floor, FloorSupport, LayoutStart, Opening, OpeningKind, Pitch, Project,
+    ProjectError, Roof, RoofKind, Rules, SheetStock, Stock, Wall, WallEnd,
 };
 pub use units::{Length, ParseLengthError};

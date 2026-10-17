@@ -12,7 +12,15 @@ export type MemberKind =
   | "cripple"
   | "header"
   | "sill"
-  | "blocking";
+  | "blocking"
+  | "rim_joist"
+  | "joist"
+  | "beam"
+  | "skid"
+  | "ledger"
+  | "rafter"
+  | "fascia"
+  | "post";
 
 export interface MemberView {
   label: string;
@@ -24,6 +32,15 @@ export interface MemberView {
   y_16: number;
   w_16: number;
   h_16: number;
+  /** Corners as [x, y] for sloped members; empty when the rectangle is the shape. */
+  outline_16: [number, number][];
+}
+
+/** A plate joint, centered on a stud. */
+export interface SpliceView {
+  kind: MemberKind;
+  at_16: number;
+  at: string;
 }
 
 export interface MarkView {
@@ -37,8 +54,11 @@ export interface WallView {
   id: string;
   length_16: number;
   height_16: number;
+  left_height_16: number;
+  right_height_16: number;
   members: MemberView[];
   marks: MarkView[];
+  splices: SpliceView[];
   warnings: string[];
   error: string | null;
 }
@@ -80,12 +100,14 @@ export interface CutListView {
   too_long: PieceView[];
   summary: {
     boards: number;
+    sheets: number;
     pieces: number;
     total_cents: number | null;
     waste_percent: number;
     kerf: string;
   };
-  skipped_walls: string[];
+  /** Parts that don't frame, such as `wall front` or `floor`. */
+  skipped: string[];
 }
 
 /** The project file's shape. Lengths stay as the builder typed them. */

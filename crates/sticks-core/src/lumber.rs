@@ -94,6 +94,7 @@ pub enum MemberKind {
     RimJoist,
     Joist,
     Beam,
+    Skid,
     Ledger,
     Rafter,
     Fascia,
@@ -117,6 +118,7 @@ impl MemberKind {
             MemberKind::RimJoist => "rim joist",
             MemberKind::Joist => "joist",
             MemberKind::Beam => "beam",
+            MemberKind::Skid => "skid",
             MemberKind::Ledger => "ledger",
             MemberKind::Rafter => "rafter",
             MemberKind::Fascia => "fascia",
@@ -125,18 +127,71 @@ impl MemberKind {
     }
 }
 
-/// How a member's ends are cut.
+/// How a member's ends are cut, or a notch cut into it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Cut {
     #[default]
     Square,
     /// Angled end, in tenths of a degree from square.
-    Angled {
-        tenths_of_degree: i32,
+    Angled { tenths_of_degree: i32 },
+    /// The notch where a rafter sits on a wall plate: a level seat cut and a
+    /// plumb heel cut. `heel_at` is measured along the rafter's bottom edge
+    /// from its upper end to the heel.
+    Birdsmouth {
+        seat: Length,
+        heel: Length,
+        heel_at: Length,
     },
-    Birdsmouth,
-    Plumb,
+    /// A rafter end cut plumb (vertical once the rafter is in place), in
+    /// tenths of a degree from square.
+    Plumb { tenths_of_degree: i32 },
+}
+
+impl Cut {
+    /// How the cut reads on a cut list, e.g. `plumb 14.0°`.
+    pub fn describe(&self) -> String {
+        let degrees = |t: i32| format!("{}.{}°", t / 10, (t % 10).abs());
+        match *self {
+            Cut::Square => "square".to_string(),
+            Cut::Angled { tenths_of_degree } => format!("angled {}", degrees(tenths_of_degree)),
+            Cut::Plumb { tenths_of_degree } => format!("plumb {}", degrees(tenths_of_degree)),
+            Cut::Birdsmouth {
+                seat,
+                heel,
+                heel_at,
+            } => format!("birdsmouth {seat:#} seat, {heel:#} heel at {heel_at:#}"),
+        }
+    }
+}
+
+/// Tenths of a degree in the angle whose tangent is `rise / run`.
+pub fn tenths_of_degree(rise: Length, run: Length) -> i32 {
+    (rise.as_inches_f64().atan2(run.as_inches_f64()).to_degrees() * 10.0).round() as i32
+}
+
+/// Stock lengths assumed for a size the project lists no stock for.
+pub const DEFAULT_STOCK_FEET: [i64; 5] = [8, 10, 12, 14, 16];
+
+/// The longest piece of `size` the lumber yard can supply in one board, once
+/// `end_trim` comes off.
+pub fn longest_board(stock: &[crate::Stock], size: Nominal, end_trim: Length) -> Length {
+    let longest = match stock.iter().find(|s| s.size == size) {
+        Some(s) => s.lengths.iter().copied().max().unwrap_or(Length::ZERO),
+        None => Length::feet(DEFAULT_STOCK_FEET[DEFAULT_STOCK_FEET.len() - 1]),
+    };
+    longest - end_trim
+}
+
+/// A piece of sheet goods (subfloor, later sheathing) laid out in a frame.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SheetPiece {
+    pub label: String,
+    pub thickness: Length,
+    /// Along the sheet's long side.
+    pub length: Length,
+    /// Along the sheet's short side.
+    pub width: Length,
 }
 
 /// One piece of lumber in the generated frame.
