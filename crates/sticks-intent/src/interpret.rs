@@ -238,7 +238,7 @@ pub fn questions(project: &Project, request: &str, answers: &Answers) -> Vec<Ask
                 .map(|slot| {
                     let (prompt, mut options) = c.slot(&slot);
                     if may_be_unsaid(&slot) {
-                        options.push((UNSAID.into(), "The request doesn't say".into()));
+                        options.push((UNSAID.into(), unsaid(&slot).into()));
                     }
                     Ask::Choice {
                         id: c.id(&slot),
@@ -260,6 +260,24 @@ pub fn questions(project: &Project, request: &str, answers: &Answers) -> Vec<Ask
 /// so, rather than being sure of a guess.
 fn may_be_unsaid(slot: &str) -> bool {
     !matches!(slot, "target") && !slot.starts_with("num")
+}
+
+/// What [`UNSAID`] means for a slot. Saying exactly what's missing keeps
+/// "beside the door" from reading as not saying which door.
+fn unsaid(slot: &str) -> &'static str {
+    match slot {
+        "wall" => "The request doesn't name a wall or point to one",
+        "ref" => "The request doesn't mention a door or window to go beside",
+        "place" => "The request doesn't say where along the wall",
+        "count" => "The request doesn't say how many",
+        "kind" => "The request doesn't say what kind",
+        _ => "The request doesn't say",
+    }
+}
+
+/// The wall for a `wall` slot's label.
+fn side_of(label: &str) -> Option<Side> {
+    Side::ALL.into_iter().find(|s| s.id() == label)
 }
 
 pub fn interpret(project: &Project, request: &str, answers: &Answers) -> Interpretation {
@@ -857,6 +875,12 @@ impl<'a> Clause<'a> {
             Some(p) => p,
             None => {
                 let rise = self.scalar(roof.pitch.rise, Unit::Inches, Length::inches(1))?;
+                // The step is 1" of rise per foot, which reads better as a pitch.
+                if let Some(a) = self.assumed.last_mut() {
+                    if a.starts_with("No amount given") {
+                        *a = "No amount given, so it changes by 1 in 12".into();
+                    }
+                }
                 format!("{}:12", format!("{rise:#}").trim_end_matches('"'))
                     .parse()
                     .map_err(Stop::Problem)?
@@ -1073,14 +1097,45 @@ impl<'a> Clause<'a> {
     }
 
     /// The opening picked as the one to go beside.
-    fn reference(&self) -> Result<(Side, usize), Stop> {
-        let pick = self.pick("ref")?;
-        Ok(self
+    /// The door or window a request puts something beside. When it's not
+    /// clear which, the only door or window there is (in `wall`, if known).
+    fn reference(&mut self, wall: Option<Side>) -> Result<(Side, usize), Stop> {
+        let ask = match self.pick("ref") {
+            Ok(pick) => {
+                return Ok(self
+                    .openings()
+                    .into_iter()
+                    .find(|(_, l, _)| *l == pick)
+                    .map(|(at, ..)| at)
+                    .expect("picks are checked against the options"))
+            }
+            Err(ask) => ask,
+        };
+        let (_, options) = self.slot("ref");
+        let only: Vec<(Side, usize)> = self
             .openings()
             .into_iter()
-            .find(|(_, l, _)| *l == pick)
+            .filter(|(at, label, _)| {
+                options.iter().any(|(l, _)| l == label)
+                    && wall.is_none_or(|w| w == at.0)
+                    && self.opening(at.0, at.1).kind != OpeningKind::Penetration
+            })
             .map(|(at, ..)| at)
-            .expect("picks are checked against the options"))
+            .collect();
+        let [(side, i)] = only[..] else {
+            return Err(ask);
+        };
+        let there = if wall.is_some() {
+            "that wall"
+        } else {
+            "the design"
+        };
+        self.assumed.push(format!(
+            "Beside the {} in the {} wall, the only door or window in {there}",
+            kind_name(self.opening(side, i).kind),
+            side.id()
+        ));
+        Ok((side, i))
     }
 
     /// The width, height and distance given for an opening. A door's slab
@@ -1135,17 +1190,15 @@ impl<'a> Clause<'a> {
         let place = self.maybe("place");
         // Beside another opening, the wall is that opening's.
         let beside = match place.as_deref() {
-            Some("left_of" | "right_of" | "both_sides") => Some(self.reference()?),
+            Some("left_of" | "right_of" | "both_sides") => {
+                let wall = self.maybe("wall").and_then(|w| side_of(&w));
+                Some(self.reference(wall)?)
+            }
             _ => None,
         };
         let wall = match beside {
             Some((side, _)) => side,
-            None => match self.pick("wall")?.as_str() {
-                "front" => Side::Front,
-                "back" => Side::Back,
-                "left" => Side::Left,
-                _ => Side::Right,
-            },
+            None => side_of(&self.pick("wall")?).expect("picks are checked against the options"),
         };
         let (dw, dh, sill, header) = opening_defaults(kind);
         let (width, height, distance) = self.opening_numbers(kind)?;
@@ -1322,7 +1375,7 @@ impl<'a> Clause<'a> {
                     vec![at]
                 }
                 ("left_of" | "right_of", d) => {
-                    let (side, i) = self.reference()?;
+                    let (side, i) = self.reference(Some(wall))?;
                     if side != wall {
                         return Err(Stop::Problem(
                             "Moving an opening to another wall isn't supported yet. Remove it and add a new one there."

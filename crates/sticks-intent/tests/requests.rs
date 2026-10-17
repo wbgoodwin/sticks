@@ -452,3 +452,48 @@ fn edits_round_trip_as_json() {
     let back: Vec<Edit> = serde_json::from_str(&text).unwrap();
     assert_eq!(back, e);
 }
+
+#[test]
+fn puts_it_beside_the_only_door_or_window_when_unsure_which() {
+    let request = "please add a window on each side of the door";
+    let picks = [
+        ("0.target", "new_opening"),
+        ("0.kind", "window"),
+        ("0.count", "two"),
+        ("0.place", "both_sides"),
+        ("0.ref", "unsaid"),
+    ];
+    let asks = questions(&shed(), request, &sure(&picks[..1]));
+    let unsaid = asks.iter().find_map(|a| match a {
+        Ask::Choice { id, options, .. } if id == "0.ref" => options.last(),
+        _ => None,
+    });
+    assert_eq!(
+        unsaid.unwrap().description,
+        "The request doesn't mention a door or window to go beside"
+    );
+
+    let mut answers = sure(&picks);
+    let r = read(request, &answers);
+    assert_eq!(r.edits().unwrap().len(), 2);
+    assert!(r.steps[0].assumed.contains(
+        &"Beside the door in the front wall, the only door or window in the design".into()
+    ));
+
+    // A wall with none to go beside: ask.
+    answers.extend(sure(&[("0.wall", "back")]));
+    let r = read(request, &answers);
+    assert_eq!(r.questions().next().unwrap().id, "0.ref");
+}
+
+#[test]
+fn steps_the_pitch_when_no_amount_is_given() {
+    let r = read(
+        "the roof should shed rain better",
+        &sure(&[("0.target", "pitch"), ("0.how", "increase")]),
+    );
+    assert_eq!(
+        r.steps[0].assumed,
+        ["No amount given, so it changes by 1 in 12"]
+    );
+}
