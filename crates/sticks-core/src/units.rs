@@ -44,6 +44,16 @@ impl Length {
     pub const fn abs(self) -> Self {
         Length(self.0.abs())
     }
+
+    /// How you'd read it off a tape: inches under 10' (`92-5/8"`), feet and
+    /// inches beyond (`18'`, `10' 3-1/2"`).
+    pub fn to_tape_string(self) -> String {
+        if self.abs() < Length::feet(10) {
+            format!("{self:#}")
+        } else {
+            self.to_string()
+        }
+    }
 }
 
 impl Add for Length {
@@ -307,6 +317,13 @@ mod tests {
         assert_eq!(p("1/8").to_string(), "1/8\"");
         assert_eq!(Length::ZERO.to_string(), "0\"");
         assert_eq!((-p("1-1/4")).to_string(), "-1-1/4\"");
+    }
+
+    #[test]
+    fn tape_strings() {
+        assert_eq!(p("92-5/8").to_tape_string(), "92-5/8\"");
+        assert_eq!(p("115-1/2").to_tape_string(), "115-1/2\"");
+        assert_eq!(p("18'").to_tape_string(), "18'");
     }
 
     #[test]

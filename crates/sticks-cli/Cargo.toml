@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 sticks-core.workspace = true
+sticks-rules.workspace = true
 clap.workspace = true
 
 [[bin]]
