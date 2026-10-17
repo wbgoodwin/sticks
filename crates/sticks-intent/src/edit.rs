@@ -129,6 +129,17 @@ pub enum Edit {
         sill_height: Length,
         header: Nominal,
     },
+    /// Resizes or moves the opening at `index` in that wall's list.
+    ChangeOpening {
+        wall: Side,
+        index: usize,
+        /// What it is, for the preview; the change keeps it.
+        kind: OpeningKind,
+        offset: Length,
+        width: Length,
+        height: Length,
+        header: Nominal,
+    },
     /// The opening at `index` in that wall's list.
     RemoveOpening {
         wall: Side,
@@ -210,6 +221,23 @@ impl Edit {
                 sill_height,
                 header,
             }),
+            Edit::ChangeOpening {
+                wall,
+                index,
+                offset,
+                width,
+                height,
+                header,
+                ..
+            } => {
+                let Some(o) = wall_mut(p, wall).openings.get_mut(index) else {
+                    return Err(EditError::NoOpening(wall.id(), index));
+                };
+                o.offset = offset;
+                o.width = width;
+                o.height = height;
+                o.header = header;
+            }
             Edit::RemoveOpening { wall, index } => {
                 let openings = &mut wall_mut(p, wall).openings;
                 if index >= openings.len() {
@@ -298,6 +326,19 @@ impl fmt::Display for Edit {
                 "Add a {width} x {height} {} to the {} wall, {offset} from its left end",
                 kind_name(*kind),
                 wall.id()
+            ),
+            Edit::ChangeOpening {
+                wall,
+                kind,
+                offset,
+                width,
+                height,
+                ..
+            } => write!(
+                f,
+                "Make the {} wall's {} {width} x {height}, {offset} from its left end",
+                wall.id(),
+                kind_name(*kind)
             ),
             Edit::RemoveOpening { wall, index } => {
                 write!(

@@ -45,8 +45,9 @@ Rust reads only the notation: it splits the request into clauses and reads
 lengths (`20 ft`, `3' 6"`), pitches (`4 in 12`) and sizes (`12x16`, `2x6`).
 The meaning comes from a classifier: `--questions` lists one batch of
 multiple-choice questions per request (what kind of change, which wall,
-window or door, what each number is for) plus yes/no checks such as "the
-request says which wall". `edit` turns answers at 80% confidence or more into
+window or door, what each number is for). Questions the request may not
+answer, such as which wall, also offer "the request doesn't say". `edit`
+turns answers at 80% confidence or more into
 typed edits (`sticks-intent`). Anything less sure, or not in the request,
 comes back as a question for you, answered with `--answer ID=LABEL`. Rust then
 places the edits, sliding a new opening to the nearest spot that frames and
@@ -55,10 +56,18 @@ plates. It frames the result and shows the change in boards and sheets.
 `--json` prints the same for a program, and `--write` saves once it frames
 (comments in the file are not kept).
 
-`app/scripts/jev-probe.ts` runs sample requests through
-[Jev](https://docs.typesafe.ai/introduction/quickstart):
-`cargo build -p sticks-cli`, then `TYPESAFE_API_KEY=... npm run probe:jev` in
-`app/`.
+In the app, the bar above the drawing takes the same requests (Ctrl K or
+⌘K). It shows each change, what was assumed, and buttons for anything left to
+ask, along with the change in boards and sheets. Nothing changes until you
+press Make, and Undo puts it back. The app asks
+[Jev](https://docs.typesafe.ai/introduction/quickstart) through the dev
+server, which adds your key so the page never holds it. Start it with the key
+set: `TYPESAFE_API_KEY=... npm run tauri dev` (or `npm run dev`), or put the
+key in `app/.env.local`. A bundled build can't reach Jev yet.
+
+`app/scripts/jev-probe.ts` runs sample requests through Jev from the command
+line: `cargo build -p sticks-cli`, then `TYPESAFE_API_KEY=... npm run
+probe:jev` in `app/`.
 
 ## Project file
 

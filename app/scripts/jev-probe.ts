@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { choice, noul, TypeSafeClient } from "@typesafe-ai/sdk";
+import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
 
 const SHED = new URL("../../examples/shed.toml", import.meta.url).pathname;
 const STICKS = new URL("../../target/debug/sticks", import.meta.url).pathname;
@@ -28,12 +28,18 @@ const REQUESTS = [
   "paint it red",
   "put a 36x48 window in the right wall 2' from the left",
   "make the porch 8' deep",
+  "please add a window on each side of the door",
+  "make the door 60 inches by 80 inches",
 ];
 
 // What `sticks edit --questions` prints.
-type Ask =
-  | { type: "choice"; id: string; text: string; prompt: string; options: { label: string; description: string }[] }
-  | { type: "fact"; id: string; text: string; statement: string };
+interface Ask {
+  type: "choice";
+  id: string;
+  text: string;
+  prompt: string;
+  options: { label: string; description: string }[];
+}
 
 // What `sticks edit --answers` reads.
 interface Answer {
@@ -71,9 +77,7 @@ for (const request of REQUESTS) {
   const questions = Object.fromEntries(
     asks.map((a) => [
       a.id,
-      a.type === "choice"
-        ? choice(`${a.prompt} About: "${a.text}"`, Object.fromEntries(a.options.map((o) => [o.label, o.description])))
-        : noul(`${a.statement}. About: "${a.text}"`),
+      choice(`${a.prompt} About: "${a.text}"`, Object.fromEntries(a.options.map((o) => [o.label, o.description]))),
     ]),
   );
   const { answers } = await client.systemOne({ state: { request, design }, questions });
@@ -81,7 +85,6 @@ for (const request of REQUESTS) {
   const picked: Record<string, Answer> = {};
   for (const [id, a] of Object.entries(answers)) {
     if (a.type === "choice") picked[id] = { pick: a.choice, confidence: a.confidence };
-    if (a.type === "noul") picked[id] = { pick: a.noul >= 0.5 ? "yes" : "no", confidence: Math.max(a.noul, 1 - a.noul) };
   }
   const file = join(dir, "answers.json");
   writeFileSync(file, JSON.stringify(picked));
@@ -90,8 +93,27 @@ for (const request of REQUESTS) {
   const asked = reading.steps.some((s) => s.question);
   console.log(`\n"${request}"  [${asked ? "asks you" : "settled"}]`);
   for (const s of reading.steps) {
-    const intent = picked[`${reading.steps.indexOf(s)}.intent`];
-    if (intent) console.log(`  "${s.text}": ${intent.pick} (${Math.round(intent.confidence * 100)}%)`);
+    const i = reading.steps.indexOf(s);
+    const intent = picked[`${i}.intent`];
+    const pct = (a: Answer) => `${a.pick} ${Math.round(a.confidence * 100)}%`;
+    if (intent) console.log(`  "${s.text}": ${pct(intent)}`);
+    // The picks Rust reads for each kind of change, plus the numbers.
+    const used: Record<string, string[]> = {
+      resize: ["dimension", "direction"],
+      pitch: ["direction"],
+      overhang: ["direction"],
+      porch: ["porch", "deck", "direction"],
+      deck: ["deck"],
+      add_opening: ["kind", "wall", "position", "next_to"],
+      change_opening: ["which"],
+      remove_opening: ["which"],
+      lumber: ["framing"],
+      roof_kind: ["roof_kind"],
+    };
+    const nums = Object.keys(picked).filter((id) => id.startsWith(`${i}.num`));
+    const slots = [...(used[intent?.pick ?? ""] ?? []).map((slot) => `${i}.${slot}`), ...nums];
+    const shown = slots.flatMap((id) => (picked[id] ? [`${id.slice(id.indexOf(".") + 1)} ${pct(picked[id])}`] : []));
+    if (shown.length) console.log(`    picks: ${shown.join(", ")}`);
     for (const e of s.edits) console.log(`    edit: ${JSON.stringify(e)}`);
     for (const a of s.assumed ?? []) console.log(`    assumed: ${a}`);
     if (s.question) console.log(`    ask: ${s.question.prompt} (${s.question.reason})`);

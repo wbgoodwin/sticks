@@ -163,26 +163,19 @@ fn asks_one_batch_of_questions_built_from_the_design() {
     let ids: Vec<&str> = asks
         .iter()
         .map(|a| match a {
-            Ask::Choice { id, .. } | Ask::Fact { id, .. } => id.as_str(),
+            Ask::Choice { id, .. } => id.as_str(),
         })
         .collect();
-    for want in [
-        "0.intent",
-        "0.wall",
-        "0.wall_stated",
-        "0.kind",
-        "0.which",
-        "0.num0",
-    ] {
+    for want in ["0.intent", "0.wall", "0.kind", "0.which", "0.num0"] {
         assert!(ids.contains(&want), "{want} missing from {ids:?}");
     }
     let wall = asks.iter().find_map(|a| match a {
         Ask::Choice { id, options, .. } if id == "0.wall" => Some(options),
         _ => None,
     });
-    assert!(wall.unwrap()[0]
-        .description
-        .contains("has door, penetration"));
+    let wall = wall.unwrap();
+    assert!(wall[0].description.contains("has door, penetration"));
+    assert_eq!(wall.last().unwrap().label, "unsaid");
     let num = asks.iter().find_map(|a| match a {
         Ask::Choice { id, prompt, .. } if id == "0.num0" => Some(prompt.as_str()),
         _ => None,
@@ -223,8 +216,7 @@ fn asks_the_user_when_the_request_doesnt_say() {
     let mut answers = sure(&[
         ("0.intent", "add_opening"),
         ("0.kind", "window"),
-        ("0.wall", "front"),
-        ("0.wall_stated", "no"),
+        ("0.wall", "unsaid"),
     ]);
     let r = read("add a window", &answers);
     let q = r.questions().next().unwrap();
@@ -312,6 +304,76 @@ fn drops_a_header_size_to_fit_a_door_under_a_low_wall() {
         .unwrap();
     assert!(matches!(&e[0], Edit::AddOpening { header, .. } if header.to_string() == "2x6"));
     assert!(framing_problems(&apply_all(&shed(), &e).unwrap()).is_empty());
+}
+
+#[test]
+fn puts_openings_beside_an_existing_one() {
+    let picks = [
+        ("0.intent", "add_opening"),
+        ("0.kind", "window"),
+        ("0.position", "both_sides"),
+        ("0.next_to", "front-1"),
+    ];
+    let r = read(
+        "please add a window on each side of the door",
+        &sure(&picks),
+    );
+    let e = r.edits().unwrap();
+    assert_eq!(
+        e.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+        [
+            "Add a 3' x 3' window to the front wall, 3' 3\" from its left end",
+            "Add a 3' x 3' window to the front wall, 11' 5-1/2\" from its left end",
+        ]
+    );
+    assert!(framing_problems(&apply_all(&shed(), &e).unwrap()).is_empty());
+
+    // Only one side, and the request doesn't say which wall: the door's.
+    let picks = [
+        ("0.intent", "add_opening"),
+        ("0.kind", "window"),
+        ("0.wall", "unsaid"),
+        ("0.position", "right_of"),
+        ("0.next_to", "front-1"),
+    ];
+    let e = read("a window right of the door", &sure(&picks))
+        .edits()
+        .unwrap();
+    assert_eq!(e.len(), 1);
+    assert!(
+        matches!(&e[0], Edit::AddOpening { offset, .. } if offset.to_string() == "11' 5-1/2\"")
+    );
+}
+
+#[test]
+fn resizes_an_existing_opening_about_its_middle() {
+    let picks = [("0.intent", "change_opening"), ("0.which", "front-1")];
+    let r = read("make the door 60 inches by 80 inches", &sure(&picks));
+    let e = r.edits().unwrap();
+    assert_eq!(
+        e[0].to_string(),
+        "Make the front wall's door 5' x 6' 8\", 6' 4-1/4\" from its left end"
+    );
+    assert!(framing_problems(&apply_all(&shed(), &e).unwrap()).is_empty());
+
+    let r = read("make the door bigger", &sure(&picks));
+    assert!(r.steps[0]
+        .problem
+        .as_deref()
+        .unwrap()
+        .starts_with("Say the new size"));
+}
+
+#[test]
+fn asks_which_opening_when_beside_one_is_unclear() {
+    let picks = [
+        ("0.intent", "add_opening"),
+        ("0.kind", "window"),
+        ("0.position", "left_of"),
+        ("0.next_to", "unsaid"),
+    ];
+    let r = read("put a window next to it", &sure(&picks));
+    assert_eq!(r.questions().next().unwrap().id, "0.next_to");
 }
 
 #[test]
