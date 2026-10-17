@@ -1,5 +1,6 @@
 //! The `sticks` command: the same flow as the app, driven by a project file.
 
+mod edit;
 mod text;
 
 use std::path::{Path, PathBuf};
@@ -42,6 +43,29 @@ enum Command {
         #[arg(long, default_value = "build")]
         out: PathBuf,
     },
+    /// Change the design with a plain-English request, such as
+    /// "make it 20' wide and add a window on the left wall", and preview it.
+    Edit {
+        project: PathBuf,
+        request: String,
+        /// Print the questions a classifier such as Jev should answer, as
+        /// JSON, and stop.
+        #[arg(long)]
+        questions: bool,
+        /// A classifier's answers: JSON mapping question ids to
+        /// `{"pick": ..., "confidence": ...}`.
+        #[arg(long = "answers", value_name = "FILE")]
+        answers_file: Option<PathBuf>,
+        /// Your answer to a question, as `ID=LABEL`. Settles it.
+        #[arg(long = "answer", value_name = "ID=LABEL")]
+        answers: Vec<String>,
+        /// Print the reading of the request and the preview as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Save the changed design back to the project file.
+        #[arg(long)]
+        write: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -52,6 +76,24 @@ fn main() -> ExitCode {
             .and_then(|p| plan(&p))
             .map(|cl| print!("{}", text::cut_list(&cl))),
         Command::Build { project, out } => load(&project).and_then(|p| build(&p, &out)),
+        Command::Edit {
+            project,
+            request,
+            questions,
+            answers_file,
+            answers,
+            json,
+            write,
+        } => load(&project).and_then(|p| {
+            let opts = edit::Opts {
+                questions,
+                answers_file,
+                answers,
+                json,
+                write,
+            };
+            edit::run(&p, &project, &request, &opts)
+        }),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -110,7 +152,7 @@ fn frame(project: &Project, only: Option<&str>) -> Result<(), String> {
     }
 }
 
-fn plan(project: &Project) -> Result<CutList, String> {
+pub(crate) fn plan(project: &Project) -> Result<CutList, String> {
     plan_framed(project, &framed(project)?)
 }
 
