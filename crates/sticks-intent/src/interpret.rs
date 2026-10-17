@@ -121,13 +121,14 @@ enum Intent {
     Porch,
     Deck,
     AddOpening,
+    ChangeOpening,
     RemoveOpening,
     Spacing,
     Lumber,
 }
 
 impl Intent {
-    const ALL: [Intent; 10] = [
+    const ALL: [Intent; 11] = [
         Intent::Resize,
         Intent::Pitch,
         Intent::RoofKind,
@@ -135,6 +136,7 @@ impl Intent {
         Intent::Porch,
         Intent::Deck,
         Intent::AddOpening,
+        Intent::ChangeOpening,
         Intent::RemoveOpening,
         Intent::Spacing,
         Intent::Lumber,
@@ -149,6 +151,7 @@ impl Intent {
             Intent::Porch => "porch",
             Intent::Deck => "deck",
             Intent::AddOpening => "add_opening",
+            Intent::ChangeOpening => "change_opening",
             Intent::RemoveOpening => "remove_opening",
             Intent::Spacing => "spacing",
             Intent::Lumber => "lumber",
@@ -164,6 +167,7 @@ impl Intent {
             Intent::Porch => "Add, resize or remove the front porch",
             Intent::Deck => "Add or remove the deck under the porch",
             Intent::AddOpening => "Add a window or door to a wall",
+            Intent::ChangeOpening => "Resize or move an existing window or door",
             Intent::RemoveOpening => "Remove a window, door or other opening",
             Intent::Spacing => "Change how far apart studs, joists and rafters are",
             Intent::Lumber => "Use a different lumber size for studs, joists or rafters",
@@ -178,15 +182,15 @@ const NOT_FRAMING: &str = "not_framing";
 const ROLES: [(&str, &str); 7] = [
     ("size", "The new size of what's being changed"),
     ("change", "How much to add or take away"),
-    ("width", "How wide a new window or door is"),
-    ("height", "How tall a new window or door is"),
+    ("width", "How wide a window or door is"),
+    ("height", "How tall a window or door is"),
     (
         "from_left",
-        "How far a new window or door is from the wall's left end",
+        "How far a window or door is from the wall's left end",
     ),
     (
         "from_right",
-        "How far a new window or door is from the wall's right end",
+        "How far a window or door is from the wall's right end",
     ),
     ("other", "Something else"),
 ];
@@ -395,7 +399,7 @@ impl<'a> Clause<'a> {
                     .collect();
                 o.push((
                     NOT_FRAMING.into(),
-                    "Something else, not a change to the framing".into(),
+                    "Something else, which Sticks can't change from a request yet".into(),
                 ));
                 ("What kind of change is this?".into(), o)
             }
@@ -572,7 +576,8 @@ impl<'a> Clause<'a> {
         let pick = self.pick("intent")?;
         if pick == NOT_FRAMING {
             return Err(Stop::Problem(
-                "That isn't a change Sticks can make to the framing.".into(),
+                "Sticks can't make that change from a request yet. Try the panel on the left."
+                    .into(),
             ));
         }
         Ok(Intent::ALL
@@ -590,6 +595,7 @@ impl<'a> Clause<'a> {
             Intent::Porch => self.porch(),
             Intent::Deck => self.deck(),
             Intent::AddOpening => self.add_opening(),
+            Intent::ChangeOpening => self.change_opening(),
             Intent::RemoveOpening => self.remove_opening(),
             Intent::Spacing => self.spacing(),
             Intent::Lumber => self.lumber_edit(),
@@ -866,43 +872,14 @@ impl<'a> Clause<'a> {
             },
         };
 
-        // A bare number up to 8 is feet ("a 3 window"), above that inches.
-        let read = |n: &Num| {
-            let unit = if !n.has_unit() && n.amount().is_some_and(|a| a > 8.0) {
-                Unit::Inches
-            } else {
-                Unit::Feet
-            };
-            n.length(unit)
-        };
-        let nums = self.with_role(&["size", "width", "height", "from_left", "from_right"])?;
-        let role = |r: &[&str]| {
-            nums.iter()
-                .find(|(x, _)| r.contains(&x.as_str()))
-                .and_then(|(_, n)| read(n))
-        };
-
         let (dw, dh, sill, header) = opening_defaults(kind);
-        let given_width = self
-            .pair()
-            .and_then(|(w, _)| read(w))
-            .or(role(&["width", "size"]));
-        let given_height = self.pair().and_then(|(_, h)| read(h)).or(role(&["height"]));
-        let mut width = given_width.unwrap_or(dw);
+        let (given_width, given_height, from_left, from_right) = self.opening_numbers(kind)?;
+        let width = given_width.unwrap_or(dw);
         let height = given_height.unwrap_or(dh);
         if given_width.is_none() && given_height.is_none() {
             self.assumed.push(format!(
                 "No size given, so it's the usual {dw} x {dh} rough opening"
             ));
-        }
-        if kind == OpeningKind::Door && given_width.is_some() {
-            let w = width.as_inches_f64();
-            if w.fract() == 0.0 && SLAB_WIDTHS.contains(&(w as i64)) {
-                let slab = width;
-                width = slab + Length::from_sixteenths(40);
-                self.assumed
-                    .push(format!("A {slab} door needs a {width} rough opening"));
-            }
         }
         let new = New {
             wall,
@@ -911,6 +888,7 @@ impl<'a> Clause<'a> {
             height,
             sill,
             header,
+            replaces: None,
         };
         let wall_len = wall.length(b);
         let room = wall_len - width;
@@ -919,7 +897,7 @@ impl<'a> Clause<'a> {
             return self.add_beside(new, &how, index);
         }
 
-        let placed = match (role(&["from_left"]), role(&["from_right"])) {
+        let placed = match (from_left, from_right) {
             (Some(at), _) => Some(at),
             (None, Some(at)) => Some(wall_len - at - width),
             (None, None) => None,
@@ -1029,7 +1007,9 @@ impl<'a> Clause<'a> {
                             self.assumed
                                 .push(format!("Moved {by} {side} to clear the other openings"));
                         }
-                        self.assumed.push(if h == header {
+                        self.assumed.push(if h == header && new.replaces.is_some() {
+                            format!("Keeps its {h} header; check it for this span")
+                        } else if h == header {
                             format!("{h} header, the app's default; check it for this span")
                         } else {
                             format!(
@@ -1054,6 +1034,112 @@ impl<'a> Clause<'a> {
         ))
     }
 
+    /// The width, height and distances from the left and right ends given
+    /// for an opening. A door's slab width becomes its rough opening.
+    #[allow(clippy::type_complexity)]
+    fn opening_numbers(
+        &mut self,
+        kind: OpeningKind,
+    ) -> Result<
+        (
+            Option<Length>,
+            Option<Length>,
+            Option<Length>,
+            Option<Length>,
+        ),
+        Stop,
+    > {
+        // A bare number up to 8 is feet ("a 3 window"), above that inches.
+        let read = |n: &Num| {
+            let unit = if !n.has_unit() && n.amount().is_some_and(|a| a > 8.0) {
+                Unit::Inches
+            } else {
+                Unit::Feet
+            };
+            n.length(unit)
+        };
+        let nums = self.with_role(&["size", "width", "height", "from_left", "from_right"])?;
+        let role = |r: &[&str]| {
+            nums.iter()
+                .find(|(x, _)| r.contains(&x.as_str()))
+                .and_then(|(_, n)| read(n))
+        };
+        let mut width = self
+            .pair()
+            .and_then(|(w, _)| read(w))
+            .or(role(&["width", "size"]));
+        let height = self.pair().and_then(|(_, h)| read(h)).or(role(&["height"]));
+        if let (OpeningKind::Door, Some(w)) = (kind, width) {
+            let inches = w.as_inches_f64();
+            if inches.fract() == 0.0 && SLAB_WIDTHS.contains(&(inches as i64)) {
+                let rough = w + Length::from_sixteenths(40);
+                self.assumed
+                    .push(format!("A {w} door needs a {rough} rough opening"));
+                width = Some(rough);
+            }
+        }
+        Ok((width, height, role(&["from_left"]), role(&["from_right"])))
+    }
+
+    fn change_opening(&mut self) -> Out {
+        let openings = self.openings();
+        if openings.is_empty() {
+            return Err(Stop::Problem("There are no openings to change.".into()));
+        }
+        let pick = self.pick("which")?;
+        let ((wall, index), ..) = openings
+            .into_iter()
+            .find(|(_, l, _)| *l == pick)
+            .expect("picks are checked against the options");
+        let b = self
+            .project
+            .building
+            .as_ref()
+            .expect("openings are on a building");
+        let o = self
+            .project
+            .walls
+            .iter()
+            .find(|w| w.id == wall.id())
+            .and_then(|w| w.openings.get(index))
+            .expect("picks are checked against the options")
+            .clone();
+        let (width, height, from_left, from_right) = self.opening_numbers(o.kind)?;
+        if width.is_none() && height.is_none() && from_left.is_none() && from_right.is_none() {
+            return Err(Stop::Problem(format!(
+                "Say the new size or place, like \"make the {} 36x80\".",
+                kind_name(o.kind)
+            )));
+        }
+        let new = New {
+            wall,
+            kind: o.kind,
+            width: width.unwrap_or(o.width),
+            height: height.unwrap_or(o.height),
+            sill: o.sill_height,
+            header: o.header,
+            replaces: Some(index),
+        };
+        let room = wall.length(b) - new.width;
+        let offsets = match (from_left, from_right) {
+            (Some(at), _) => vec![at],
+            (None, Some(at)) => vec![wall.length(b) - at - new.width],
+            (None, None) => {
+                // Grow or shrink about its middle.
+                let middle = o.offset + o.width.mul_div(1, 2);
+                let start = middle - new.width.mul_div(1, 2);
+                if new.width != o.width {
+                    self.assumed.push("Kept centered where it was".into());
+                }
+                nearest(start, Length::ZERO, room)
+            }
+        };
+        let project = self.project.clone();
+        self.fit(&project, &new, &offsets)
+            .map(|e| vec![e])
+            .map_err(Stop::Problem)
+    }
+
     fn remove_opening(&mut self) -> Out {
         let openings = self.openings();
         if openings.is_empty() {
@@ -1076,10 +1162,24 @@ struct New {
     height: Length,
     sill: Length,
     header: Nominal,
+    /// The index of the opening it replaces in its wall, when it's an
+    /// existing one being resized or moved.
+    replaces: Option<usize>,
 }
 
 impl New {
     fn edit(&self, offset: Length, header: Nominal) -> Edit {
+        if let Some(index) = self.replaces {
+            return Edit::ChangeOpening {
+                wall: self.wall,
+                index,
+                kind: self.kind,
+                offset,
+                width: self.width,
+                height: self.height,
+                header,
+            };
+        }
         Edit::AddOpening {
             wall: self.wall,
             kind: self.kind,

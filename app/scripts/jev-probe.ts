@@ -29,6 +29,7 @@ const REQUESTS = [
   "put a 36x48 window in the right wall 2' from the left",
   "make the porch 8' deep",
   "please add a window on each side of the door",
+  "make the door 60 inches by 80 inches",
 ];
 
 // What `sticks edit --questions` prints.
@@ -104,6 +105,7 @@ for (const request of REQUESTS) {
       porch: ["porch", "deck", "direction"],
       deck: ["deck"],
       add_opening: ["kind", "wall", "position", "next_to"],
+      change_opening: ["which"],
       remove_opening: ["which"],
       lumber: ["framing"],
       roof_kind: ["roof_kind"],

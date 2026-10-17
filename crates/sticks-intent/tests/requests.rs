@@ -346,6 +346,25 @@ fn puts_openings_beside_an_existing_one() {
 }
 
 #[test]
+fn resizes_an_existing_opening_about_its_middle() {
+    let picks = [("0.intent", "change_opening"), ("0.which", "front-1")];
+    let r = read("make the door 60 inches by 80 inches", &sure(&picks));
+    let e = r.edits().unwrap();
+    assert_eq!(
+        e[0].to_string(),
+        "Make the front wall's door 5' x 6' 8\", 6' 4-1/4\" from its left end"
+    );
+    assert!(framing_problems(&apply_all(&shed(), &e).unwrap()).is_empty());
+
+    let r = read("make the door bigger", &sure(&picks));
+    assert!(r.steps[0]
+        .problem
+        .as_deref()
+        .unwrap()
+        .starts_with("Say the new size"));
+}
+
+#[test]
 fn asks_which_opening_when_beside_one_is_unclear() {
     let picks = [
         ("0.intent", "add_opening"),
