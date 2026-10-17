@@ -46,12 +46,16 @@ fn turns_confident_answers_into_edits() {
     let cases: &[Case] = &[
         (
             "make it 20' wide",
-            &[("0.target", "width"), ("0.how", "set")],
+            &[("0.target", "width"), ("0.num0", "new")],
             &["Make the building 20' wide"],
         ),
         (
             "make it 2' wider",
-            &[("0.target", "width"), ("0.how", "increase")],
+            &[
+                ("0.target", "width"),
+                ("0.how", "increase"),
+                ("0.num0", "amount"),
+            ],
             &["Make the building 20' wide"],
         ),
         (
@@ -76,12 +80,12 @@ fn turns_confident_answers_into_edits() {
         ),
         (
             "18\" overhangs",
-            &[("0.target", "overhangs"), ("0.how", "set")],
+            &[("0.target", "overhangs"), ("0.num0", "new")],
             &["Set the front and back overhangs to 18\""],
         ),
         (
             "make the porch 8' deep",
-            &[("0.target", "porch_depth"), ("0.how", "set")],
+            &[("0.target", "porch_depth"), ("0.num0", "new")],
             &["Make the porch 8' deep"],
         ),
         (
@@ -91,7 +95,7 @@ fn turns_confident_answers_into_edits() {
         ),
         (
             "24\" on center",
-            &[("0.target", "spacing"), ("0.how", "set")],
+            &[("0.target", "spacing"), ("0.num0", "new")],
             &["Space studs, joists and rafters 24\" on center"],
         ),
         (
@@ -189,7 +193,7 @@ fn reads_each_clause_on_its_own() {
         "make it 20' wide and add a window on the left wall",
         &[
             ("0.target", "width"),
-            ("0.how", "set"),
+            ("0.num0", "new"),
             ("1.target", "new_opening"),
             ("1.kind", "window"),
             ("1.wall", "left"),
@@ -221,7 +225,7 @@ fn asks_the_target_first_then_its_own_questions() {
     let door = options.iter().find(|o| o.label == "front-1").unwrap();
     assert_eq!(
         door.description,
-        "The front wall's door, 3' 2-1/2\" x 6' 10-1/2\", 7' 3\" from the left end"
+        "The door in the front wall, 3' 2-1/2\" x 6' 10-1/2\", 7' 3\" from its left end"
     );
     assert!(options.iter().any(|o| o.label == "new_opening"));
 
@@ -276,9 +280,9 @@ fn leaves_an_unsure_target_to_the_user() {
     answers.insert("0.target".into(), Answer::from_user("depth"));
     assert_eq!(
         ids(&questions(&shed(), "make it bigger by 2'", &answers)),
-        ["0.how"]
+        ["0.how", "0.num0"]
     );
-    answers.extend(sure(&[("0.how", "increase")]));
+    answers.extend(sure(&[("0.how", "increase"), ("0.num0", "amount")]));
     let r = read("make it bigger by 2'", &answers);
     assert_eq!(
         r.edits().unwrap()[0].to_string(),
@@ -339,15 +343,15 @@ fn says_when_a_request_is_about_something_else() {
 
 #[test]
 fn asks_for_numbers_it_cant_guess() {
-    let r = read(
-        "change the spacing",
-        &sure(&[("0.target", "spacing"), ("0.how", "set")]),
+    let mut answers = sure(&[("0.target", "spacing"), ("0.how", "unsaid")]);
+    let r = read("change the spacing", &answers);
+    assert_eq!(r.questions().next().unwrap().id, "0.how");
+    answers.insert("0.how".into(), Answer::from_user("increase"));
+    let r = read("change the spacing", &answers);
+    assert_eq!(
+        r.edits().unwrap()[0].to_string(),
+        "Space studs, joists and rafters 24\" on center"
     );
-    assert!(r.steps[0]
-        .problem
-        .as_deref()
-        .unwrap()
-        .contains("24\" on center"));
     let r = read(
         "make the door bigger",
         &sure(&[("0.target", "front-1"), ("0.action", "resize")]),

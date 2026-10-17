@@ -481,7 +481,7 @@ impl<'a> Clause<'a> {
             add(
                 Target::NewOpening,
                 "new_opening",
-                "A new door, window or hole in a wall".to_string(),
+                "Add a new door, window or hole to a wall".to_string(),
             );
         }
         t
@@ -528,7 +528,10 @@ impl<'a> Clause<'a> {
             s.push("ref");
         }
         let mut s: Vec<String> = s.into_iter().map(str::to_string).collect();
-        if opening {
+        if !matches!(
+            target,
+            Target::RoofShape | Target::Porch | Target::Deck | Target::Lumber(_)
+        ) {
             s.extend(self.nums().iter().map(|(k, _)| format!("num{k}")));
         }
         s
@@ -553,12 +556,8 @@ impl<'a> Clause<'a> {
                 ("What in the design does this change?".into(), o)
             }
             "how" => (
-                "What should happen to it?".into(),
+                "Should it go up or down?".into(),
                 own(&[
-                    (
-                        "set",
-                        "Set it to a size or value the request gives, like \"20 feet wide\" or \"2x8\"",
-                    ),
                     (
                         "increase",
                         "Make it bigger, longer, deeper, taller, heavier or steeper",
@@ -640,7 +639,7 @@ impl<'a> Clause<'a> {
                 )
             }
             "ref" => (
-                "If it goes beside another door or window, which one?".into(),
+                "Which existing door or window does the request put it beside?".into(),
                 self.openings()
                     .into_iter()
                     .filter(|((side, i), ..)| target != Some(Target::Opening(*side, *i)))
@@ -654,9 +653,8 @@ impl<'a> Clause<'a> {
                     .get(k)
                     .map(|(_, n)| n.written())
                     .unwrap_or_default();
-                (
-                    format!("In this request, what is {written} for?"),
-                    own(&[
+                let roles: &[(&str, &str)] = match target {
+                    Some(Target::Opening(..) | Target::NewOpening) => &[
                         ("width", "How wide the door or window is"),
                         ("height", "How tall the door or window is"),
                         (
@@ -664,7 +662,22 @@ impl<'a> Clause<'a> {
                             "A distance: from a wall end, from another door or window, or how far to move it",
                         ),
                         ("other", "Something else"),
-                    ]),
+                    ],
+                    _ => &[
+                        (
+                            "new",
+                            "What it should become, like the 20' in \"make it 20' wide\"",
+                        ),
+                        (
+                            "amount",
+                            "How much to add or take off, like the 2' in \"make it 2' wider\"",
+                        ),
+                        ("other", "Something else"),
+                    ],
+                };
+                (
+                    format!("In this request, what is {written} for?"),
+                    own(roles),
                 )
             }
         }
@@ -750,36 +763,41 @@ impl<'a> Clause<'a> {
         }
     }
 
-    /// The new value of something that is `now`: set to the number given,
-    /// or bigger or smaller by it, or by one `step` when there's none.
-    fn scalar(
-        &mut self,
-        what: &str,
-        now: Length,
-        unit: Unit,
-        step: Length,
-    ) -> Result<Length, Stop> {
-        let how = self.pick("how")?;
-        let given = self.length(unit)?;
-        match (how.as_str(), given) {
-            ("set", Some(l)) => Ok(l),
-            ("set", None) => Err(Stop::Problem(format!(
-                "Give the new {what}, like {}.",
-                now + step
-            ))),
-            (how, by) => {
-                let by = by.unwrap_or_else(|| {
-                    self.assumed
-                        .push(format!("No amount given, so it changes by {step:#}"));
-                    step
-                });
-                Ok(if how == "increase" {
-                    now + by
-                } else {
-                    now - by
-                })
+    /// The first number given as the new value, and as an amount, read in
+    /// `unit` when they have none.
+    fn new_and_amount(&self, unit: Unit) -> Result<(Option<Length>, Option<Length>), Stop> {
+        let (mut new, mut amount) = (None, None);
+        for (k, n) in self.nums() {
+            let role = self.pick(&format!("num{k}"))?;
+            let slot = match role.as_str() {
+                "new" => &mut new,
+                "amount" => &mut amount,
+                _ => continue,
+            };
+            if slot.is_none() {
+                *slot = Some(n.length(unit).ok_or_else(|| {
+                    Stop::Problem(format!("{} doesn't land on a sixteenth.", n.written()))
+                })?);
             }
         }
+        Ok((new, amount))
+    }
+
+    /// The new value of something that is `now`: the number given as the
+    /// new value, or bigger or smaller by the amount given, or by one
+    /// `step` when there's none.
+    fn scalar(&mut self, now: Length, unit: Unit, step: Length) -> Result<Length, Stop> {
+        let (new, amount) = self.new_and_amount(unit)?;
+        if let Some(l) = new {
+            return Ok(l);
+        }
+        let up = self.pick("how")? == "increase";
+        let by = amount.unwrap_or_else(|| {
+            self.assumed
+                .push(format!("No amount given, so it changes by {step:#}"));
+            step
+        });
+        Ok(if up { now + by } else { now - by })
     }
 
     fn size(&mut self, dimension: Dimension) -> Out {
@@ -789,12 +807,7 @@ impl<'a> Clause<'a> {
             }
         }
         let b = self.project.building.as_ref().expect("a building target");
-        let to = self.scalar(
-            dimension.label(),
-            dimension.of(b),
-            Unit::Feet,
-            Length::feet(2),
-        )?;
+        let to = self.scalar(dimension.of(b), Unit::Feet, Length::feet(2))?;
         Ok(vec![Edit::Resize { dimension, to }])
     }
 
@@ -824,7 +837,7 @@ impl<'a> Clause<'a> {
         }
         let b = self.project.building.as_ref().expect("a building target");
         let (w, d) = (b.width, b.depth);
-        let width = self.scalar("size", w, Unit::Feet, Length::feet(2))?;
+        let width = self.scalar(w, Unit::Feet, Length::feet(2))?;
         let depth = d + (width - w);
         Ok(vec![
             Edit::Resize {
@@ -843,8 +856,7 @@ impl<'a> Clause<'a> {
         let pitch = match self.pitch() {
             Some(p) => p,
             None => {
-                let rise =
-                    self.scalar("pitch", roof.pitch.rise, Unit::Inches, Length::inches(1))?;
+                let rise = self.scalar(roof.pitch.rise, Unit::Inches, Length::inches(1))?;
                 format!("{}:12", format!("{rise:#}").trim_end_matches('"'))
                     .parse()
                     .map_err(Stop::Problem)?
@@ -867,12 +879,7 @@ impl<'a> Clause<'a> {
 
     fn overhang(&mut self) -> Out {
         let roof = self.project.roof.as_ref().expect("a roof target");
-        let to = self.scalar(
-            "overhang",
-            roof.front_overhang,
-            Unit::Inches,
-            Length::inches(6),
-        )?;
+        let to = self.scalar(roof.front_overhang, Unit::Inches, Length::inches(6))?;
         Ok(vec![Edit::SetOverhang {
             to: to.max(Length::ZERO),
         }])
@@ -911,9 +918,17 @@ impl<'a> Clause<'a> {
 
     fn spacing(&mut self) -> Out {
         let now = self.project.rules.on_center;
-        let on_center = match self.length(Unit::Inches)? {
-            Some(l) => l,
-            None => {
+        let (new, amount) = self.new_and_amount(Unit::Inches)?;
+        let on_center = match (new, amount) {
+            (Some(l), _) => l,
+            (None, Some(by)) => {
+                if self.pick("how")? == "increase" {
+                    now + by
+                } else {
+                    now - by
+                }
+            }
+            (None, None) => {
                 let steps = [Length::inches(12), Length::inches(16), Length::inches(24)];
                 let i = steps.iter().position(|s| *s == now);
                 let next = match (self.pick("how")?.as_str(), i) {
@@ -973,7 +988,7 @@ impl<'a> Clause<'a> {
 
     fn porch_depth(&mut self) -> Out {
         let now = self.project.porch.as_ref().expect("a porch target").depth;
-        let depth = self.scalar("depth", now, Unit::Feet, Length::feet(1))?;
+        let depth = self.scalar(now, Unit::Feet, Length::feet(1))?;
         Ok(vec![Edit::SetPorch { depth }])
     }
 
@@ -1034,9 +1049,9 @@ impl<'a> Clause<'a> {
                             (*s, i),
                             format!("{}-{}", s.id(), i + 1),
                             format!(
-                                "The {} wall's {}, {} x {}, {} from the left end",
-                                s.id(),
+                                "The {} in the {} wall, {} x {}, {} from its left end",
                                 kind_name(o.kind),
+                                s.id(),
                                 o.width,
                                 o.height,
                                 o.offset

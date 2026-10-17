@@ -77,6 +77,8 @@ const file = join(dir, "answers.json");
 for (const request of REQUESTS) {
   // Round one asks what each part changes; round two, that thing's questions.
   const picked: Record<string, Answer> = {};
+  // The runner-up for each pick, to show what Jev weighed it against.
+  const second: Record<string, string> = {};
   for (let round = 0; round < 3; round++) {
     writeFileSync(file, JSON.stringify(picked));
     const asks = JSON.parse(run([request, "--answers", file, "--questions"])) as Ask[];
@@ -90,7 +92,12 @@ for (const request of REQUESTS) {
     );
     const { answers } = await client.systemOne({ state: { request, design }, questions });
     for (const [id, a] of Object.entries(answers)) {
-      if (a.type === "choice") picked[id] = { pick: a.choice, confidence: a.confidence };
+      if (a.type !== "choice") continue;
+      picked[id] = { pick: a.choice, confidence: a.confidence };
+      const [next] = Object.entries(a.probabilities as Record<string, number>)
+        .filter(([label]) => label !== a.choice)
+        .sort((x, y) => y[1] - x[1]);
+      if (next) second[id] = `${next[0]} ${Math.round(next[1] * 100)}%`;
     }
   }
   writeFileSync(file, JSON.stringify(picked));
@@ -100,12 +107,16 @@ for (const request of REQUESTS) {
   console.log(`\n"${request}"  [${asked ? "asks you" : "settled"}]`);
   for (const s of reading.steps) {
     const i = reading.steps.indexOf(s);
-    const pct = (a: Answer) => `${a.pick} ${Math.round(a.confidence * 100)}%`;
-    const target = picked[`${i}.target`];
-    if (target) console.log(`  "${s.text}": ${pct(target)}`);
+    // Under 80%, also the runner-up.
+    const pct = (id: string) => {
+      const a = picked[id];
+      const text = `${a.pick} ${Math.round(a.confidence * 100)}%`;
+      return a.confidence < 0.8 && second[id] ? `${text} (next ${second[id]})` : text;
+    };
+    if (picked[`${i}.target`]) console.log(`  "${s.text}": ${pct(`${i}.target`)}`);
     const shown = Object.keys(picked)
       .filter((id) => id.startsWith(`${i}.`) && id !== `${i}.target` && picked[id].pick !== "unsaid")
-      .map((id) => `${id.slice(id.indexOf(".") + 1)} ${pct(picked[id])}`);
+      .map((id) => `${id.slice(id.indexOf(".") + 1)} ${pct(id)}`);
     if (shown.length) console.log(`    picks: ${shown.join(", ")}`);
     for (const e of s.edits) console.log(`    edit: ${JSON.stringify(e)}`);
     for (const a of s.assumed ?? []) console.log(`    assumed: ${a}`);
