@@ -593,11 +593,14 @@ mod tests {
         // Plates, rims, beams and fascia are split, so everything fits stock.
         assert!(cl.too_long.is_empty(), "{:?}", cl.too_long);
         // 252 sq ft of floor is at least eight 4x8 sheets.
-        assert!(
-            cl.sheets.len() >= 8 && cl.sheets.len() <= 10,
-            "{}",
-            cl.sheets.len()
-        );
+        let subfloor = cl
+            .sheets
+            .iter()
+            .filter(|s| s.thickness == Length::from_sixteenths(12))
+            .count();
+        assert!((8..=10).contains(&subfloor), "{subfloor}");
+        // Walls and roofs are sheathed from their own stock.
+        assert!(cl.sheets.len() > subfloor + 20, "{}", cl.sheets.len());
         let s = cl.summary();
         assert!(
             s.boards < s.pieces,

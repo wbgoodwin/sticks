@@ -10,29 +10,34 @@ certify anything structurally.
 
 ## Status
 
-Milestone M4 (the app). The whole shed can be designed in the app, in a
-browser or on the desktop; see [The app](#the-app). One project file frames a whole
-building: a floor on beams and piers, four outside walls generated from the
-footprint, and a lean-to roof whose pitch sets the back and side wall
-heights. From that come the shopping list (lumber and subfloor sheets), a
-board-by-board cut list, and printable drawings of every wall, the floor, the
-roof and a rafter.
+Milestone M5 (porch, sheathing, gable). The whole shed can be designed in the
+app, in a browser or on the desktop; see [The app](#the-app). One project file
+frames a whole building: a floor on beams and piers, four outside walls
+generated from the footprint, a lean-to or gable roof, a porch roof on posts
+off the front with a deck under it, and sheathing on the walls and roof. From
+that come the shopping list (lumber and sheets), a board-by-board cut list,
+and printable drawings of every wall, the floor, the roof, its rafters, the
+porch, the deck and the sheathing layout.
 
 ```sh
 cargo run -p sticks-cli -- frame examples/shed.toml               # every member, layout marks, splices
-cargo run -p sticks-cli -- frame examples/shed.toml --part roof   # one wall, the floor or the roof
+cargo run -p sticks-cli -- frame examples/shed.toml --part porch  # one wall, floor, roof, porch or sheathing
 cargo run -p sticks-cli -- cuts examples/shed.toml                # shopping list and cut list
 cargo run -p sticks-cli -- build examples/shed.toml --out build/  # CSVs, SVG drawings, print.html
 ```
 
 `build` writes `bom.csv`, `cut-list.csv`, `wall-<id>.svg` for each wall,
-`floor.svg`, `subfloor.svg`, `roof.svg`, `rafter.svg`, and `print.html`: the
-whole build packet as one page to print, letter size, landscape.
+`floor.svg`, `subfloor.svg`, `roof.svg`, `rafter.svg` (and `rafter-2.svg`
+when the back rafters differ), `porch.svg`, `porch-rafter.svg`, `deck.svg`,
+`wall-sheathing.svg`, `roof-sheathing.svg`, and `print.html`: the whole build
+packet as one page to print, letter size, landscape. Parts the project
+doesn't have are skipped.
 
 ## Project file
 
 `examples/shed.toml` is the reference shed from the PRD. A `[building]` gives
-the footprint and the front wall's height; `[floor]` and `[roof]` sit on it.
+the footprint and the front wall's height; `[floor]`, `[roof]`, `[porch]` and
+`[sheathing]` build on it.
 
 ```toml
 [building]
@@ -46,7 +51,16 @@ beam = "4x6"
 beams = 3
 
 [roof]
-pitch = "3:12"
+pitch = "2:12"    # kind = "gable" for a ridge over the middle
+
+[porch]           # a porch roof on posts off the front wall
+depth = "6'"
+[porch.deck]      # decking on joists, a step below the shed floor
+step_down = "1\""
+
+[sheathing]
+wall = "7/16\""
+roof = "1/2\""
 
 [[wall]]
 id = "front"      # front, back, left and right take their size from the building
@@ -61,23 +75,25 @@ Walls with other ids (an interior partition, say) give their own `length`,
 ## The app
 
 A desktop window (Tauri) for designing the whole shed. The panel on the left
-sets the footprint, the front wall height, the roof pitch and overhangs, the
-floor's joists, beams and piers, each wall's doors, windows and penetrations,
-and the lumber yard's stock and prices. Everything redraws as you type:
+sets the footprint, the front wall height, the roof shape, pitch and
+overhangs, the floor's joists, beams and piers, the porch and its deck, the
+sheathing, each wall's doors, windows and penetrations, and the lumber yard's
+stock and prices. Everything redraws as you type:
 
-- **3D**: every member, pier and subfloor sheet in place. Drag to orbit,
-  scroll to zoom, hover a member to name it, click it for its size, length and
-  cuts. Hide the roof, walls, subfloor or floor framing to see inside.
+- **3D**: every member, pier and sheet in place. Drag to orbit, scroll to
+  zoom, hover a member to name it, click it for its size, length and cuts.
+  Hide the sheathing, roof, walls, porch, subfloor or floor framing to see
+  inside. Sheathing starts hidden so the framing shows.
 - **Front, Back, Left, Right**: each wall's elevation with stud positions
   measured from the layout end. Plate splices show in red.
-- **Floor, Subfloor, Roof, Rafter**: the printed framing plans and rafter
-  detail.
+- **Floor, Subfloor, Roof, Rafter, Porch, Deck, Sheathing**: the printed
+  framing plans, rafter details and sheet layouts.
 - **Shopping list and cut list** for the whole project, with the total when
   every stock length has a price.
 
 **Print** opens the build packet (the shopping list, every drawing and the cut
 list on letter pages) to print or download. **Open** and **Save** read and
-write the TOML project file, and **New** starts from the lean-to shed or a
+write the TOML project file, and **New** starts from the reference shed or a
 single wall. The app keeps your work between sessions.
 
 The same page runs in a browser with nothing to install, since all framing
@@ -154,8 +170,44 @@ These are the defaults; each one is a setting in the project file.
 - Overhangs are level distances past the walls (default 12"). Fascia (default
   one size deeper than the rafters, so it covers the plumb cut) runs across
   both tails and splices over a rafter.
-- Rake overhangs at the sides, a ledger against an existing wall, and roof
-  sheathing aren't framed yet.
+- Rake overhangs at the sides and a ledger against an existing wall aren't
+  framed yet.
+
+### Gable roof
+
+- `kind = "gable"` puts a ridge board (default two sizes up from the rafters)
+  over the middle of the depth, running along the front. Every wall is the
+  front wall's height. Rafters pair up across the ridge, each with a plumb top
+  cut against it and a birdsmouth over its wall.
+- Collar ties (default 2x4) cross every pair about every 4', a third of the
+  way down from the ridge.
+- The side walls get gable studs from their cap plates up to the end rafters,
+  over the wall's studs, plus one under the ridge.
+
+### Porch
+
+- The porch roof hangs from a ledger lagged to the front wall just under its
+  plates, and slopes out (at the roof's pitch unless `pitch` is given) over a
+  beam on posts. Rafters sit on center like the roof's, flush with the
+  ledger's top, with a birdsmouth over the beam and a level `overhang` past it.
+- Posts stand at both ends and evenly between, no more than `post_spacing`
+  apart. A built-up beam's plies splice over different posts.
+- A warning shows when the beam's underside is under 6' 8".
+- `[porch.deck]` adds a deck: joists hung from a ledger on the floor's front
+  rim, out to a rim over a beam on piers under the posts, with decking boards
+  (default 5/4x6, 1/8" apart) along the front. Its top sits `step_down`
+  (default 1") below the subfloor, and decking joints land on joists,
+  staggered row to row. Without a deck the posts stand on piers.
+
+### Sheathing
+
+- Walls are sheathed from outside, sheets standing on end from the bottom of
+  the floor's rim, with joints on studs, kings or gable studs. Door and window
+  openings are cut out; the side walls follow the roof line.
+- Roof sheets run along the eaves in rows up the slope, every other row
+  starting with a half sheet so end joints stagger. The porch roof gets the
+  same.
+- Leave `wall` or `roof` out of `[sheathing]` to skip it.
 
 ## Cut list
 
@@ -175,7 +227,8 @@ the cheapest stock length that still holds its pieces.
 - A piece longer than the longest stock is never split by the cut list. The
   framing splits plates, rims, beams and fascia over their supports; anything
   else that's too long (a rafter, say) is reported so you can add longer stock.
-- Subfloor sheets are packed in shelves on whole sheets. No kerf is taken
+- Subfloor and sheathing sheets are packed in shelves on whole sheets of
+  their thickness. No kerf is taken
   between sheet pieces, so an edge piece may run a blade's width short.
 
 ## Layout
@@ -183,7 +236,7 @@ the cheapest stock length that still holds its pieces.
 | Crate | Purpose |
 | --- | --- |
 | `sticks-core` | Lengths in integer 1/16", lumber sizes, members, the TOML project file |
-| `sticks-rules` | Generators for floors, walls, openings and roofs |
+| `sticks-rules` | Generators for floors, walls, openings, roofs, porches and sheathing |
 | `sticks-cutlist` | Bill of materials and the cut-list optimizer |
 | `sticks-export` | CSV, SVG elevations, printable pages |
 | `sticks-cli` | The `sticks` command |

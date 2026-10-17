@@ -1,11 +1,14 @@
-//! Printable drawings: wall elevations, floor and roof framing plans, the
-//! subfloor layout and a rafter detail. Each is one US letter page in
+//! Printable drawings: wall elevations, floor, roof, porch and deck framing
+//! plans, the subfloor and sheathing layouts, and rafter details. Each is one US letter page in
 //! landscape, laid out in points (1/72").
 
 use std::fmt::Write;
 
-use sticks_core::{LayoutStart, Length, MemberKind};
-use sticks_rules::{FramedFloor, FramedRoof, FramedWall, LayoutMark, Placed, Splice};
+use sticks_core::{LayoutStart, Length, MemberKind, RoofKind};
+use sticks_rules::{
+    FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark, Placed,
+    RafterDetail, RafterTop, SheathedFace, Splice,
+};
 
 /// Printed on every drawing: the tool frames what it's told and checks nothing.
 pub const NOTICE: &str =
@@ -108,7 +111,9 @@ impl Doc {
 .plate {{ fill: #e9d8b4; }} .stud {{ fill: #f3e6c8; }} .king {{ fill: #e2c992; }} .jack {{ fill: #d8bb7e; }}
 .cripple {{ fill: #f6edd9; }} .header {{ fill: #c9a86a; }} .sill {{ fill: #e2c992; }} .block {{ fill: #d7d0c0; }}
 .joist {{ fill: #f3e6c8; }} .rim {{ fill: #e9d8b4; }} .beam {{ fill: none; stroke-dasharray: 4 2; }}
-.rafter {{ fill: #f3e6c8; }} .fascia {{ fill: #e2c992; }}
+.rafter {{ fill: #f3e6c8; }} .fascia {{ fill: #e2c992; }} .ridge {{ fill: #c9a86a; }} .tie {{ fill: #d7d0c0; }}
+.post {{ fill: #c9a86a; }} .decking {{ fill: #efe3c6; }}
+.hole {{ fill: #fff; stroke: #2a6fb0; stroke-width: 0.6; stroke-dasharray: 3 2; }}
 .opening {{ fill: none; stroke: #2a6fb0; stroke-width: 0.75; stroke-dasharray: 3 2; }}
 .splice {{ stroke: #c0392b; stroke-width: 1.5; }}
 .splice-text {{ fill: #c0392b; font-size: 6px; }}
@@ -232,7 +237,12 @@ fn class(kind: MemberKind) -> &'static str {
         MemberKind::Joist => "joist",
         MemberKind::Beam | MemberKind::Skid => "beam",
         MemberKind::Rafter | MemberKind::Ledger => "rafter",
-        MemberKind::Fascia | MemberKind::Post => "fascia",
+        MemberKind::Fascia => "fascia",
+        MemberKind::Post => "post",
+        MemberKind::Ridge => "ridge",
+        MemberKind::CollarTie => "tie",
+        MemberKind::GableStud => "stud",
+        MemberKind::Decking => "decking",
     }
 }
 
@@ -600,13 +610,32 @@ pub fn subfloor_svg(project: &str, floor: &FramedFloor) -> String {
     doc.finish()
 }
 
-/// The roof framing plan seen from above: rafters with their layout marks
-/// and the fascia across the tails.
+/// The walls' outside faces in plan, dashed, under a roof or porch plan.
+fn footprint(doc: &mut Doc, f: &Frame, width: Length, depth: Length) {
+    let walls = [
+        (Length::ZERO, Length::ZERO, width, Length::ZERO),
+        (Length::ZERO, depth, width, depth),
+        (Length::ZERO, Length::ZERO, Length::ZERO, depth),
+        (width, Length::ZERO, width, depth),
+    ];
+    for (x1, y1, x2, y2) in walls {
+        doc.line(f.x(x1), f.y(y1), f.x(x2), f.y(y2), "opening");
+    }
+}
+
+/// The roof framing plan seen from above: rafters with their layout marks,
+/// the ridge board and collar ties on a gable, and the fascia across the
+/// tails.
 pub fn roof_svg(project: &str, roof: &FramedRoof, from: LayoutStart) -> String {
     let mut doc = Doc::new(&format!("{project}: roof framing"));
-    let r = &roof.rafter;
-    let y_min = -(r.front_overhang + Length::inches(2));
-    let span = r.run + Length::inches(4);
+    let r = &roof.rafters[0];
+    let back = roof.rafters.last().unwrap_or(r);
+    let (fo, bo) = match roof.kind {
+        RoofKind::LeanTo => (r.upper_overhang, r.overhang),
+        RoofKind::Gable => (r.overhang, back.overhang),
+    };
+    let y_min = -(fo + Length::inches(2));
+    let span = fo + roof.depth + bo + Length::inches(4);
     let area = (
         MARGIN + 40.0,
         MARGIN + 80.0,
@@ -620,30 +649,51 @@ pub fn roof_svg(project: &str, roof: &FramedRoof, from: LayoutStart) -> String {
         span.as_inches_f64(),
         area,
     );
+    let pairs = roof.marks.len();
+    let first = match roof.kind {
+        RoofKind::LeanTo => format!(
+            "Lean-to at {}, high at the front. {pairs} {} rafters, {} long; see the rafter detail for cuts",
+            r.pitch, r.size, r.length
+        ),
+        RoofKind::Gable => format!(
+            "Gable at {}, ridge along the front. {pairs} pairs of {} rafters on a {} ridge board; see the rafter detail for cuts",
+            r.pitch,
+            r.size,
+            roof.members
+                .iter()
+                .find(|p| p.member.kind == MemberKind::Ridge)
+                .map(|p| p.member.size.to_string())
+                .unwrap_or_default()
+        ),
+    };
+    let ties = roof
+        .members
+        .iter()
+        .filter(|p| p.member.kind == MemberKind::CollarTie)
+        .count();
+    let third = if ties > 0 {
+        format!(
+            "{}. {ties} collar ties in the upper third. Red lines are splices.",
+            origin_note(from, "Rafter marks, on the cap plates,")
+        )
+    } else {
+        format!(
+            "{}. Red lines are fascia splices.",
+            origin_note(from, "Rafter marks, on the cap plates,")
+        )
+    };
     doc.header(
         &format!("{project}: roof framing"),
         &[
+            first,
             format!(
-                "Lean-to at {}, high at the front. {} {} rafters, {} long; see the rafter detail for cuts",
-                r.pitch,
-                roof.marks.len(),
-                r.size,
-                r.length
+                "Seen from above with the front at the bottom; the walls are dashed. {}",
+                f.note()
             ),
-            format!("Seen from above with the front at the bottom; the walls are dashed. {}", f.note()),
-            format!("{}. {}", origin_note(from, "Rafter marks, on the cap plates,"), "Red lines are fascia splices."),
+            third,
         ],
     );
-    // The walls under the roof, outside faces.
-    let walls = [
-        (Length::ZERO, Length::ZERO, roof.width, Length::ZERO),
-        (Length::ZERO, roof.depth, roof.width, roof.depth),
-        (Length::ZERO, Length::ZERO, Length::ZERO, roof.depth),
-        (roof.width, Length::ZERO, roof.width, roof.depth),
-    ];
-    for (x1, y1, x2, y2) in walls {
-        doc.line(f.x(x1), f.y(y1), f.x(x2), f.y(y2), "opening");
-    }
+    footprint(&mut doc, &f, roof.width, roof.depth);
     members(&mut doc, &f, &roof.members, true);
     splices(&mut doc, &f, &roof.members, &roof.splices);
     let top = f.y(y_min + span) - 10.0;
@@ -654,41 +704,349 @@ pub fn roof_svg(project: &str, roof: &FramedRoof, from: LayoutStart) -> String {
     );
     let left = f.x(Length::ZERO) - 18.0;
     doc.dimension(
-        (left, f.y(-r.front_overhang)),
-        (left, f.y(roof.depth + r.back_overhang)),
-        &format!("{} run", r.run),
+        (left, f.y(-fo)),
+        (left, f.y(roof.depth + bo)),
+        &format!("{} run", fo + roof.depth + bo),
     );
     marks(&mut doc, &f, &roof.marks, from, roof.width, f.y(y_min));
     doc.finish()
 }
 
-/// One rafter in profile with every cut dimensioned, upper (front) end on
-/// the left, laid flat as it sits on the sawhorses.
-pub fn rafter_svg(project: &str, roof: &FramedRoof) -> String {
-    let r = &roof.rafter;
-    let mut doc = Doc::new(&format!("{project}: rafter detail"));
+/// The porch in plan, seen from above with the front wall at the top:
+/// posts, the beam, rafters from the ledger out to the fascia.
+pub fn porch_svg(project: &str, porch: &FramedPorch, from: LayoutStart) -> String {
+    let mut doc = Doc::new(&format!("{project}: porch framing"));
+    let r = &porch.rafter;
+    let h = &porch.heights;
+    let tail = porch.depth + r.overhang + Length::inches(2);
+    let area = (
+        MARGIN + 40.0,
+        MARGIN + 92.0,
+        PAGE_W - MARGIN - 40.0,
+        PAGE_H - MARGIN - MARK_ROW * 2.0 - 30.0,
+    );
+    let f = Frame::fit(
+        0.0,
+        -tail.as_inches_f64(),
+        porch.width.as_inches_f64(),
+        (tail + Length::inches(6)).as_inches_f64(),
+        area,
+    );
+    let posts: Vec<&Placed> = porch
+        .members
+        .iter()
+        .filter(|p| p.member.kind == MemberKind::Post)
+        .collect();
+    let standing = if porch.deck.is_some() {
+        "on the deck"
+    } else {
+        "on piers"
+    };
+    doc.header(
+        &format!("{project}: porch framing"),
+        &[
+            format!(
+                "{} deep across the front. {} {} posts {standing}, {} long, under a {}-ply {} beam",
+                porch.depth,
+                posts.len(),
+                posts.first().map(|p| p.member.size.to_string()).unwrap_or_default(),
+                posts.first().map(|p| p.member.length.to_tape_string()).unwrap_or_default(),
+                porch
+                    .members
+                    .iter()
+                    .filter(|p| p.member.kind == MemberKind::Beam)
+                    .map(|p| p.rect.y)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
+                porch
+                    .members
+                    .iter()
+                    .find(|p| p.member.kind == MemberKind::Beam)
+                    .map(|p| p.member.size.to_string())
+                    .unwrap_or_default(),
+            ),
+            format!(
+                "Ledger top {} above the floor; beam top {}, bottom {}. {} {} rafters at {}, {} long; see the porch rafter detail",
+                h.ledger_top, h.beam_top, h.beam_bottom, r.count, r.size, r.pitch, r.length
+            ),
+            format!(
+                "Seen from above with the front wall at the top. {}. {}",
+                origin_note(from, "Rafter marks, on the ledger,"),
+                f.note()
+            ),
+        ],
+    );
+    doc.line(
+        f.x(Length::ZERO),
+        f.y(Length::ZERO),
+        f.x(porch.width),
+        f.y(Length::ZERO),
+        "opening",
+    );
+    let framing: Vec<Placed> = porch
+        .members
+        .iter()
+        .filter(|p| p.member.kind != MemberKind::Beam)
+        .cloned()
+        .collect();
+    let beams: Vec<Placed> = porch
+        .members
+        .iter()
+        .filter(|p| p.member.kind == MemberKind::Beam)
+        .cloned()
+        .collect();
+    members(&mut doc, &f, &beams, false);
+    members(&mut doc, &f, &framing, true);
+    for p in &porch.piers {
+        doc.circle(f.x(p.x), f.y(p.y), 4.0, "pier");
+    }
+    splices(&mut doc, &f, &porch.members, &porch.splices);
+    let top = f.y(Length::inches(6)) - 4.0;
+    doc.dimension(
+        (f.x(Length::ZERO), top),
+        (f.x(porch.width), top),
+        &porch.width.to_string(),
+    );
+    let left = f.x(Length::ZERO) - 18.0;
+    doc.dimension(
+        (left, f.y(Length::ZERO)),
+        (left, f.y(-porch.depth)),
+        &porch.depth.to_string(),
+    );
+    marks(&mut doc, &f, &porch.marks, from, porch.width, f.y(-tail));
+    doc.finish()
+}
+
+/// The porch deck framing in plan: ledger, joists, rim, the beam (dashed)
+/// on its piers, with joist marks. The decking is described, not drawn.
+pub fn deck_svg(project: &str, porch: &FramedPorch, from: LayoutStart) -> Option<String> {
+    let deck = porch.deck.as_ref()?;
+    let mut doc = Doc::new(&format!("{project}: porch deck"));
+    let area = (
+        MARGIN + 40.0,
+        MARGIN + 92.0,
+        PAGE_W - MARGIN - 40.0,
+        PAGE_H - MARGIN - MARK_ROW * 2.0 - 30.0,
+    );
+    let f = Frame::fit(
+        0.0,
+        -porch.depth.as_inches_f64(),
+        porch.width.as_inches_f64(),
+        porch.depth.as_inches_f64(),
+        area,
+    );
+    let boards: Vec<&Placed> = deck
+        .members
+        .iter()
+        .filter(|p| p.member.kind == MemberKind::Decking)
+        .collect();
+    let board = boards
+        .first()
+        .map(|p| p.member.size.to_string())
+        .unwrap_or_default();
+    let mut sub = vec![
+        format!(
+            "Decking top {} below the subfloor; {} rows of {board} along the front, end joints on joists and staggered",
+            -deck.heights.top, deck.rows
+        ),
+        format!(
+            "Joists hang from a ledger on the floor's front rim; the beam (dashed) sits on {} piers under the posts. {}",
+            deck.piers.len(),
+            f.note()
+        ),
+        format!(
+            "{}. Seen from above with the shed at the top.",
+            origin_note(from, "Joist marks, on the ledger and rim,")
+        ),
+    ];
+    sub.extend(deck.warnings.iter().map(|w| format!("Note: {w}")));
+    doc.header(&format!("{project}: porch deck"), &sub);
+    let framing: Vec<Placed> = deck
+        .members
+        .iter()
+        .filter(|p| !matches!(p.member.kind, MemberKind::Beam | MemberKind::Decking))
+        .cloned()
+        .collect();
+    let beams: Vec<Placed> = deck
+        .members
+        .iter()
+        .filter(|p| p.member.kind == MemberKind::Beam)
+        .cloned()
+        .collect();
+    members(&mut doc, &f, &framing, true);
+    members(&mut doc, &f, &beams, false);
+    for p in &deck.piers {
+        doc.circle(f.x(p.x), f.y(p.y), 4.0, "pier");
+    }
+    let structural: Vec<Placed> = deck
+        .members
+        .iter()
+        .filter(|p| p.member.kind != MemberKind::Decking)
+        .cloned()
+        .collect();
+    splices(&mut doc, &f, &structural, &deck.splices);
+    let top = f.y(Length::ZERO) - 14.0;
+    doc.dimension(
+        (f.x(Length::ZERO), top),
+        (f.x(porch.width), top),
+        &porch.width.to_string(),
+    );
+    marks(
+        &mut doc,
+        &f,
+        &deck.marks,
+        from,
+        porch.width,
+        f.y(-porch.depth),
+    );
+    Some(doc.finish())
+}
+
+/// Sheathing panels on one face, numbered to match the cut list.
+fn sheathing_face(doc: &mut Doc, f: &Frame, face: &SheathedFace) {
+    for p in &face.panels {
+        let pts: Vec<(f64, f64)> = if p.outline.is_empty() {
+            let r = p.rect;
+            vec![
+                (f.x(r.x), f.y(r.y)),
+                (f.x(r.right()), f.y(r.y)),
+                (f.x(r.right()), f.y(r.top())),
+                (f.x(r.x), f.y(r.top())),
+            ]
+        } else {
+            p.outline.iter().map(|&(x, y)| (f.x(x), f.y(y))).collect()
+        };
+        doc.polygon(&pts, "sheet");
+        for h in &p.holes {
+            doc.polygon(
+                &[
+                    (f.x(h.x), f.y(h.y)),
+                    (f.x(h.right()), f.y(h.y)),
+                    (f.x(h.right()), f.y(h.top())),
+                    (f.x(h.x), f.y(h.top())),
+                ],
+                "hole",
+            );
+        }
+        let r = p.rect;
+        if f.len(r.w) > 16.0 && f.len(r.h) > 14.0 {
+            let (cx, cy) = (f.x(r.x + half(r.w)), f.y(r.y + half(r.h)));
+            doc.text(cx, cy - 1.0, "label", "middle", short(&p.piece.label));
+            if f.len(r.w) > 30.0 {
+                doc.text(
+                    cx,
+                    cy + 5.0,
+                    "label",
+                    "middle",
+                    &format!("{:#} x {:#}", r.w, r.h),
+                );
+            }
+        }
+    }
+}
+
+/// Every face's sheathing on one page: the walls seen from outside in a
+/// grid, or the roof planes laid flat, eaves at the bottom.
+pub fn sheathing_svg(project: &str, sheathing: &FramedSheathing, roofs: bool) -> Option<String> {
+    let faces = if roofs {
+        &sheathing.roofs
+    } else {
+        &sheathing.walls
+    };
+    let first = faces.first()?;
+    let what = if roofs {
+        "roof sheathing"
+    } else {
+        "wall sheathing"
+    };
+    let mut doc = Doc::new(&format!("{project}: {what}"));
+    let pieces: usize = faces.iter().map(|f| f.panels.len()).sum();
+    doc.header(
+        &format!("{project}: {what}"),
+        &[
+            format!(
+                "{pieces} pieces of {:#} sheathing, numbered to match the cut list",
+                first.thickness
+            ),
+            if roofs {
+                "Each roof face laid flat with its eave at the bottom; sheets run across the rafters, rows staggered by half a sheet.".to_string()
+            } else {
+                "Each wall seen from outside. Sheets stand on end with joints on studs; doors and windows (dashed) are cut out.".to_string()
+            },
+        ],
+    );
+    let cols = if faces.len() > 1 { 2 } else { 1 };
+    let rows = faces.len().div_ceil(cols);
+    let (x0, y0) = (MARGIN, MARGIN + 60.0);
+    let cell_w = (PAGE_W - MARGIN * 2.0) / cols as f64;
+    let cell_h = (PAGE_H - MARGIN - 24.0 - y0) / rows as f64;
+    for (i, face) in faces.iter().enumerate() {
+        let (c, r) = (i % cols, i / cols);
+        let left = x0 + c as f64 * cell_w;
+        let top = y0 + r as f64 * cell_h;
+        let xs = face.outline.iter().map(|p| p.0.as_inches_f64());
+        let ys = face.outline.iter().map(|p| p.1.as_inches_f64());
+        let (min_x, max_x) = xs.fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(v), b.max(v)));
+        let ys: Vec<f64> = ys.collect();
+        let min_y = ys.iter().copied().fold(f64::MAX, f64::min);
+        let max_y = ys.iter().copied().fold(f64::MIN, f64::max);
+        let f = Frame::fit(
+            min_x,
+            min_y,
+            max_x - min_x,
+            max_y - min_y,
+            (
+                left + 12.0,
+                top + 16.0,
+                left + cell_w - 12.0,
+                top + cell_h - 8.0,
+            ),
+        );
+        let title = if roofs {
+            face.name.clone()
+        } else {
+            format!("{} wall", face.name)
+        };
+        doc.text(left + 12.0, top + 10.0, "dim-text", "start", &title);
+        sheathing_face(&mut doc, &f, face);
+    }
+    Some(doc.finish())
+}
+
+/// One rafter in profile with every cut dimensioned, upper end on the
+/// left, laid flat as it sits on the sawhorses.
+pub fn rafter_svg(project: &str, r: &RafterDetail) -> String {
+    let title = format!("{project}: {} detail", r.name);
+    let mut doc = Doc::new(&title);
     let degrees = format!(
         "{}.{}°",
         r.plumb_tenths_of_degree / 10,
         r.plumb_tenths_of_degree % 10
     );
+    let upper = match r.top {
+        RafterTop::Tail => format!("The upper end overhangs {} level", r.upper_overhang),
+        RafterTop::Ridge => "The upper end butts the ridge board".to_string(),
+        RafterTop::Ledger => "The upper end hangs on the ledger".to_string(),
+    };
+    let each = if r.heels.len() == 1 {
+        "The birdsmouth has"
+    } else {
+        "Each birdsmouth has"
+    };
     doc.header(
-        &format!("{project}: rafter detail"),
+        &title,
         &[
             format!(
-                "{} {} rafters, all cut alike: {} along either edge at {}",
-                roof.marks.len(),
-                r.size,
-                r.length,
-                r.pitch
+                "{} {} {}s, all cut alike: {} along either edge at {}",
+                r.count, r.size, r.name, r.length, r.pitch
             ),
             format!(
-                "Both ends cut plumb, {degrees} from square. Each birdsmouth has a {:#} level seat and a {:#} plumb heel.",
+                "Both ends cut plumb, {degrees} from square. {each} a {:#} level seat and a {:#} plumb heel.",
                 r.seat, r.heel
             ),
             format!(
-                "Heels are measured along the bottom edge from the upper end. Overhangs: {} front, {} back, level.",
-                r.front_overhang, r.back_overhang
+                "Heels are measured along the bottom edge from the upper end. {upper}; the tail {} past the last seat.",
+                r.overhang
             ),
         ],
     );
@@ -709,7 +1067,7 @@ pub fn rafter_svg(project: &str, roof: &FramedRoof) -> String {
     let seat = r.seat.as_inches_f64() / cos;
     let heel = r.heel.as_inches_f64();
     let mut outline = vec![pt(0.0, 0.0)];
-    for at in [r.front_heel_at, r.back_heel_at] {
+    for &at in &r.heels {
         let at = at.as_inches_f64();
         outline.push(pt(at - seat, 0.0));
         outline.push(pt(at - heel * sin, heel * cos));
@@ -721,10 +1079,12 @@ pub fn rafter_svg(project: &str, roof: &FramedRoof) -> String {
     doc.polygon(&outline, "m rafter");
 
     let base = f.y0 + 14.0;
-    for (at, name) in [
-        (r.front_heel_at, "front heel"),
-        (r.back_heel_at, "back heel"),
-    ] {
+    let names: &[&str] = if r.heels.len() == 2 {
+        &["front heel", "back heel"]
+    } else {
+        &["heel"]
+    };
+    for (&at, name) in r.heels.iter().zip(names) {
         let (x, _) = pt(at.as_inches_f64(), 0.0);
         doc.line(x, f.y0 + 2.0, x, base + 2.0, "mark");
         doc.text(
@@ -862,8 +1222,29 @@ mod tests {
 
         let roof = framed.roof.as_ref().unwrap().as_ref().unwrap();
         assert!(roof_svg(&p.name, roof, p.rules.layout_from).contains("R01"));
-        let svg = rafter_svg(&p.name, roof);
-        assert!(svg.contains(&esc("front heel at 16\"")), "{svg}");
+        let svg = rafter_svg(&p.name, &roof.rafters[0]);
+        assert!(svg.contains(&esc("front heel at 15-11/16\"")), "{svg}");
+
+        let porch = framed.porch.as_ref().unwrap().as_ref().unwrap();
+        let svg = porch_svg(&p.name, porch, p.rules.layout_from);
+        assert!(
+            svg.contains("porch framing") && svg.contains(">P1<"),
+            "{svg}"
+        );
+        assert!(rafter_svg(&p.name, &porch.rafter).contains("porch rafter"));
+        let svg = deck_svg(&p.name, porch, p.rules.layout_from).unwrap();
+        assert_eq!(svg.matches("class=\"pier\"").count(), 4);
+
+        let sheathing = framed.sheathing.as_ref().unwrap().as_ref().unwrap();
+        let svg = sheathing_svg(&p.name, sheathing, false).unwrap();
+        assert!(
+            svg.contains("front-SH01") || svg.contains(">SH01<"),
+            "{svg}"
+        );
+        assert!(svg.contains("class=\"hole\""));
+        assert!(sheathing_svg(&p.name, sheathing, true)
+            .unwrap()
+            .contains("porch roof"));
     }
 
     #[test]

@@ -6,19 +6,26 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { ModelView, SolidKind, SolidView } from "./core";
 
 /** Groups of solids that can be hidden to see inside. */
-export type Layer = "roof" | "walls" | "subfloor" | "floor";
+export type Layer = "sheathing" | "roof" | "walls" | "porch" | "subfloor" | "floor";
 
 export const LAYERS: [Layer, string][] = [
+  ["sheathing", "Sheathing"],
   ["roof", "Roof"],
   ["walls", "Walls"],
+  ["porch", "Porch"],
   ["subfloor", "Subfloor"],
   ["floor", "Floor framing"],
 ];
 
+/** Hidden until turned on, so the framing shows first. */
+export const HIDDEN_LAYERS: Layer[] = ["sheathing"];
+
 export function layerOf(s: SolidView): Layer {
+  if (s.kind === "sheathing") return "sheathing";
   if (s.kind === "subfloor") return "subfloor";
   if (s.part === "floor") return "floor";
   if (s.part === "roof") return "roof";
+  if (s.part === "porch" || s.part === "deck") return "porch";
   return "walls";
 }
 
@@ -41,8 +48,13 @@ const WOOD: Partial<Record<SolidKind, number>> = {
   rafter: 0xdcae6e,
   fascia: 0xc48c4c,
   post: 0xa8743a,
+  ridge: 0xb07a3c,
+  collar_tie: 0xd4a25f,
+  gable_stud: 0xe2b77a,
+  decking: 0xc79a62,
   pier: 0xb5b2aa,
   subfloor: 0xd8bf86,
+  sheathing: 0xd9c79c,
 };
 
 export interface ViewerEvents {
@@ -64,7 +76,7 @@ export class Viewer {
   private materials = new Map<string, THREE.MeshStandardMaterial>();
   private edgeMaterial = new THREE.LineBasicMaterial({ color: 0x5a3d1c, transparent: true, opacity: 0.45 });
   private meshes: THREE.Mesh[] = [];
-  private hidden = new Set<Layer>();
+  private hidden = new Set<Layer>(HIDDEN_LAYERS);
   private selected: THREE.Mesh | null = null;
   private hovered: THREE.Mesh | null = null;
   private raycaster = new THREE.Raycaster();

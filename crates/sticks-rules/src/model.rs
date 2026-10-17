@@ -8,15 +8,18 @@
 //! Every piece is a prism: a flat profile drawn in the plane of two axes `u`
 //! and `v` from `origin`, pushed `depth` inches along `u × v`. A stud is its
 //! elevation rectangle pushed through the wall; a rafter is its side profile,
-//! birdsmouths included, pushed across its thickness.
+//! birdsmouths included, pushed across its thickness; a sheet of sheathing
+//! is its outline on the face it covers, pushed out by its thickness.
 
 use serde::Serialize;
 use sticks_core::{Length, Member, MemberKind, Project};
 
 use crate::building::{FramedProject, SIDES};
-use crate::floor::FramedFloor;
+use crate::floor::{FramedFloor, Pier};
 use crate::layout::{Placed, Rect};
+use crate::porch::FramedPorch;
 use crate::roof::FramedRoof;
+use crate::sheathing::{solid_pieces, SheathedFace};
 use crate::wall::FramedWall;
 
 /// What a solid is: a framing member, or something drawn for context.
@@ -32,13 +35,14 @@ pub enum SolidKind {
 pub enum OtherKind {
     Pier,
     Subfloor,
+    Sheathing,
 }
 
 /// One piece of the model.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Solid {
     pub label: String,
-    /// The part it belongs to: a wall id, `floor` or `roof`.
+    /// The part it belongs to: a wall id, `floor`, `roof` or `porch`.
     pub part: String,
     pub kind: SolidKind,
     /// The member it shows, for framing members.
@@ -53,8 +57,8 @@ pub struct Solid {
     pub depth: f64,
 }
 
-/// Every member of `framed` placed in the building, plus the piers and
-/// subfloor. Walls that aren't part of a building are stood in a row along
+/// Every member of `framed` placed in the building, plus the piers,
+/// subfloor and sheathing. Walls that aren't part of a building are stood in a row along
 /// the front line when the project has no building, and left out otherwise,
 /// since nothing says where they go.
 pub fn model(project: &Project, framed: &FramedProject) -> Vec<Solid> {
@@ -64,14 +68,8 @@ pub fn model(project: &Project, framed: &FramedProject) -> Vec<Solid> {
         Some(b) => {
             let (w, d) = (inches(b.width), inches(b.depth));
             for wall in framed.walls.iter().flatten() {
-                // Origin on the inside face at the wall's left end; u along
-                // the wall as seen from outside, so u × v points outside.
-                let (origin, u) = match wall.id.as_str() {
-                    "front" => ([0.0, wall_depth, 0.0], [1.0, 0.0, 0.0]),
-                    "back" => ([w, d - wall_depth, 0.0], [-1.0, 0.0, 0.0]),
-                    "left" => ([wall_depth, d - wall_depth, 0.0], [0.0, -1.0, 0.0]),
-                    "right" => ([w - wall_depth, wall_depth, 0.0], [0.0, 1.0, 0.0]),
-                    _ => continue,
+                let Some((origin, u)) = wall_place(&wall.id, w, d, wall_depth) else {
+                    continue;
                 };
                 wall_solids(&mut out, wall, origin, u, wall_depth);
             }
@@ -85,6 +83,20 @@ pub fn model(project: &Project, framed: &FramedProject) -> Vec<Solid> {
             }
             if let Some(Ok(roof)) = &framed.roof {
                 roof_solids(&mut out, roof, wall_depth);
+            }
+            if let Some(Ok(porch)) = &framed.porch {
+                porch_solids(&mut out, porch);
+            }
+            if let Some(Ok(sheathing)) = &framed.sheathing {
+                for face in &sheathing.walls {
+                    if let Some((origin, u)) = wall_place(&face.name, w, d, wall_depth) {
+                        let out_face = along(origin, cross(u, UP), wall_depth);
+                        sheathing_solids(&mut out, face, &face.name, out_face, u, UP, false);
+                    }
+                }
+                for face in &sheathing.roofs {
+                    roof_sheathing(&mut out, face);
+                }
             }
         }
         None => {
@@ -102,6 +114,19 @@ pub fn model(project: &Project, framed: &FramedProject) -> Vec<Solid> {
         }
     }
     out
+}
+
+/// Where a building wall stands: the origin on its inside face at its left
+/// end, and `u` along the wall as seen from outside, so `u × up` points
+/// outside.
+fn wall_place(id: &str, w: f64, d: f64, wall_depth: f64) -> Option<([f64; 3], [f64; 3])> {
+    Some(match id {
+        "front" => ([0.0, wall_depth, 0.0], [1.0, 0.0, 0.0]),
+        "back" => ([w, d - wall_depth, 0.0], [-1.0, 0.0, 0.0]),
+        "left" => ([wall_depth, d - wall_depth, 0.0], [0.0, -1.0, 0.0]),
+        "right" => ([w - wall_depth, wall_depth, 0.0], [0.0, 1.0, 0.0]),
+        _ => return None,
+    })
 }
 
 fn inches(l: Length) -> f64 {
@@ -212,17 +237,23 @@ fn floor_solids(out: &mut Vec<Solid>, floor: &FramedFloor, subfloor: f64, joist:
             depth: subfloor,
         });
     }
-    const PIER: f64 = 12.0;
-    const PIER_DROP: f64 = 16.0;
-    for (i, pier) in floor.piers.iter().enumerate() {
+    pier_solids(out, &floor.piers, beam_bottom, "floor");
+}
+
+const PIER: f64 = 12.0;
+const PIER_DROP: f64 = 16.0;
+
+/// Concrete piers whose tops are at `top`.
+fn pier_solids(out: &mut Vec<Solid>, piers: &[Pier], top: f64, part: &str) {
+    for (i, pier) in piers.iter().enumerate() {
         let (x, y) = (inches(pier.x) - PIER / 2.0, inches(pier.y) - PIER / 2.0);
         out.push(Solid {
-            label: format!("pier {}", i + 1),
-            part: "floor".to_string(),
+            label: format!("{part} pier {}", i + 1),
+            part: part.to_string(),
             kind: SolidKind::Other(OtherKind::Pier),
             member: None,
             profile: vec![[x, y], [x + PIER, y], [x + PIER, y + PIER], [x, y + PIER]],
-            origin: [0.0, 0.0, beam_bottom - PIER_DROP],
+            origin: [0.0, 0.0, top - PIER_DROP],
             u: [1.0, 0.0, 0.0],
             v: [0.0, 1.0, 0.0],
             depth: PIER_DROP,
@@ -230,59 +261,250 @@ fn floor_solids(out: &mut Vec<Solid>, floor: &FramedFloor, subfloor: f64, joist:
     }
 }
 
-/// Rafters as side profiles with their birdsmouths, sloping down from the
-/// front wall to the back; fascia across the tails, flush with their tops.
+/// A plan rectangle stood up from `bottom` to `top`.
+fn plan_solid(p: &Placed, part: &str, bottom: f64, top: f64) -> Solid {
+    Solid {
+        profile: corners(&p.rect),
+        origin: [0.0, 0.0, bottom],
+        depth: top - bottom,
+        ..member_solid(p, part)
+    }
+}
+
+/// A side profile in the `y`, `z` plane pushed across a member's thickness.
+fn side_solid(p: &Placed, part: &str, profile: Vec<[f64; 2]>) -> Solid {
+    Solid {
+        profile,
+        origin: [inches(p.rect.x), 0.0, 0.0],
+        u: [0.0, 1.0, 0.0],
+        v: UP,
+        depth: inches(p.rect.w),
+        ..member_solid(p, part)
+    }
+}
+
+/// Rafters as side profiles with their birdsmouths, the ridge board and
+/// collar ties for a gable, and fascia across the tails, flush with their
+/// tops.
 fn roof_solids(out: &mut Vec<Solid>, roof: &FramedRoof, wall_depth: f64) {
-    let r = &roof.rafter;
+    let r = &roof.rafters[0];
     let slope = inches(r.pitch.rise) / 12.0;
+    let depth = inches(roof.depth);
+    let plumb = inches(r.plumb_depth);
     let front = inches(roof.heights.front);
     let back = inches(roof.heights.back);
-    let depth = inches(roof.depth);
-    let (fo, bo) = (inches(r.front_overhang), inches(r.back_overhang));
-    let plumb = inches(r.plumb_depth);
-    // The rafter's bottom edge, which bears on the front wall's outside face.
-    let bottom = |y: f64| front - y * slope;
-    let (tail, end) = (-fo, depth + bo);
-    let profile = vec![
-        [tail, bottom(tail)],
-        [0.0, front],
-        [wall_depth, front],
-        [wall_depth, bottom(wall_depth)],
-        [depth - wall_depth, back],
-        [depth, back],
-        [depth, bottom(depth)],
-        [end, bottom(end)],
-        [end, bottom(end) + plumb],
-        [tail, bottom(tail) + plumb],
-    ];
-    for p in &roof.members {
-        let x = inches(p.rect.x);
-        match p.member.kind {
-            MemberKind::Rafter => out.push(Solid {
-                profile: profile.clone(),
-                origin: [x, 0.0, 0.0],
-                u: [0.0, 1.0, 0.0],
-                v: UP,
-                depth: inches(p.rect.w),
-                ..member_solid(p, "roof")
-            }),
-            _ => {
-                // Fascia: the front board's inside face is at the front tail.
-                let top = if inches(p.rect.y) < 0.0 {
-                    bottom(tail) + plumb
-                } else {
-                    bottom(end) + plumb
-                };
-                let height = inches(p.member.size.actual_width());
-                out.push(Solid {
-                    profile: corners(&p.rect),
-                    origin: [0.0, 0.0, top - height],
-                    depth: height,
-                    ..member_solid(p, "roof")
-                });
+    match roof.ridge {
+        None => {
+            // A lean-to: the bottom edge bears on the front wall's outside face.
+            let fo = inches(r.upper_overhang);
+            let bo = inches(r.overhang);
+            let bottom = |y: f64| front - y * slope;
+            let (tail, end) = (-fo, depth + bo);
+            let profile = vec![
+                [tail, bottom(tail)],
+                [0.0, front],
+                [wall_depth, front],
+                [wall_depth, bottom(wall_depth)],
+                [depth - wall_depth, back],
+                [depth, back],
+                [depth, bottom(depth)],
+                [end, bottom(end)],
+                [end, bottom(end) + plumb],
+                [tail, bottom(tail) + plumb],
+            ];
+            for p in &roof.members {
+                match p.member.kind {
+                    MemberKind::Rafter => out.push(side_solid(p, "roof", profile.clone())),
+                    _ => {
+                        let top = if inches(p.rect.y) < 0.0 {
+                            bottom(tail) + plumb
+                        } else {
+                            bottom(end) + plumb
+                        };
+                        let h = inches(p.member.size.actual_width());
+                        out.push(plan_solid(p, "roof", top - h, top));
+                    }
+                }
+            }
+        }
+        Some(ridge) => {
+            let ry = inches(ridge.y);
+            let details = &roof.rafters;
+            let back_d = details.last().unwrap_or(r);
+            let (fo, bo) = (inches(r.overhang), inches(back_d.overhang));
+            // Front slope, bottom edge on the cap plate's inside corner;
+            // the back slope is its mirror image.
+            let bottom = |y: f64| front + (y - wall_depth) * slope;
+            let profile = |overhang: f64| {
+                let tail = -overhang;
+                vec![
+                    [tail, bottom(tail)],
+                    [0.0, bottom(0.0)],
+                    [0.0, front],
+                    [wall_depth, front],
+                    [ry, bottom(ry)],
+                    [ry, bottom(ry) + plumb],
+                    [tail, bottom(tail) + plumb],
+                ]
+            };
+            let mirror = |pts: Vec<[f64; 2]>| -> Vec<[f64; 2]> {
+                pts.into_iter().rev().map(|[y, z]| [depth - y, z]).collect()
+            };
+            let front_profile = profile(fo);
+            let back_profile = mirror(profile(bo));
+            for p in &roof.members {
+                let y = inches(p.rect.y);
+                match p.member.kind {
+                    MemberKind::Rafter => {
+                        let pr = if y < ry {
+                            front_profile.clone()
+                        } else {
+                            back_profile.clone()
+                        };
+                        out.push(side_solid(p, "roof", pr));
+                    }
+                    MemberKind::Ridge => out.push(plan_solid(
+                        p,
+                        "roof",
+                        inches(ridge.bottom),
+                        inches(ridge.top),
+                    )),
+                    MemberKind::CollarTie => {
+                        let (y1, y2) = (y, y + inches(p.rect.h));
+                        let top = bottom(y1) + plumb;
+                        let h = inches(p.member.size.actual_width());
+                        out.push(side_solid(
+                            p,
+                            "roof",
+                            vec![[y1, top - h], [y2, top - h], [y2, top], [y1, top]],
+                        ));
+                    }
+                    _ => {
+                        let tail = if y < 0.0 { -fo } else { -bo };
+                        let top = bottom(tail) + plumb;
+                        let h = inches(p.member.size.actual_width());
+                        out.push(plan_solid(p, "roof", top - h, top));
+                    }
+                }
             }
         }
     }
+}
+
+/// Posts on piers, the beam on the posts, the ledger on the front wall, and
+/// rafters from the ledger down over the beam to fascia at the tails.
+fn porch_solids(out: &mut Vec<Solid>, porch: &FramedPorch) {
+    let h = &porch.heights;
+    let r = &porch.rafter;
+    let slope = inches(r.pitch.rise) / 12.0;
+    let plumb = inches(r.plumb_depth);
+    let ledger_top = inches(h.ledger_top);
+    let (beam_top, beam_bottom) = (inches(h.beam_top), inches(h.beam_bottom));
+    let post_bottom = inches(h.post_bottom);
+    let lt = inches(porch.plane.top.0).abs();
+    let depth = inches(porch.depth);
+    let inner = -depth + inches(r.seat);
+    let tail = -depth - inches(r.overhang);
+    // Bottom edge, dropping away from the ledger's face.
+    let bottom = |y: f64| ledger_top - plumb - (-lt - y) * slope;
+    let profile = vec![
+        [tail, bottom(tail) + plumb],
+        [tail, bottom(tail)],
+        [-depth, bottom(-depth)],
+        [-depth, beam_top],
+        [inner, beam_top],
+        [-lt, bottom(-lt)],
+        [-lt, ledger_top],
+    ];
+    for p in &porch.members {
+        let size = inches(p.member.size.actual_width());
+        match p.member.kind {
+            MemberKind::Post => out.push(plan_solid(p, "porch", post_bottom, beam_bottom)),
+            MemberKind::Beam => out.push(plan_solid(p, "porch", beam_bottom, beam_top)),
+            MemberKind::Ledger => out.push(plan_solid(p, "porch", ledger_top - size, ledger_top)),
+            MemberKind::Rafter => out.push(side_solid(p, "porch", profile.clone())),
+            _ => {
+                let top = bottom(tail) + plumb;
+                out.push(plan_solid(p, "porch", top - size, top));
+            }
+        }
+    }
+    pier_solids(out, &porch.piers, post_bottom, "porch");
+    if let Some(deck) = &porch.deck {
+        let h = &deck.heights;
+        let (top, jt, jb, bb) = (
+            inches(h.top),
+            inches(h.joist_top),
+            inches(h.joist_bottom),
+            inches(h.beam_bottom),
+        );
+        for p in &deck.members {
+            let (lo, hi) = match p.member.kind {
+                MemberKind::Decking => (jt, top),
+                MemberKind::Beam => (bb, jb),
+                _ => (jb, jt),
+            };
+            out.push(plan_solid(p, "deck", lo, hi));
+        }
+        pier_solids(out, &deck.piers, bb, "deck");
+    }
+}
+
+/// Sheathing panels on a face whose coordinates map to `origin + x u + y v`,
+/// pushed out along `u × v` (or back toward it, when `inward`).
+fn sheathing_solids(
+    out: &mut Vec<Solid>,
+    face: &SheathedFace,
+    part: &str,
+    origin: [f64; 3],
+    u: [f64; 3],
+    v: [f64; 3],
+    inward: bool,
+) {
+    let t = inches(face.thickness);
+    let n = cross(u, v);
+    let origin = if inward { along(origin, n, -t) } else { origin };
+    for panel in &face.panels {
+        for piece in solid_pieces(panel) {
+            out.push(Solid {
+                label: panel.piece.label.clone(),
+                part: part.to_string(),
+                kind: SolidKind::Other(OtherKind::Sheathing),
+                member: None,
+                profile: piece.iter().map(|&(x, y)| [inches(x), inches(y)]).collect(),
+                origin,
+                u,
+                v,
+                depth: t,
+            });
+        }
+    }
+}
+
+/// Roof sheathing on its plane, from the tails' top edge up the slope.
+fn roof_sheathing(out: &mut Vec<Solid>, face: &SheathedFace) {
+    let Some(plane) = &face.plane else {
+        return;
+    };
+    let (ey, ez) = (inches(plane.eave.0), inches(plane.eave.1));
+    let up = if plane.top.0 > plane.eave.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let slope = inches(plane.pitch.rise) / 12.0;
+    let k = 1.0 / (1.0 + slope * slope).sqrt();
+    let v = [0.0, up * k, slope * k];
+    let u = [1.0, 0.0, 0.0];
+    // u × v points down on a slope that rises toward the front; push the
+    // sheets back up onto the rafters there.
+    let inward = cross(u, v)[2] < 0.0;
+    let part = if plane.name == "porch roof" {
+        "porch"
+    } else {
+        "roof"
+    };
+    sheathing_solids(out, face, part, [0.0, ey, ez], u, v, inward);
 }
 
 /// The smallest box around every solid, as `[min, max]` corners.
@@ -366,7 +588,8 @@ mod tests {
         let (_, m) = shed();
         let [lo, hi] = bounds(
             &m.iter()
-                .filter(|s| s.part != "roof" && s.part != "floor")
+                .filter(|s| SIDES.contains(&s.part.as_str()))
+                .filter(|s| s.kind != SolidKind::Other(OtherKind::Sheathing))
                 .cloned()
                 .collect::<Vec<_>>(),
         )
@@ -376,7 +599,7 @@ mod tests {
         assert!(close(lo[2], 0.0) && close(hi[2], 120.0), "{lo:?} {hi:?}");
 
         // The left wall's studs stand inside the corners, within its depth.
-        for s in m.iter().filter(|s| s.part == "left") {
+        for s in m.iter().filter(|s| s.part == "left" && s.member.is_some()) {
             for c in corners_of(s) {
                 assert!(c[0] > -0.01 && c[0] < 3.51, "{} at {c:?}", s.label);
                 assert!(c[1] > 3.49 && c[1] < 164.51, "{} at {c:?}", s.label);
@@ -405,6 +628,46 @@ mod tests {
             .profile
             .iter()
             .any(|&[y, z]| close(y, 168.0) && close(z, back)));
+    }
+
+    #[test]
+    fn porch_and_sheathing_are_in_the_model() {
+        let (_, m) = shed();
+        let part = |name: &str| -> Vec<Solid> {
+            m.iter()
+                .filter(|s| s.part == name && s.member.is_some())
+                .cloned()
+                .collect()
+        };
+        // The porch sits in front of the front wall, its roof under the
+        // main roof's eave.
+        let [lo, hi] = bounds(&part("porch")).unwrap();
+        assert!(hi[1] <= 0.01 && lo[1] < -72.0, "{lo:?} {hi:?}");
+        assert!(hi[2] <= 117.01, "{hi:?}");
+        // The deck sits a step below the floor.
+        let [_, hi] = bounds(&part("deck")).unwrap();
+        assert!(close(hi[2], -1.0), "{hi:?}");
+        // Wall sheathing hangs off the outside faces.
+        let sheathing: Vec<Solid> = m
+            .iter()
+            .filter(|s| s.kind == SolidKind::Other(OtherKind::Sheathing) && s.part == "front")
+            .cloned()
+            .collect();
+        let [lo, hi] = bounds(&sheathing).unwrap();
+        assert!(
+            close(lo[1], -7.0 / 16.0) && close(hi[1], 0.0),
+            "{lo:?} {hi:?}"
+        );
+        // Roof sheathing lies on the rafters' top edges, above them.
+        let roof: Vec<Solid> = m
+            .iter()
+            .filter(|s| s.kind == SolidKind::Other(OtherKind::Sheathing) && s.part == "roof")
+            .cloned()
+            .collect();
+        let [lo, _] = bounds(&roof).unwrap();
+        let rafters: Vec<Solid> = part("roof");
+        let [rlo, _] = bounds(&rafters).unwrap();
+        assert!(lo[2] > rlo[2], "{lo:?} {rlo:?}");
     }
 
     #[test]

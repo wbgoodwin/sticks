@@ -7,6 +7,7 @@ import {
   parseLength,
   type BuildingJson,
   type OpeningKind,
+  type PorchJson,
   type ProjectJson,
   type RoofJson,
   type SheetJson,
@@ -139,6 +140,11 @@ const HEADERS = ["2x4", "2x6", "2x8", "2x10", "2x12"];
 const RAFTERS = ["2x4", "2x6", "2x8", "2x10", "2x12"];
 const JOISTS = ["2x6", "2x8", "2x10", "2x12"];
 const BEAMS = ["4x4", "4x6", "4x8", "6x6", "2x8", "2x10", "2x12"];
+const POSTS = ["4x4", "6x6"];
+const PORCH_BEAMS = ["2x6", "2x8", "2x10", "2x12", "4x6", "4x8"];
+const DECKING = ["5/4x6", "2x6", "2x4"];
+const SHEATHING = ['3/8"', '7/16"', '1/2"', '5/8"', '3/4"'];
+const NO_SHEATHING = "None";
 
 const WALL_NAMES: Record<string, string> = { front: "Front", back: "Back", left: "Left", right: "Right" };
 
@@ -170,6 +176,8 @@ export function renderPanel(
           shedSection(project, building, events),
           roofSection(project, events),
           floorSection(project, events),
+          porchSection(project, events),
+          sheathingSection(project, events),
           wallsSection(project, ctx, events),
         ]
       : [wallsSection(project, ctx, events)]),
@@ -226,7 +234,9 @@ function shedSection(project: ProjectJson, b: BuildingJson, events: PanelEvents)
       () => b.height,
       (v) => (b.height = v),
       events,
-      project.roof ? "Floor to top of cap plate. The other walls follow the roof." : "Floor to top of cap plate",
+      project.roof && project.roof.kind !== "gable"
+        ? "Floor to top of cap plate. The other walls follow the roof."
+        : "Floor to top of cap plate",
     ),
     ...rulesFields(project, events),
   );
@@ -251,7 +261,7 @@ function roofSection(project: ProjectJson, events: PanelEvents): HTMLElement {
             onclick: () => {
               project.roof = {
                 kind: "lean_to",
-                pitch: "3:12",
+                pitch: "2:12",
                 rafter: "2x6",
                 front_overhang: '12"',
                 back_overhang: '12"',
@@ -259,7 +269,7 @@ function roofSection(project: ProjectJson, events: PanelEvents): HTMLElement {
               events.restructured();
             },
           },
-          "+ Lean-to roof",
+          "+ Roof",
         ),
       ),
     );
@@ -267,10 +277,20 @@ function roofSection(project: ProjectJson, events: PanelEvents): HTMLElement {
   return h(
     "section",
     { class: "panel-section" },
-    sectionHead("Lean-to roof", "Remove the roof", () => {
+    sectionHead("Roof", "Remove the roof", () => {
       delete project.roof;
       events.restructured();
     }),
+    segmented(
+      "Shape",
+      [
+        ["lean_to", "Lean-to"],
+        ["gable", "Gable"],
+      ],
+      () => roof.kind ?? "lean_to",
+      (v) => (roof.kind = v),
+      events.restructured,
+    ),
     h(
       "div",
       { class: "row" },
@@ -381,6 +401,134 @@ function floorSection(project: ProjectJson, events: PanelEvents): HTMLElement {
     floor.support === "piers"
       ? lengthField("Most room between piers", () => floor.pier_spacing, (v) => (floor.pier_spacing = v), events)
       : null,
+  );
+}
+
+function porchSection(project: ProjectJson, events: PanelEvents): HTMLElement {
+  const porch = project.porch;
+  if (!porch) {
+    return h(
+      "section",
+      { class: "panel-section" },
+      h("h2", {}, "Porch"),
+      h("p", { class: "empty" }, "No porch yet."),
+      h(
+        "div",
+        { class: "add-row" },
+        h(
+          "button",
+          {
+            type: "button",
+            class: "add-button",
+            onclick: () => {
+              const p: PorchJson = { depth: "6'", post: "4x4", beam: "2x8", beam_plies: 2 };
+              // A deck hangs from the floor's rim, so it needs a floor.
+              if (project.floor) p.deck = { beam: "4x6", decking: "5/4x6", step_down: '1"' };
+              project.porch = p;
+              events.restructured();
+            },
+          },
+          "+ Porch off the front",
+        ),
+      ),
+    );
+  }
+  const deck = porch.deck;
+  return h(
+    "section",
+    { class: "panel-section" },
+    sectionHead("Porch", "Remove the porch", () => {
+      delete project.porch;
+      events.restructured();
+    }),
+    h(
+      "div",
+      { class: "row" },
+      lengthField("Depth", () => porch.depth ?? "6'", (v) => (porch.depth = v), events, "Out from the front wall"),
+      lengthField("Rafter overhang", () => porch.overhang ?? '12"', (v) => (porch.overhang = v), events, "Past the beam"),
+    ),
+    h(
+      "div",
+      { class: "row" },
+      select("Posts", POSTS, () => porch.post ?? "4x4", (v) => (porch.post = v), events),
+      lengthField("Most room between posts", () => porch.post_spacing ?? "8'", (v) => (porch.post_spacing = v), events),
+    ),
+    h(
+      "div",
+      { class: "row" },
+      select("Beam", PORCH_BEAMS, () => porch.beam ?? "2x8", (v) => (porch.beam = v), events),
+      stepper("Beam plies", () => porch.beam_plies ?? 2, (v) => (porch.beam_plies = v), 1, 3, events),
+    ),
+    segmented(
+      "Under the porch",
+      [
+        ["deck", "Deck"],
+        ["ground", "Open ground"],
+      ],
+      () => (deck ? "deck" : "ground"),
+      (v) => {
+        if (v === "deck") porch.deck = { beam: "4x6", decking: "5/4x6", step_down: '1"' };
+        else delete porch.deck;
+      },
+      events.restructured,
+    ),
+    deck
+      ? h(
+          "div",
+          { class: "row" },
+          select("Decking", DECKING, () => deck.decking ?? "5/4x6", (v) => (deck.decking = v), events),
+          lengthField("Step down", () => deck.step_down ?? '1"', (v) => (deck.step_down = v), events, "Below the shed floor"),
+        )
+      : null,
+  );
+}
+
+function sheathingSection(project: ProjectJson, events: PanelEvents): HTMLElement {
+  const sheathing = project.sheathing;
+  if (!sheathing) {
+    return h(
+      "section",
+      { class: "panel-section" },
+      h("h2", {}, "Sheathing"),
+      h("p", { class: "empty" }, "No sheathing yet."),
+      h(
+        "div",
+        { class: "add-row" },
+        h(
+          "button",
+          {
+            type: "button",
+            class: "add-button",
+            onclick: () => {
+              project.sheathing = { wall: '7/16"', roof: '1/2"' };
+              events.restructured();
+            },
+          },
+          "+ Walls and roof",
+        ),
+      ),
+    );
+  }
+  const thickness = (part: "wall" | "roof", label: string) =>
+    select(
+      label,
+      [...SHEATHING, NO_SHEATHING],
+      () => sheathing[part] ?? NO_SHEATHING,
+      (v) => {
+        if (v === NO_SHEATHING) delete sheathing[part];
+        else sheathing[part] = v;
+      },
+      events,
+    );
+  return h(
+    "section",
+    { class: "panel-section" },
+    sectionHead("Sheathing", "Remove the sheathing", () => {
+      delete project.sheathing;
+      events.restructured();
+    }),
+    h("div", { class: "row" }, thickness("wall", "Walls"), thickness("roof", "Roof")),
+    h("p", { class: "section-hint" }, "4 × 8 sheets, joints on framing, cut around doors and windows."),
   );
 }
 
@@ -676,11 +824,22 @@ function lumberSection(project: ProjectJson, events: PanelEvents): HTMLElement {
     ),
     lengthField("Saw kerf", () => rules.kerf ?? '1/8"', (v) => (rules.kerf = v), events, "Lost to the blade on every cut"),
     ...cards,
-    ...(project.floor ? (project.sheet ?? []).map((sheet) => sheetCard(sheet, events)) : []),
+    ...(project.sheet ?? []).map((sheet) => sheetCard(sheet, sheetUses(project, sheet), events)),
   );
 }
 
-function sheetCard(sheet: SheetJson, events: PanelEvents): HTMLElement {
+/** What a sheet thickness covers, such as `subfloor` or `wall and roof`. */
+function sheetUses(project: ProjectJson, sheet: SheetJson): string {
+  const uses = [
+    project.floor?.subfloor === sheet.thickness ? "subfloor" : null,
+    project.sheathing?.wall === sheet.thickness ? "wall" : null,
+    project.sheathing?.roof === sheet.thickness ? "roof" : null,
+  ].filter((u) => u !== null);
+  if (uses.length === 0) return "sheets";
+  return `${uses.join(" and ")} sheets`;
+}
+
+function sheetCard(sheet: SheetJson, uses: string, events: PanelEvents): HTMLElement {
   const message = h("div", { class: "field-error", role: "alert" });
   const price = h("input", {
     type: "text",
@@ -706,7 +865,7 @@ function sheetCard(sheet: SheetJson, events: PanelEvents): HTMLElement {
   return h(
     "div",
     { class: "card" },
-    h("div", { class: "card-head" }, h("span", { class: "card-title" }, `${sheet.thickness} subfloor sheets`)),
+    h("div", { class: "card-head" }, h("span", { class: "card-title" }, `${sheet.thickness} ${uses}`)),
     h(
       "div",
       { class: "stock-row" },

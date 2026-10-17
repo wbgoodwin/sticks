@@ -18,7 +18,7 @@ import { dollars, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES } from "./elevation";
 import { renderPanel, wallName, type PanelContext } from "./panel";
 import { ensureStock, fromTemplate, load, normalize, save, TEMPLATES } from "./state";
-import { LAYERS, Viewer } from "./view3d";
+import { HIDDEN_LAYERS, LAYERS, Viewer } from "./view3d";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -104,9 +104,7 @@ const preview = $<HTMLDivElement>(".print-preview");
 const previewFrame = $<HTMLIFrameElement>(".print-preview iframe");
 
 /** What the stage shows: the 3D model, a wall's elevation, or a printed drawing. */
-type View = { kind: "3d" } | { kind: "wall"; id: string } | { kind: "sheet"; id: "floor" | "subfloor" | "roof" | "rafter" };
-
-const SHEETS = { floor: "Floor", subfloor: "Subfloor", roof: "Roof", rafter: "Rafter" } as const;
+type View = { kind: "3d" } | { kind: "wall"; id: string } | { kind: "sheet"; id: string };
 
 let project: ProjectJson;
 let view: View = { kind: "3d" };
@@ -156,13 +154,21 @@ const events = {
 };
 
 function update(): void {
-  if (ensureStock(project)) renderPanel(panel, project, panelContext, events);
+  let next: FrameView | null = null;
+  let problem: unknown = null;
+  try {
+    next = frame(project);
+  } catch (e) {
+    problem = e;
+  }
+  const sizes = next ? allMembers(next).map((m) => m.size) : [];
+  if (ensureStock(project, sizes)) renderPanel(panel, project, panelContext, events);
   save(project);
   nameInput.value = project.name;
-  try {
-    framed = frame(project);
-  } catch (e) {
-    showProblem(message(e));
+  if (next) {
+    framed = next;
+  } else {
+    showProblem(message(problem));
     renderPlan();
     const hint = panel.querySelector<HTMLElement>('[data-live="back-height"]');
     if (hint) hint.textContent = "";
@@ -178,14 +184,13 @@ function update(): void {
 function liveHints(): void {
   const back = framed?.walls.find((w) => w.id === "back");
   const hint = panel.querySelector<HTMLElement>('[data-live="back-height"]');
-  if (hint) hint.textContent = back && !back.error && project.roof ? `The back wall comes out ${formatLength(back.left_height_16)}` : "";
+  if (hint) hint.textContent = back && !back.error && project.roof && project.roof.kind !== "gable" ? `The back wall comes out ${formatLength(back.left_height_16)}` : "";
 }
 
 function renderViews(): void {
   const list: [View, string][] = [[{ kind: "3d" }, "3D"]];
   for (const w of framed?.walls ?? []) list.push([{ kind: "wall", id: w.id }, wallName(w.id)]);
-  if (framed?.floor) list.push([{ kind: "sheet", id: "floor" }, SHEETS.floor], [{ kind: "sheet", id: "subfloor" }, SHEETS.subfloor]);
-  if (framed?.roof) list.push([{ kind: "sheet", id: "roof" }, SHEETS.roof], [{ kind: "sheet", id: "rafter" }, SHEETS.rafter]);
+  for (const d of framed?.drawings ?? []) list.push([{ kind: "sheet", id: d.id }, d.name]);
   // A view that no longer exists (the roof was removed, say) falls back to 3D.
   if (!list.some(([v]) => sameView(v, view))) view = { kind: "3d" };
   const key = list.map(([v]) => viewKey(v)).join(",");
@@ -261,28 +266,36 @@ function renderStage(): void {
     renderSchedule(w.members, w.warnings, []);
     stats.textContent = `${w.members.length} pieces · ${w.members.filter((m) => m.kind === "stud").length} studs`;
   } else {
-    const part = view.id === "floor" || view.id === "subfloor" ? framed.floor : framed.roof;
+    const id = view.id;
+    const d = framed.drawings.find((v) => v.id === id);
+    if (!d) return;
+    const part = d.part === "sheathing" ? framed.sheathing : framed[d.part];
     if (part?.error) {
-      showProblem(`${view.id === "floor" || view.id === "subfloor" ? "Floor" : "Roof"}: ${part.error}`);
+      showProblem(`${partName(d.part)}: ${part.error}`);
       return;
     }
     try {
-      sheet.innerHTML = drawing(project, view.id);
+      sheet.innerHTML = drawing(project, id);
     } catch (e) {
       showProblem(message(e));
       return;
     }
-    renderSchedule(part?.members ?? [], part?.warnings ?? [], []);
-    stats.textContent = `${part?.members.length ?? 0} pieces`;
+    if (part && "members" in part) {
+      renderSchedule(part.members, part.warnings, []);
+      stats.textContent = `${part.members.length} pieces`;
+    } else {
+      renderSchedule([], part?.warnings ?? [], []);
+      stats.textContent = `${part?.pieces ?? 0} sheathing pieces`;
+    }
   }
 }
 
 function allMembers(f: FrameView): MemberView[] {
-  return [...f.walls.flatMap((w) => w.members), ...(f.floor?.members ?? []), ...(f.roof?.members ?? [])];
+  return [...f.walls.flatMap((w) => w.members), ...[f.floor, f.roof, f.porch].flatMap((p) => p?.members ?? [])];
 }
 
 function planWarnings(f: FrameView): string[] {
-  return [...(f.floor?.warnings ?? []), ...(f.roof?.warnings ?? [])];
+  return [f.floor, f.roof, f.porch, f.sheathing].flatMap((p) => p?.warnings ?? []);
 }
 
 function skippedNotes(parts: string[]): string[] {
@@ -390,12 +403,16 @@ function showTooltip(html: string, x: number, y: number): void {
 function kindName(s: SolidView): string {
   if (s.kind === "pier") return "Pier";
   if (s.kind === "subfloor") return "Subfloor sheet";
+  if (s.kind === "sheathing") return "Sheathing";
   return KIND_NAMES[s.kind];
 }
 
 function partName(part: string): string {
   if (part === "floor") return "Floor";
   if (part === "roof") return "Roof";
+  if (part === "porch") return "Porch";
+  if (part === "deck") return "Porch deck";
+  if (part === "sheathing") return "Sheathing";
   return `${wallName(part)} wall`;
 }
 
@@ -459,7 +476,7 @@ layers.append(
     const label = document.createElement("label");
     const box = document.createElement("input");
     box.type = "checkbox";
-    box.checked = true;
+    box.checked = !HIDDEN_LAYERS.includes(layer);
     box.addEventListener("change", () => viewer.setLayer(layer, box.checked));
     label.append(box, text);
     return label;

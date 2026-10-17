@@ -20,7 +20,11 @@ export type MemberKind =
   | "ledger"
   | "rafter"
   | "fascia"
-  | "post";
+  | "post"
+  | "ridge"
+  | "collar_tie"
+  | "gable_stud"
+  | "decking";
 
 export interface MemberView {
   label: string;
@@ -82,18 +86,38 @@ export interface PlanView {
   error: string | null;
 }
 
+/** Sheathing panels, cut out around doors and windows. */
+export interface SheathingView {
+  pieces: number;
+  warnings: string[];
+  error: string | null;
+}
+
+/** A printable plan drawing besides the walls. */
+export interface DrawingView {
+  /** What `drawing` takes, such as `roof` or `porch-rafter`. */
+  id: string;
+  name: string;
+  /** The part it shows: `floor`, `roof`, `porch` or `sheathing`. */
+  part: "floor" | "roof" | "porch" | "sheathing";
+}
+
 export interface FrameView {
   walls: WallView[];
   floor: PlanView | null;
   roof: PlanView | null;
+  /** The porch roof, posts and beam, and its deck when it has one. */
+  porch: PlanView | null;
+  sheathing: SheathingView | null;
+  drawings: DrawingView[];
 }
 
-export type SolidKind = MemberKind | "pier" | "subfloor";
+export type SolidKind = MemberKind | "pier" | "subfloor" | "sheathing";
 
 /** A prism: `profile` in the u, v plane from `origin`, pushed `depth` along u × v. Inches. */
 export interface SolidView {
   label: string;
-  /** A wall id, `floor` or `roof`. */
+  /** A wall id, `floor`, `roof`, `porch` or `deck`. */
   part: string;
   kind: SolidKind;
   size: string | null;
@@ -175,6 +199,8 @@ export interface ProjectJson {
   building?: BuildingJson;
   floor?: FloorJson;
   roof?: RoofJson;
+  porch?: PorchJson;
+  sheathing?: SheathingJson;
   wall: WallJson[];
 }
 
@@ -199,13 +225,47 @@ export interface FloorJson {
 }
 
 export interface RoofJson {
-  kind?: "lean_to";
+  kind?: "lean_to" | "gable";
   pitch: string;
   rafter: string;
   on_center?: string;
   front_overhang: string;
   back_overhang: string;
   fascia?: string;
+  /** Gable only. */
+  ridge?: string;
+  collar_tie?: string;
+}
+
+/** A porch roof on posts off the front wall. */
+export interface PorchJson {
+  depth?: string;
+  post?: string;
+  post_spacing?: string;
+  beam?: string;
+  beam_plies?: number;
+  rafter?: string;
+  pitch?: string;
+  overhang?: string;
+  ledger?: string;
+  ledger_height?: string;
+  deck?: DeckJson;
+}
+
+/** Decking on joists that hang from the floor's rim. */
+export interface DeckJson {
+  joist?: string;
+  beam?: string;
+  decking?: string;
+  gap?: string;
+  /** How far the deck's top sits below the subfloor's. */
+  step_down?: string;
+}
+
+/** Sheet thicknesses; a part left out isn't sheathed. */
+export interface SheathingJson {
+  wall?: string;
+  roof?: string;
 }
 
 export interface SheetJson {
@@ -266,7 +326,7 @@ export function model(project: ProjectJson): ModelView {
   return JSON.parse(wasm.model3d(JSON.stringify(forCore(project))));
 }
 
-/** A printable drawing as SVG: a wall id, `floor`, `subfloor`, `roof` or `rafter`. */
+/** A printable drawing as SVG: a wall id or a `DrawingView` id. */
 export function drawing(project: ProjectJson, which: string): string {
   return wasm.drawing(JSON.stringify(forCore(project)), which);
 }
