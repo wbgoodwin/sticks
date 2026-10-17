@@ -5,7 +5,8 @@
 //! numbers and never formats fractions itself.
 
 use serde::Serialize;
-use sticks_core::{Length, MemberKind, Project};
+use sticks_core::{Length, Member, MemberKind, Project};
+use sticks_cutlist::CutList;
 use sticks_rules::{frame_wall, FramedWall};
 use wasm_bindgen::prelude::*;
 
@@ -14,6 +15,12 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 pub fn frame(project_json: &str) -> Result<String, JsError> {
     frame_json(project_json).map_err(|e| JsError::new(&e))
+}
+
+/// Plans the stock boards for every wall that frames, and how to cut them.
+#[wasm_bindgen]
+pub fn cut_list(project_json: &str) -> Result<String, JsError> {
+    cut_list_json(project_json).map_err(|e| JsError::new(&e))
 }
 
 /// Reads a TOML project file into the JSON the app edits.
@@ -87,6 +94,123 @@ struct MarkView {
     kind: MemberKind,
     at_16: i64,
     at: String,
+}
+
+#[derive(Serialize)]
+struct CutListView {
+    boards: Vec<BoardView>,
+    bom: Vec<BomView>,
+    too_long: Vec<PieceView>,
+    summary: SummaryView,
+    /// Walls left out because they don't frame.
+    skipped_walls: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct BoardView {
+    id: String,
+    size: String,
+    length_16: i64,
+    length: String,
+    price_cents: Option<u32>,
+    pieces: Vec<PieceView>,
+    offcut_16: i64,
+    offcut: String,
+}
+
+#[derive(Serialize)]
+struct PieceView {
+    label: String,
+    kind: MemberKind,
+    size: String,
+    length_16: i64,
+    length: String,
+}
+
+#[derive(Serialize)]
+struct BomView {
+    size: String,
+    length_16: i64,
+    length: String,
+    count: usize,
+    unit_price_cents: Option<u32>,
+    total_cents: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct SummaryView {
+    boards: usize,
+    pieces: usize,
+    total_cents: Option<u64>,
+    waste_percent: f64,
+    kerf: String,
+}
+
+pub fn cut_list_json(project_json: &str) -> Result<String, String> {
+    let project: Project = serde_json::from_str(project_json).map_err(|e| e.to_string())?;
+    let mut members = Vec::new();
+    let mut skipped_walls = Vec::new();
+    for wall in &project.walls {
+        match frame_wall(wall, &project.rules) {
+            Ok(framed) => members.extend(framed.members.into_iter().map(|p| p.member)),
+            Err(_) => skipped_walls.push(wall.id.clone()),
+        }
+    }
+    let cl = sticks_cutlist::cut_list(&members, &project.stock, &project.rules)
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&cut_list_view(cl, skipped_walls)).map_err(|e| e.to_string())
+}
+
+fn cut_list_view(cl: CutList, skipped_walls: Vec<String>) -> CutListView {
+    let s = cl.summary();
+    let bom = cl
+        .bom()
+        .into_iter()
+        .map(|l| BomView {
+            size: l.size.to_string(),
+            length_16: l.length.sixteenths(),
+            length: l.length.to_string(),
+            count: l.count,
+            unit_price_cents: l.unit_price_cents,
+            total_cents: l.total_cents,
+        })
+        .collect();
+    CutListView {
+        summary: SummaryView {
+            boards: s.boards,
+            pieces: s.pieces,
+            total_cents: s.total_cents,
+            waste_percent: s.waste_percent,
+            kerf: format!("{:#}", cl.kerf),
+        },
+        bom,
+        boards: cl
+            .boards
+            .into_iter()
+            .map(|b| BoardView {
+                id: b.id,
+                size: b.size.to_string(),
+                length_16: b.length.sixteenths(),
+                length: b.length.to_string(),
+                price_cents: b.price_cents,
+                pieces: b.pieces.into_iter().map(piece_view).collect(),
+                offcut_16: b.offcut.sixteenths(),
+                offcut: format!("{:#}", b.offcut),
+            })
+            .collect(),
+        too_long: cl.too_long.into_iter().map(piece_view).collect(),
+        skipped_walls,
+    }
+}
+
+fn piece_view(m: Member) -> PieceView {
+    PieceView {
+        length: m.length.to_tape_string(),
+        label: m.label,
+        kind: m.kind,
+        size: m.size.to_string(),
+        length_16: m.length.sixteenths(),
+    }
 }
 
 pub fn frame_json(project_json: &str) -> Result<String, String> {
@@ -167,6 +291,31 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("too short"));
+    }
+
+    #[test]
+    fn plans_cuts_from_json() {
+        let json = r#"{
+            "name": "x",
+            "rules": {"kerf": "1/8\""},
+            "stock": [{"size": "2x4", "lengths": ["8'", "16'"], "prices_cents": [498, 1149]}],
+            "wall": [
+                {"id": "A", "length": "8'", "height": "97-1/8\""},
+                {"id": "B", "length": "8'", "height": "2\""}
+            ]
+        }"#;
+        let out: serde_json::Value = serde_json::from_str(&cut_list_json(json).unwrap()).unwrap();
+        assert_eq!(out["skipped_walls"][0], "B");
+        assert!(out["too_long"].as_array().unwrap().is_empty());
+        let pieces: usize = out["boards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["pieces"].as_array().unwrap().len())
+            .sum();
+        assert_eq!(pieces, out["summary"]["pieces"]);
+        assert!(out["summary"]["total_cents"].is_u64());
+        assert_eq!(out["bom"][0]["size"], "2x4");
     }
 
     #[test]

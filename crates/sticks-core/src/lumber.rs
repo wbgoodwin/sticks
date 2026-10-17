@@ -100,6 +100,31 @@ pub enum MemberKind {
     Post,
 }
 
+impl MemberKind {
+    /// Plain-English name for tables and labels, e.g. `king stud`.
+    pub fn name(self) -> &'static str {
+        match self {
+            MemberKind::BottomPlate => "bottom plate",
+            MemberKind::TopPlate => "top plate",
+            MemberKind::CapPlate => "cap plate",
+            MemberKind::Stud => "stud",
+            MemberKind::KingStud => "king stud",
+            MemberKind::JackStud => "jack stud",
+            MemberKind::Cripple => "cripple",
+            MemberKind::Header => "header",
+            MemberKind::Sill => "sill",
+            MemberKind::Blocking => "blocking",
+            MemberKind::RimJoist => "rim joist",
+            MemberKind::Joist => "joist",
+            MemberKind::Beam => "beam",
+            MemberKind::Ledger => "ledger",
+            MemberKind::Rafter => "rafter",
+            MemberKind::Fascia => "fascia",
+            MemberKind::Post => "post",
+        }
+    }
+}
+
 /// How a member's ends are cut.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

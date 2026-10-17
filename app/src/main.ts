@@ -1,7 +1,8 @@
-import { frame, loadCore, parseLength, type MemberView, type ProjectJson, type WallView } from "./core";
+import { cutList, frame, loadCore, parseLength, type MemberView, type ProjectJson, type WallView } from "./core";
+import { dollars, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES, type OpeningOutline } from "./elevation";
 import { renderPanel } from "./panel";
-import { load, save } from "./state";
+import { ensureStock, load, save } from "./state";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -17,13 +18,23 @@ app.innerHTML = `
       <div class="banner" hidden></div>
       <div class="tooltip" hidden></div>
     </div>
-    <section class="schedule" aria-label="Members">
-      <div class="legend"></div>
-      <table>
-        <thead><tr><th>Qty</th><th>Member</th><th>Size</th><th class="num">Length</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <ul class="warnings"></ul>
+    <section class="schedule">
+      <div class="tabs" role="tablist" aria-label="Lists">
+        <button type="button" role="tab" id="tab-members" aria-controls="members" aria-selected="true">Members</button>
+        <button type="button" role="tab" id="tab-shopping" aria-controls="shopping" aria-selected="false">Shopping list</button>
+        <button type="button" role="tab" id="tab-cuts" aria-controls="cuts" aria-selected="false">Cut list</button>
+        <span class="tab-summary"></span>
+      </div>
+      <div class="tab-panel" id="members" role="tabpanel" aria-labelledby="tab-members">
+        <div class="legend"></div>
+        <table>
+          <thead><tr><th>Qty</th><th>Member</th><th>Size</th><th class="num">Length</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <ul class="warnings"></ul>
+      </div>
+      <div class="tab-panel" id="shopping" role="tabpanel" aria-labelledby="tab-shopping" hidden></div>
+      <div class="tab-panel" id="cuts" role="tabpanel" aria-labelledby="tab-cuts" hidden></div>
     </section>
   </main>
 `;
@@ -33,8 +44,11 @@ const drawing = app.querySelector<HTMLDivElement>(".drawing")!;
 const svg = app.querySelector<SVGSVGElement>(".elevation")!;
 const banner = app.querySelector<HTMLDivElement>(".banner")!;
 const tooltip = app.querySelector<HTMLDivElement>(".tooltip")!;
-const tbody = app.querySelector<HTMLTableSectionElement>(".schedule tbody")!;
-const warnings = app.querySelector<HTMLUListElement>(".warnings")!;
+const tbody = app.querySelector<HTMLTableSectionElement>("#members tbody")!;
+const warnings = app.querySelector<HTMLUListElement>("#members .warnings")!;
+const shopping = app.querySelector<HTMLDivElement>("#shopping")!;
+const cuts = app.querySelector<HTMLDivElement>("#cuts")!;
+const tabSummary = app.querySelector<HTMLSpanElement>(".tab-summary")!;
 const stats = app.querySelector<HTMLDivElement>(".stats")!;
 const legend = app.querySelector<HTMLDivElement>(".legend")!;
 
@@ -43,6 +57,7 @@ let project: ProjectJson = load();
 let shown: { wall: WallView; openings: OpeningOutline[]; layoutFrom: "left" | "right" } | null = null;
 
 function update(): void {
+  if (ensureStock(project)) renderPanel(panel, project, events);
   save(project);
   app.querySelector(".project-name")!.textContent = project.name;
   let wall: WallView;
@@ -61,6 +76,26 @@ function update(): void {
   shown = { wall, openings: outlines(project), layoutFrom: project.rules.layout_from };
   draw();
   renderSchedule(wall);
+  renderPlan();
+}
+
+function renderPlan(): void {
+  try {
+    const plan = cutList(project);
+    renderShopping(shopping, plan);
+    renderCuts(cuts, plan);
+    const s = plan.summary;
+    const cost = s.total_cents === null ? "" : ` · ${dollars(s.total_cents)}`;
+    tabSummary.textContent = `${s.boards} boards · ${s.waste_percent.toFixed(1)}% waste${cost}`;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const p = document.createElement("p");
+    p.className = "plan-error";
+    p.textContent = message.charAt(0).toUpperCase() + message.slice(1);
+    shopping.replaceChildren(p);
+    cuts.replaceChildren(p.cloneNode(true));
+    tabSummary.textContent = "";
+  }
 }
 
 function showProblem(message: string): void {
@@ -162,6 +197,27 @@ svg.addEventListener("pointerleave", () => {
 });
 
 new ResizeObserver(draw).observe(drawing);
+
+const tabs = [...app.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+function selectTab(tab: HTMLButtonElement): void {
+  for (const t of tabs) {
+    const selected = t === tab;
+    t.setAttribute("aria-selected", String(selected));
+    t.tabIndex = selected ? 0 : -1;
+    app.querySelector<HTMLElement>(`#${t.getAttribute("aria-controls")}`)!.hidden = !selected;
+  }
+}
+for (const [i, tab] of tabs.entries()) {
+  tab.tabIndex = i === 0 ? 0 : -1;
+  tab.addEventListener("click", () => selectTab(tab));
+  tab.addEventListener("keydown", (e) => {
+    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    const next = tabs[(i + step + tabs.length) % tabs.length];
+    selectTab(next);
+    next.focus();
+  });
+}
 
 const events = {
   changed: update,

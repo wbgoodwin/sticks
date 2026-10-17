@@ -495,6 +495,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "sticks-core",
+ "sticks-cutlist",
+ "sticks-export",
  "sticks-rules",
 ]
 
@@ -511,10 +513,21 @@ dependencies = [
 [[package]]
 name = "sticks-cutlist"
 version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "sticks-core",
+ "sticks-rules",
+ "thiserror",
+]
 
 [[package]]
 name = "sticks-export"
 version = "0.1.0"
+dependencies = [
+ "sticks-core",
+ "sticks-cutlist",
+]
 
 [[package]]
 name = "sticks-rules"
@@ -533,6 +546,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sticks-core",
+ "sticks-cutlist",
  "sticks-rules",
  "wasm-bindgen",
 ]

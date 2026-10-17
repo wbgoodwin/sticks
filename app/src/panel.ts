@@ -2,7 +2,7 @@
 // re-frame. The panel is rebuilt only when its structure changes (an opening
 // added or removed), so typing never loses focus.
 
-import { parseLength, type OpeningKind, type ProjectJson, type WallJson } from "./core";
+import { parseLength, type OpeningKind, type ProjectJson, type StockJson, type WallJson } from "./core";
 import { newOpening } from "./state";
 
 export interface PanelEvents {
@@ -173,6 +173,7 @@ export function renderPanel(root: HTMLElement, project: ProjectJson, events: Pan
     ),
     openingsSection(wall, events),
     teesSection(wall, events),
+    lumberSection(project, events),
   );
 }
 
@@ -323,4 +324,124 @@ function freeSpot(wall: WallJson): string {
 function midpoint(wall: WallJson): string {
   const len = parseLength(wall.length);
   return "ok" in len ? `${Math.round(len.ok / 32)}"` : "48\"";
+}
+
+function lumberSection(project: ProjectJson, events: PanelEvents): HTMLElement {
+  const rules = project.rules;
+  const cards = (project.stock ?? []).map((stock) =>
+    h(
+      "div",
+      { class: "card" },
+      h("div", { class: "card-head" }, h("span", { class: "card-title" }, stock.size)),
+      h(
+        "div",
+        { class: "stock-head", "aria-hidden": "true" },
+        h("span", {}, "Length"),
+        h("span", {}, "Price each"),
+      ),
+      ...stock.lengths.map((_, i) => stockRow(stock, i, events)),
+      h(
+        "div",
+        { class: "add-row" },
+        h(
+          "button",
+          {
+            type: "button",
+            class: "add-button",
+            onclick: () => {
+              stock.lengths.push(nextLength(stock));
+              if (stock.prices_cents.length > 0) stock.prices_cents.push(null);
+              events.restructured();
+            },
+          },
+          "+ Length",
+        ),
+      ),
+    ),
+  );
+  return h(
+    "section",
+    { class: "panel-section" },
+    h("h2", {}, "Lumber yard"),
+    h(
+      "p",
+      { class: "section-hint" },
+      "Boards the cut list can buy. With a price on every length it plans for the lowest cost; otherwise for the least lumber.",
+    ),
+    lengthField("Saw kerf", () => rules.kerf ?? '1/8"', (v) => (rules.kerf = v), events, "Lost to the blade on every cut"),
+    ...cards,
+  );
+}
+
+function stockRow(stock: StockJson, i: number, events: PanelEvents): HTMLElement {
+  const message = h("div", { class: "field-error", role: "alert" });
+  const price = h("input", {
+    type: "text",
+    inputmode: "decimal",
+    placeholder: "$",
+    value: formatCents(stock.prices_cents[i] ?? null),
+    autocomplete: "off",
+    "aria-label": `${stock.size} ${stock.lengths[i]} price`,
+    oninput: () => {
+      const cents = parseCents(price.value);
+      if (cents === undefined) {
+        price.classList.add("invalid");
+        message.textContent = "Try a price like 4.98";
+        return;
+      }
+      price.classList.remove("invalid");
+      message.textContent = "";
+      while (stock.prices_cents.length < stock.lengths.length) stock.prices_cents.push(null);
+      stock.prices_cents[i] = cents;
+      if (stock.prices_cents.every((p) => p === null)) stock.prices_cents = [];
+      events.changed();
+    },
+  });
+  const length = lengthField(`${stock.size} length`, () => stock.lengths[i], (v) => (stock.lengths[i] = v), events);
+  // The card's column heads label these rows.
+  length.querySelector(".field-label")?.remove();
+  return h(
+    "div",
+    { class: "stock-row" },
+    length,
+    h("label", { class: "field" }, price, message),
+    h(
+      "button",
+      {
+        type: "button",
+        class: "icon-button",
+        "aria-label": `Remove ${stock.size} ${stock.lengths[i]}`,
+        title: "Remove",
+        disabled: stock.lengths.length === 1,
+        onclick: () => {
+          stock.lengths.splice(i, 1);
+          stock.prices_cents.splice(i, 1);
+          events.restructured();
+        },
+      },
+      "×",
+    ),
+  );
+}
+
+/** Cents from `4.98` or `$4.98`; null when blank; undefined when unreadable. */
+function parseCents(text: string): number | null | undefined {
+  const t = text.trim().replace(/^\$\s*/, "");
+  if (t === "") return null;
+  const m = /^(\d+)(?:\.(\d{0,2}))?$/.exec(t);
+  if (!m) return undefined;
+  return Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
+}
+
+function formatCents(cents: number | null): string {
+  return cents === null ? "" : (cents / 100).toFixed(2);
+}
+
+/** Two feet past the longest length on the list. */
+function nextLength(stock: StockJson): string {
+  const longest = Math.max(
+    0,
+    ...stock.lengths.map(parseLength).map((r) => ("ok" in r ? r.ok : 0)),
+  );
+  return `${Math.round(longest / 192) + 2}'`;
 }

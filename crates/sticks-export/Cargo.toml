@@ -6,3 +6,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+sticks-core.workspace = true
+sticks-cutlist.workspace = true

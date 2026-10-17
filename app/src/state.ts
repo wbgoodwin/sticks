@@ -1,6 +1,6 @@
 // The project being edited, kept in local storage between sessions.
 
-import type { OpeningJson, OpeningKind, ProjectJson } from "./core";
+import type { OpeningJson, OpeningKind, ProjectJson, StockJson } from "./core";
 
 const KEY = "sticks.project.v1";
 
@@ -8,7 +8,11 @@ const KEY = "sticks.project.v1";
 export function defaultProject(): ProjectJson {
   return {
     name: "Backyard shed",
-    rules: { on_center: '16"', wall_lumber: "2x4", layout_from: "left" },
+    rules: { on_center: '16"', wall_lumber: "2x4", layout_from: "left", kerf: '1/8"' },
+    stock: [
+      { size: "2x4", lengths: ["8'", "10'", "12'", "16'"], prices_cents: [] },
+      newStock("2x8"),
+    ],
     wall: [
       {
         id: "front",
@@ -49,6 +53,35 @@ export function newOpening(kind: OpeningKind, offset: string): OpeningJson {
     case "penetration":
       return { kind, offset, width: '4"', height: '4"', sill_height: "1'", header: "2x4" };
   }
+}
+
+/** What a yard usually carries when the project doesn't say. */
+export function newStock(size: string): StockJson {
+  return { size, lengths: ["8'", "10'", "12'", "14'", "16'"], prices_cents: [] };
+}
+
+/**
+ * Adds stock for any lumber size the frame uses but the yard list lacks, so
+ * every size can be priced. Returns whether anything was added.
+ */
+export function ensureStock(project: ProjectJson): boolean {
+  project.stock ??= [];
+  const stock = project.stock;
+  const used = [project.rules.wall_lumber, ...project.wall.flatMap((w) => w.opening.map((o) => o.header))];
+  let added = false;
+  for (const size of used) {
+    if (!stock.some((s) => s.size === size)) {
+      stock.push(newStock(size));
+      added = true;
+    }
+  }
+  if (added) stock.sort((a, b) => sizeOrder(a.size) - sizeOrder(b.size));
+  return added;
+}
+
+function sizeOrder(size: string): number {
+  const [t, w] = size.split("x").map(Number);
+  return t * 100 + w;
 }
 
 export function load(): ProjectJson {
