@@ -10,7 +10,8 @@ certify anything structurally.
 
 ## Status
 
-Milestone M3 (floor and lean-to roof). One project file frames a whole
+Milestone M4 (the app). The whole shed can be designed in the app, in a
+browser or on the desktop; see [The app](#the-app). One project file frames a whole
 building: a floor on beams and piers, four outside walls generated from the
 footprint, and a lean-to roof whose pitch sets the back and side wall
 heights. From that come the shopping list (lumber and subfloor sheets), a
@@ -59,10 +60,28 @@ Walls with other ids (an interior partition, say) give their own `length`,
 
 ## The app
 
-A desktop window (Tauri) that edits one wall and redraws its elevation, its
-shopping list and its cut list as you type. Plate splices show in red. The
-floor, roof and whole-building editing arrive in the app with M4. The same page runs in a browser,
-since all framing happens in the Rust core compiled to WebAssembly.
+A desktop window (Tauri) for designing the whole shed. The panel on the left
+sets the footprint, the front wall height, the roof pitch and overhangs, the
+floor's joists, beams and piers, each wall's doors, windows and penetrations,
+and the lumber yard's stock and prices. Everything redraws as you type:
+
+- **3D**: every member, pier and subfloor sheet in place. Drag to orbit,
+  scroll to zoom, hover a member to name it, click it for its size, length and
+  cuts. Hide the roof, walls, subfloor or floor framing to see inside.
+- **Front, Back, Left, Right**: each wall's elevation with stud positions
+  measured from the layout end. Plate splices show in red.
+- **Floor, Subfloor, Roof, Rafter**: the printed framing plans and rafter
+  detail.
+- **Shopping list and cut list** for the whole project, with the total when
+  every stock length has a price.
+
+**Print** opens the build packet (the shopping list, every drawing and the cut
+list on letter pages) to print or download. **Open** and **Save** read and
+write the TOML project file, and **New** starts from the lean-to shed or a
+single wall. The app keeps your work between sessions.
+
+The same page runs in a browser with nothing to install, since all framing
+happens in the Rust core compiled to WebAssembly.
 
 You need Node 22, the `wasm32-unknown-unknown` Rust target, and the
 `wasm-bindgen` CLI at the version pinned in `crates/sticks-wasm/Cargo.toml`:

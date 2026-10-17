@@ -7,7 +7,9 @@
 use serde::Serialize;
 use sticks_core::{Length, Member, MemberKind, Project};
 use sticks_cutlist::{cut_list_with_sheets, CutList};
-use sticks_rules::{frame_project, FramedWall, SIDES};
+use sticks_rules::{
+    bounds, frame_project, model, wall_ids, FramedProject, FramedWall, Placed, Solid, SolidKind,
+};
 use wasm_bindgen::prelude::*;
 
 /// Frames every wall in a project given as JSON (the same shape as the TOML
@@ -59,9 +61,75 @@ pub fn format_length(sixteenths: i32, inches_only: bool) -> String {
     }
 }
 
+/// Every member, pier and subfloor sheet placed in the building, for the 3D
+/// view.
+#[wasm_bindgen]
+pub fn model3d(project_json: &str) -> Result<String, JsError> {
+    model_json(project_json).map_err(|e| JsError::new(&e))
+}
+
+/// One printable drawing as SVG: a wall by its id, or `floor`, `subfloor`,
+/// `roof` or `rafter`.
+#[wasm_bindgen]
+pub fn drawing(project_json: &str, which: &str) -> Result<String, JsError> {
+    drawing_svg(project_json, which).map_err(|e| JsError::new(&e))
+}
+
+/// The whole build packet as one HTML page to print.
+#[wasm_bindgen]
+pub fn print_packet(project_json: &str) -> Result<String, JsError> {
+    print_html(project_json).map_err(|e| JsError::new(&e))
+}
+
 #[derive(Serialize)]
 struct FrameView {
     walls: Vec<WallView>,
+    floor: Option<PlanView>,
+    roof: Option<PlanView>,
+}
+
+/// The floor or roof framing in plan, seen from above.
+#[derive(Serialize)]
+struct PlanView {
+    width_16: i64,
+    depth_16: i64,
+    members: Vec<MemberView>,
+    warnings: Vec<String>,
+    /// Set when the part can't be framed; the other fields are then empty.
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ModelView {
+    solids: Vec<SolidView>,
+    /// `[min, max]` corners in inches, or null when nothing framed.
+    bounds: Option<[[f64; 3]; 2]>,
+    /// Parts left out because they don't frame.
+    skipped: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SolidView {
+    label: String,
+    part: String,
+    kind: SolidKind,
+    size: Option<String>,
+    length: Option<String>,
+    cuts: Vec<String>,
+    profile: Vec<[f64; 2]>,
+    origin: [f64; 3],
+    u: [f64; 3],
+    v: [f64; 3],
+    depth: f64,
+}
+
+#[derive(Serialize)]
+struct OpeningView {
+    name: String,
+    x_16: i64,
+    y_16: i64,
+    w_16: i64,
+    h_16: i64,
 }
 
 #[derive(Serialize)]
@@ -74,6 +142,7 @@ struct WallView {
     members: Vec<MemberView>,
     marks: Vec<MarkView>,
     splices: Vec<SpliceView>,
+    openings: Vec<OpeningView>,
     warnings: Vec<String>,
     /// Set when the wall can't be framed; the other fields are then empty.
     error: Option<String>,
@@ -237,25 +306,19 @@ fn piece_view(m: Member) -> PieceView {
     }
 }
 
-pub fn frame_json(project_json: &str) -> Result<String, String> {
+fn framed(project_json: &str) -> Result<(Project, FramedProject), String> {
     let project: Project = serde_json::from_str(project_json).map_err(|e| e.to_string())?;
     let framed = frame_project(&project).map_err(|e| e.to_string())?;
+    Ok((project, framed))
+}
+
+pub fn frame_json(project_json: &str) -> Result<String, String> {
+    let (project, framed) = framed(project_json)?;
     // Walls come back in the order frame_project lists them.
-    let mut ids: Vec<String> = Vec::new();
-    if project.building.is_some() {
-        ids.extend(SIDES.iter().map(|s| s.to_string()));
-    }
-    ids.extend(
-        project
-            .walls
-            .iter()
-            .filter(|w| project.building.is_none() || !SIDES.contains(&w.id.as_str()))
-            .map(|w| w.id.clone()),
-    );
     let walls = framed
         .walls
         .into_iter()
-        .zip(ids)
+        .zip(wall_ids(&project))
         .map(|(result, id)| match result {
             Ok(framed) => wall_view(framed),
             Err(e) => {
@@ -271,13 +334,145 @@ pub fn frame_json(project_json: &str) -> Result<String, String> {
                     members: Vec::new(),
                     marks: Vec::new(),
                     splices: Vec::new(),
+                    openings: Vec::new(),
                     warnings: Vec::new(),
                     error: Some(e.reason),
                 }
             }
         })
         .collect();
-    serde_json::to_string(&FrameView { walls }).map_err(|e| e.to_string())
+    let floor = framed.floor.map(|r| match r {
+        Ok(f) => plan_view(f.width, f.depth, &f.members, f.warnings),
+        Err(e) => plan_error(e.reason),
+    });
+    let roof = framed.roof.map(|r| match r {
+        Ok(f) => plan_view(f.width, f.depth, &f.members, f.warnings),
+        Err(e) => plan_error(e.reason),
+    });
+    serde_json::to_string(&FrameView { walls, floor, roof }).map_err(|e| e.to_string())
+}
+
+fn plan_view(width: Length, depth: Length, members: &[Placed], warnings: Vec<String>) -> PlanView {
+    PlanView {
+        width_16: width.sixteenths(),
+        depth_16: depth.sixteenths(),
+        members: members.iter().cloned().map(member_view).collect(),
+        warnings,
+        error: None,
+    }
+}
+
+fn plan_error(reason: String) -> PlanView {
+    PlanView {
+        width_16: 0,
+        depth_16: 0,
+        members: Vec::new(),
+        warnings: Vec::new(),
+        error: Some(reason),
+    }
+}
+
+fn member_view(p: Placed) -> MemberView {
+    MemberView {
+        length: p.member.length.to_tape_string(),
+        label: p.member.label,
+        kind: p.member.kind,
+        size: p.member.size.to_string(),
+        length_16: p.member.length.sixteenths(),
+        x_16: p.rect.x.sixteenths(),
+        y_16: p.rect.y.sixteenths(),
+        w_16: p.rect.w.sixteenths(),
+        h_16: p.rect.h.sixteenths(),
+        outline_16: p
+            .outline
+            .iter()
+            .map(|(x, y)| [x.sixteenths(), y.sixteenths()])
+            .collect(),
+    }
+}
+
+pub fn model_json(project_json: &str) -> Result<String, String> {
+    let (project, framed) = framed(project_json)?;
+    let solids = model(&project, &framed);
+    let view = ModelView {
+        bounds: bounds(&solids),
+        skipped: framed.errors().iter().map(|e| e.part.clone()).collect(),
+        solids: solids.into_iter().map(solid_view).collect(),
+    };
+    serde_json::to_string(&view).map_err(|e| e.to_string())
+}
+
+fn solid_view(s: Solid) -> SolidView {
+    SolidView {
+        size: s.member.as_ref().map(|m| m.size.to_string()),
+        length: s.member.as_ref().map(|m| m.length.to_tape_string()),
+        cuts: s
+            .member
+            .iter()
+            .flat_map(|m| &m.cuts)
+            .map(|c| c.describe())
+            .collect(),
+        label: s.label,
+        part: s.part,
+        kind: s.kind,
+        profile: s.profile,
+        origin: s.origin,
+        u: s.u,
+        v: s.v,
+        depth: s.depth,
+    }
+}
+
+pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
+    let (project, framed) = framed(project_json)?;
+    let name = &project.name;
+    let from = project.rules.layout_from;
+    let unframed = |part: &str| format!("the {part} doesn't frame");
+    match which {
+        "floor" | "subfloor" => {
+            let floor = framed
+                .floor
+                .ok_or("this project has no floor")?
+                .map_err(|e| e.reason)?;
+            Ok(if which == "floor" {
+                sticks_export::floor_svg(name, &floor, from)
+            } else {
+                sticks_export::subfloor_svg(name, &floor)
+            })
+        }
+        "roof" | "rafter" => {
+            let roof = framed
+                .roof
+                .ok_or("this project has no roof")?
+                .map_err(|e| e.reason)?;
+            Ok(if which == "roof" {
+                sticks_export::roof_svg(name, &roof, from)
+            } else {
+                sticks_export::rafter_svg(name, &roof)
+            })
+        }
+        id => {
+            let i = wall_ids(&project)
+                .iter()
+                .position(|w| w == id)
+                .ok_or_else(|| format!("there is no wall {id}"))?;
+            let wall = framed.walls[i].as_ref().map_err(|_| unframed("wall"))?;
+            Ok(sticks_export::wall_svg(name, wall, from))
+        }
+    }
+}
+
+pub fn print_html(project_json: &str) -> Result<String, String> {
+    let (project, framed) = framed(project_json)?;
+    let cl = cut_list_with_sheets(
+        &framed.members(),
+        &framed.sheet_pieces(),
+        &project.stock,
+        &project.sheets,
+        &project.rules,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(sticks_export::print_html(&project, &framed, &cl))
 }
 
 fn wall_view(w: FramedWall) -> WallView {
@@ -287,26 +482,7 @@ fn wall_view(w: FramedWall) -> WallView {
         height_16: w.height.sixteenths(),
         left_height_16: w.left_height.sixteenths(),
         right_height_16: w.right_height.sixteenths(),
-        members: w
-            .members
-            .into_iter()
-            .map(|p| MemberView {
-                length: p.member.length.to_tape_string(),
-                label: p.member.label,
-                kind: p.member.kind,
-                size: p.member.size.to_string(),
-                length_16: p.member.length.sixteenths(),
-                x_16: p.rect.x.sixteenths(),
-                y_16: p.rect.y.sixteenths(),
-                w_16: p.rect.w.sixteenths(),
-                h_16: p.rect.h.sixteenths(),
-                outline_16: p
-                    .outline
-                    .iter()
-                    .map(|(x, y)| [x.sixteenths(), y.sixteenths()])
-                    .collect(),
-            })
-            .collect(),
+        members: w.members.into_iter().map(member_view).collect(),
         splices: w
             .splices
             .into_iter()
@@ -324,6 +500,17 @@ fn wall_view(w: FramedWall) -> WallView {
                 label: m.label,
                 kind: m.kind,
                 at_16: m.at.sixteenths(),
+            })
+            .collect(),
+        openings: w
+            .openings
+            .into_iter()
+            .map(|o| OpeningView {
+                name: o.name,
+                x_16: o.rect.x.sixteenths(),
+                y_16: o.rect.y.sixteenths(),
+                w_16: o.rect.w.sixteenths(),
+                h_16: o.rect.h.sixteenths(),
             })
             .collect(),
         warnings: w.warnings,
@@ -390,7 +577,7 @@ mod tests {
             .iter()
             .map(|w| w["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, SIDES);
+        assert_eq!(ids, sticks_rules::SIDES);
         let left = &out["walls"][2];
         assert!(left["error"].is_null());
         assert_ne!(left["left_height_16"], left["right_height_16"]);
@@ -408,6 +595,35 @@ mod tests {
             .unwrap()
             .iter()
             .any(|l| l["size"] == "3/4\" sheet"));
+    }
+
+    #[test]
+    fn models_drawings_and_packet() {
+        let json = project_from_toml(include_str!("../../../examples/shed.toml")).unwrap();
+        let out: serde_json::Value = serde_json::from_str(&frame_json(&json).unwrap()).unwrap();
+        assert!(out["floor"]["error"].is_null());
+        assert!(!out["roof"]["members"].as_array().unwrap().is_empty());
+        assert_eq!(out["walls"][0]["openings"][0]["name"], "Door 1");
+
+        let m: serde_json::Value = serde_json::from_str(&model_json(&json).unwrap()).unwrap();
+        let solids = m["solids"].as_array().unwrap();
+        let rafter = solids.iter().find(|s| s["kind"] == "rafter").unwrap();
+        assert_eq!(rafter["part"], "roof");
+        assert!(rafter["cuts"][1]
+            .as_str()
+            .unwrap()
+            .starts_with("birdsmouth"));
+        assert!(solids.iter().any(|s| s["kind"] == "pier"));
+        assert_eq!(m["bounds"].as_array().unwrap().len(), 2);
+
+        for which in ["front", "left", "floor", "subfloor", "roof", "rafter"] {
+            assert!(
+                drawing_svg(&json, which).unwrap().starts_with("<svg"),
+                "{which}"
+            );
+        }
+        assert!(drawing_svg(&json, "porch").is_err());
+        assert!(print_html(&json).unwrap().contains("Shopping list"));
     }
 
     #[test]

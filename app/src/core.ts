@@ -50,6 +50,15 @@ export interface MarkView {
   at: string;
 }
 
+/** A rough opening's outline in its wall's elevation. */
+export interface OpeningView {
+  name: string;
+  x_16: number;
+  y_16: number;
+  w_16: number;
+  h_16: number;
+}
+
 export interface WallView {
   id: string;
   length_16: number;
@@ -59,8 +68,48 @@ export interface WallView {
   members: MemberView[];
   marks: MarkView[];
   splices: SpliceView[];
+  openings: OpeningView[];
   warnings: string[];
   error: string | null;
+}
+
+/** The floor or roof framing in plan. */
+export interface PlanView {
+  width_16: number;
+  depth_16: number;
+  members: MemberView[];
+  warnings: string[];
+  error: string | null;
+}
+
+export interface FrameView {
+  walls: WallView[];
+  floor: PlanView | null;
+  roof: PlanView | null;
+}
+
+export type SolidKind = MemberKind | "pier" | "subfloor";
+
+/** A prism: `profile` in the u, v plane from `origin`, pushed `depth` along u × v. Inches. */
+export interface SolidView {
+  label: string;
+  /** A wall id, `floor` or `roof`. */
+  part: string;
+  kind: SolidKind;
+  size: string | null;
+  length: string | null;
+  cuts: string[];
+  profile: [number, number][];
+  origin: [number, number, number];
+  u: [number, number, number];
+  v: [number, number, number];
+  depth: number;
+}
+
+export interface ModelView {
+  solids: SolidView[];
+  bounds: [[number, number, number], [number, number, number]] | null;
+  skipped: string[];
 }
 
 export type OpeningKind = "door" | "window" | "penetration";
@@ -118,9 +167,52 @@ export interface ProjectJson {
     wall_lumber: string;
     layout_from: "left" | "right";
     kerf?: string;
+    end_trim?: string;
+    corner_style?: string;
   };
   stock?: StockJson[];
+  sheet?: SheetJson[];
+  building?: BuildingJson;
+  floor?: FloorJson;
+  roof?: RoofJson;
   wall: WallJson[];
+}
+
+export interface BuildingJson {
+  /** Along the front wall. */
+  width: string;
+  depth: string;
+  /** The front wall; under a lean-to the others follow the pitch. */
+  height: string;
+}
+
+export interface FloorJson {
+  joist: string;
+  on_center?: string;
+  beam: string;
+  beam_plies: number;
+  beams: number;
+  support: "piers" | "skids";
+  pier_spacing: string;
+  pier_inset: string;
+  subfloor: string;
+}
+
+export interface RoofJson {
+  kind?: "lean_to";
+  pitch: string;
+  rafter: string;
+  on_center?: string;
+  front_overhang: string;
+  back_overhang: string;
+  fascia?: string;
+}
+
+export interface SheetJson {
+  thickness: string;
+  length?: string;
+  width?: string;
+  price_cents?: number;
 }
 
 /**
@@ -133,12 +225,16 @@ export interface StockJson {
   prices_cents: (number | null)[];
 }
 
+/**
+ * A wall. The building's own walls (front, back, left, right) take their
+ * length, height and ends from the building and leave those out.
+ */
 export interface WallJson {
   id: string;
-  length: string;
-  height: string;
-  left_end: WallEnd;
-  right_end: WallEnd;
+  length?: string;
+  height?: string;
+  left_end?: WallEnd;
+  right_end?: WallEnd;
   tees: string[];
   opening: OpeningJson[];
 }
@@ -156,8 +252,9 @@ export async function loadCore(): Promise<void> {
   await init();
 }
 
-export function frame(project: ProjectJson): WallView[] {
-  return JSON.parse(wasm.frame(JSON.stringify(forCore(project)))).walls;
+/** Throws when the project as a whole doesn't hang together. */
+export function frame(project: ProjectJson): FrameView {
+  return JSON.parse(wasm.frame(JSON.stringify(forCore(project))));
 }
 
 /** Throws when the stock can't be read (an unparseable length, say). */
@@ -165,13 +262,49 @@ export function cutList(project: ProjectJson): CutListView {
   return JSON.parse(wasm.cut_list(JSON.stringify(forCore(project))));
 }
 
-/** The project as the core reads it: partly priced stock counts as unpriced. */
+export function model(project: ProjectJson): ModelView {
+  return JSON.parse(wasm.model3d(JSON.stringify(forCore(project))));
+}
+
+/** A printable drawing as SVG: a wall id, `floor`, `subfloor`, `roof` or `rafter`. */
+export function drawing(project: ProjectJson, which: string): string {
+  return wasm.drawing(JSON.stringify(forCore(project)), which);
+}
+
+/** The whole build packet as one HTML page. */
+export function printPacket(project: ProjectJson): string {
+  return wasm.print_packet(JSON.stringify(forCore(project)));
+}
+
+/** Reads a project file. Throws with the reason when it can't. */
+export function projectFromToml(text: string): ProjectJson {
+  return JSON.parse(wasm.project_from_toml(text));
+}
+
+export function projectToToml(project: ProjectJson): string {
+  return wasm.project_to_toml(JSON.stringify(forCore(project)));
+}
+
+/**
+ * The project as the core reads it: partly priced stock counts as unpriced,
+ * and a building's walls with nothing on them are left out.
+ */
 function forCore(project: ProjectJson): ProjectJson {
   const stock = project.stock?.map((s) => ({
     ...s,
     prices_cents: s.prices_cents.every((p) => p !== null) ? s.prices_cents : [],
   }));
-  return { ...project, stock };
+  const wall = project.building
+    ? project.wall.filter((w) => !isSide(w.id) || w.opening.length > 0 || w.tees.length > 0)
+    : project.wall;
+  return { ...project, stock, wall };
+}
+
+export const SIDES = ["front", "back", "left", "right"] as const;
+
+/** Whether a wall id names a side of the building. */
+export function isSide(id: string): boolean {
+  return (SIDES as readonly string[]).includes(id);
 }
 
 /** Sixteenths of an inch, or the reason the text isn't a length. */

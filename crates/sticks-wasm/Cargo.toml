@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 sticks-core.workspace = true
 sticks-rules.workspace = true
 sticks-cutlist.workspace = true
+sticks-export.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Pinned: the wasm-bindgen CLI that generates the JS glue must match exactly.

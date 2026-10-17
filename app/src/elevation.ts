@@ -3,17 +3,8 @@
 
 import { formatLength, type MemberKind, type MemberView, type WallView } from "./core";
 
-export interface OpeningOutline {
-  name: string;
-  x16: number;
-  y16: number;
-  w16: number;
-  h16: number;
-}
-
 export interface DrawOptions {
   layoutFrom: "left" | "right";
-  openings: OpeningOutline[];
 }
 
 export const KIND_NAMES: Record<MemberKind, string> = {
@@ -80,14 +71,14 @@ export function drawElevation(
 
   // Openings first so framing draws over their outlines.
   const openings = el("g", { class: "openings" });
-  for (const o of options.openings) {
-    const x = X(o.x16);
-    const y = Y(o.y16 + o.h16);
-    const w = (o.w16 / 16) * s;
-    const hgt = (o.h16 / 16) * s;
+  for (const o of wall.openings) {
+    const x = X(o.x_16);
+    const y = Y(o.y_16 + o.h_16);
+    const w = (o.w_16 / 16) * s;
+    const hgt = (o.h_16 / 16) * s;
     openings.append(el("rect", { class: "rough-opening", x, y, width: w, height: hgt }));
     // Labels only where they fit inside the opening (about 7px a character).
-    const size = `${formatLength(o.w16, true)} × ${formatLength(o.h16, true)}`;
+    const size = `${formatLength(o.w_16, true)} × ${formatLength(o.h_16, true)}`;
     const cx = x + w / 2;
     const cy = y + hgt / 2;
     if (hgt > 40 && w > o.name.length * 7 + 12) {
