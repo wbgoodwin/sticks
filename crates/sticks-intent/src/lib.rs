@@ -16,7 +16,7 @@ pub use interpret::{
     interpret, questions, Answer, Answers, Ask, Choice, Interpretation, Question, Step, CONFIDENT,
 };
 
-use sticks_core::Project;
+use sticks_core::{Length, Project, RoofKind};
 use sticks_rules::frame_project;
 
 /// The project with `edits` applied, in order.
@@ -34,4 +34,53 @@ pub fn framing_problems(project: &Project) -> Vec<String> {
         Ok(f) => f.errors().iter().map(|e| e.to_string()).collect(),
         Err(e) => vec![e.to_string()],
     }
+}
+
+/// The design in a few lines of builder English, as context for the
+/// classifier and as `sticks check` prints it.
+pub fn describe(project: &Project) -> String {
+    let mut out = format!("{}\n", project.name);
+    out += &format!(
+        "  studs {:#} on center, kerf {}\n",
+        project.rules.on_center, project.rules.kerf
+    );
+    if let Some(b) = &project.building {
+        out += &format!(
+            "  building: {} wide, {} deep, {} tall at the front\n",
+            b.width, b.depth, b.height
+        );
+    }
+    if let Some(f) = &project.floor {
+        out += &format!(
+            "  floor: {} joists on {} {} beams\n",
+            f.joist, f.beams, f.beam
+        );
+    }
+    if let Some(r) = &project.roof {
+        let kind = match r.kind {
+            RoofKind::LeanTo => "lean-to",
+            RoofKind::Gable => "gable",
+        };
+        out += &format!("  roof: {kind} at {}, {} rafters\n", r.pitch, r.rafter);
+    }
+    if let Some(p) = &project.porch {
+        let deck = if p.deck.is_some() { " with a deck" } else { "" };
+        out += &format!("  porch: {} deep on {} posts{deck}\n", p.depth, p.post);
+    }
+    if let Some(s) = &project.sheathing {
+        let t = |l: Option<Length>| l.map_or("none".to_string(), |l| format!("{l:#}"));
+        out += &format!("  sheathing: walls {}, roof {}\n", t(s.wall), t(s.roof));
+    }
+    for wall in &project.walls {
+        let size = match (wall.length, wall.height) {
+            (Some(l), Some(h)) => format!("{l} long, {h} tall"),
+            _ => "sized by the building".to_string(),
+        };
+        out += &format!(
+            "  wall {}: {size}, {} opening(s)\n",
+            wall.id,
+            wall.openings.len()
+        );
+    }
+    out
 }

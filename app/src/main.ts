@@ -14,6 +14,7 @@ import {
   type SolidView,
   type WallView,
 } from "./core";
+import { mountCommand } from "./command";
 import { dollars, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES } from "./elevation";
 import { renderPanel, wallName, type PanelContext } from "./panel";
@@ -39,6 +40,7 @@ app.innerHTML = `
   </header>
   <aside class="panel" aria-label="Design"></aside>
   <main class="stage">
+    <div class="command"></div>
     <nav class="views" aria-label="Views"></nav>
     <div class="drawing">
       <svg class="elevation" role="img" aria-label="Wall elevation"></svg>
@@ -528,6 +530,19 @@ $<HTMLDivElement>(".menu-items").append(
 );
 document.addEventListener("click", (e) => {
   if (!menu.contains(e.target as Node)) menu.open = false;
+});
+
+mountCommand($<HTMLDivElement>(".command"), {
+  get project() {
+    return project;
+  },
+  replace(next) {
+    project = normalize(next);
+    info.hidden = true;
+    update();
+    renderPanel(panel, project, panelContext, events);
+    liveHints();
+  },
 });
 
 /** Starts editing another project. */

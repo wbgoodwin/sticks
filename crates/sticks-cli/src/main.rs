@@ -265,47 +265,5 @@ fn file_safe(id: &str) -> String {
 }
 
 fn check(project: &Project) {
-    println!("{}", project.name);
-    println!(
-        "  studs {:#} on center, kerf {}",
-        project.rules.on_center, project.rules.kerf
-    );
-    if let Some(b) = &project.building {
-        println!(
-            "  building: {} wide, {} deep, {} tall at the front",
-            b.width, b.depth, b.height
-        );
-    }
-    if let Some(f) = &project.floor {
-        println!(
-            "  floor: {} joists on {} {} beams",
-            f.joist, f.beams, f.beam
-        );
-    }
-    if let Some(r) = &project.roof {
-        let kind = match r.kind {
-            sticks_core::RoofKind::LeanTo => "lean-to",
-            sticks_core::RoofKind::Gable => "gable",
-        };
-        println!("  roof: {kind} at {}, {} rafters", r.pitch, r.rafter);
-    }
-    if let Some(p) = &project.porch {
-        let deck = if p.deck.is_some() { " with a deck" } else { "" };
-        println!("  porch: {} deep on {} posts{deck}", p.depth, p.post);
-    }
-    if let Some(s) = &project.sheathing {
-        let t = |l: Option<sticks_core::Length>| l.map_or("none".to_string(), |l| format!("{l:#}"));
-        println!("  sheathing: walls {}, roof {}", t(s.wall), t(s.roof));
-    }
-    for wall in &project.walls {
-        let size = match (wall.length, wall.height) {
-            (Some(l), Some(h)) => format!("{l} long, {h} tall"),
-            _ => "sized by the building".to_string(),
-        };
-        println!(
-            "  wall {}: {size}, {} opening(s)",
-            wall.id,
-            wall.openings.len()
-        );
-    }
+    print!("{}", sticks_intent::describe(project));
 }

@@ -56,10 +56,18 @@ plates. It frames the result and shows the change in boards and sheets.
 `--json` prints the same for a program, and `--write` saves once it frames
 (comments in the file are not kept).
 
-`app/scripts/jev-probe.ts` runs sample requests through
-[Jev](https://docs.typesafe.ai/introduction/quickstart):
-`cargo build -p sticks-cli`, then `TYPESAFE_API_KEY=... npm run probe:jev` in
-`app/`.
+In the app, the bar above the drawing takes the same requests (Ctrl K or
+⌘K). It shows each change, what was assumed, and buttons for anything left to
+ask, along with the change in boards and sheets. Nothing changes until you
+press Make, and Undo puts it back. The app asks
+[Jev](https://docs.typesafe.ai/introduction/quickstart) through the dev
+server, which adds your key so the page never holds it. Start it with the key
+set: `TYPESAFE_API_KEY=... npm run tauri dev` (or `npm run dev`), or put the
+key in `app/.env.local`. A bundled build can't reach Jev yet.
+
+`app/scripts/jev-probe.ts` runs sample requests through Jev from the command
+line: `cargo build -p sticks-cli`, then `TYPESAFE_API_KEY=... npm run
+probe:jev` in `app/`.
 
 ## Project file
 

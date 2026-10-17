@@ -562,6 +562,7 @@ dependencies = [
  "sticks-core",
  "sticks-cutlist",
  "sticks-export",
+ "sticks-intent",
  "sticks-rules",
  "wasm-bindgen",
 ]

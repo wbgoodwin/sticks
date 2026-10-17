@@ -345,6 +345,71 @@ export function projectToToml(project: ProjectJson): string {
   return wasm.project_to_toml(JSON.stringify(forCore(project)));
 }
 
+/** A multiple-choice question about a request, for Jev to answer. */
+export interface EditAsk {
+  type: "choice";
+  id: string;
+  /** The clause of the request it's about. */
+  text: string;
+  prompt: string;
+  options: EditOption[];
+}
+
+export interface EditOption {
+  label: string;
+  description: string;
+}
+
+/** An answer by question id: Jev's pick and how sure it was, or the user's. */
+export interface EditAnswer {
+  pick: string;
+  confidence: number;
+  by_user?: boolean;
+}
+
+/** A question only the user can settle. */
+export interface EditQuestion {
+  id: string;
+  text: string;
+  prompt: string;
+  options: EditOption[];
+  /** The request doesn't say, or Jev's best guess and how sure it was. */
+  reason: string;
+}
+
+/** One clause of a request and what it came to. */
+export interface EditStep {
+  text: string;
+  /** Each change in builder English. */
+  changes: string[];
+  assumed: string[];
+  question: EditQuestion | null;
+  problem: string | null;
+}
+
+export interface EditReading {
+  steps: EditStep[];
+  /** The project with every change made, once nothing is left to ask. */
+  project: ProjectJson | null;
+  /** Why the changed project won't frame, if it won't. */
+  problems: string[];
+}
+
+/** The design in a few lines, the context Jev reads with each request. */
+export function describeDesign(project: ProjectJson): string {
+  return wasm.describe_design(JSON.stringify(forCore(project)));
+}
+
+/** Every question about a request, for Jev to answer in one call. */
+export function editQuestions(project: ProjectJson, request: string): EditAsk[] {
+  return JSON.parse(wasm.edit_questions(JSON.stringify(forCore(project)), request));
+}
+
+/** What a request comes to with the answers so far. */
+export function readEdit(project: ProjectJson, request: string, answers: Record<string, EditAnswer>): EditReading {
+  return JSON.parse(wasm.read_edit(JSON.stringify(forCore(project)), request, JSON.stringify(answers)));
+}
+
 /**
  * The project as the core reads it: partly priced stock counts as unpriced,
  * and a building's walls with nothing on them are left out.
