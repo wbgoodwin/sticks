@@ -8,6 +8,8 @@ repository.workspace = true
 [dependencies]
 sticks-core.workspace = true
 sticks-rules.workspace = true
+sticks-cutlist.workspace = true
+sticks-export.workspace = true
 clap.workspace = true
 
 [[bin]]

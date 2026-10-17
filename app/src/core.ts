@@ -46,6 +46,48 @@ export interface WallView {
 export type OpeningKind = "door" | "window" | "penetration";
 export type WallEnd = "plain" | "corner";
 
+export interface PieceView {
+  label: string;
+  kind: MemberKind;
+  size: string;
+  length_16: number;
+  length: string;
+}
+
+export interface BoardView {
+  id: string;
+  size: string;
+  length_16: number;
+  length: string;
+  price_cents: number | null;
+  pieces: PieceView[];
+  offcut_16: number;
+  offcut: string;
+}
+
+export interface BomLineView {
+  size: string;
+  length_16: number;
+  length: string;
+  count: number;
+  unit_price_cents: number | null;
+  total_cents: number | null;
+}
+
+export interface CutListView {
+  boards: BoardView[];
+  bom: BomLineView[];
+  too_long: PieceView[];
+  summary: {
+    boards: number;
+    pieces: number;
+    total_cents: number | null;
+    waste_percent: number;
+    kerf: string;
+  };
+  skipped_walls: string[];
+}
+
 /** The project file's shape. Lengths stay as the builder typed them. */
 export interface ProjectJson {
   name: string;
@@ -53,8 +95,20 @@ export interface ProjectJson {
     on_center: string;
     wall_lumber: string;
     layout_from: "left" | "right";
+    kerf?: string;
   };
+  stock?: StockJson[];
   wall: WallJson[];
+}
+
+/**
+ * Boards the yard sells in one size. The app allows a blank price while one
+ * is being typed; the core needs a price for every length or none.
+ */
+export interface StockJson {
+  size: string;
+  lengths: string[];
+  prices_cents: (number | null)[];
 }
 
 export interface WallJson {
@@ -81,7 +135,21 @@ export async function loadCore(): Promise<void> {
 }
 
 export function frame(project: ProjectJson): WallView[] {
-  return JSON.parse(wasm.frame(JSON.stringify(project))).walls;
+  return JSON.parse(wasm.frame(JSON.stringify(forCore(project)))).walls;
+}
+
+/** Throws when the stock can't be read (an unparseable length, say). */
+export function cutList(project: ProjectJson): CutListView {
+  return JSON.parse(wasm.cut_list(JSON.stringify(forCore(project))));
+}
+
+/** The project as the core reads it: partly priced stock counts as unpriced. */
+function forCore(project: ProjectJson): ProjectJson {
+  const stock = project.stock?.map((s) => ({
+    ...s,
+    prices_cents: s.prices_cents.every((p) => p !== null) ? s.prices_cents : [],
+  }));
+  return { ...project, stock };
 }
 
 /** Sixteenths of an inch, or the reason the text isn't a length. */

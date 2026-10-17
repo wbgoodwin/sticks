@@ -10,19 +10,22 @@ certify anything structurally.
 
 ## Status
 
-Milestone M1 (walls). The core frames stud walls: plates, studs on center
+Milestone M2 (cut list). The core frames stud walls: plates, studs on center
 from either end, three-stud corners, partition tees, doors, windows and small
-penetrations, with layout marks for build day.
+penetrations, with layout marks for build day. It then plans which stock
+boards to buy and how to cut every piece from them.
 
 ```sh
-cargo run -p sticks-cli -- frame examples/shed.toml
+cargo run -p sticks-cli -- frame examples/shed.toml   # members and layout marks
+cargo run -p sticks-cli -- cuts examples/shed.toml    # shopping list and cut list
+cargo run -p sticks-cli -- build examples/shed.toml --out build/   # bom.csv, cut-list.csv
 ```
 
 ## The app
 
-A desktop window (Tauri) that edits one wall and redraws its elevation as you
-type. The same page runs in a browser, since all framing happens in the Rust
-core compiled to WebAssembly.
+A desktop window (Tauri) that edits one wall and redraws its elevation, its
+shopping list and its cut list as you type. The same page runs in a browser,
+since all framing happens in the Rust core compiled to WebAssembly.
 
 You need Node 22, the `wasm32-unknown-unknown` Rust target, and the
 `wasm-bindgen` CLI at the version pinned in `crates/sticks-wasm/Cargo.toml`:
@@ -58,6 +61,24 @@ These are the defaults; each one is a setting in the project file.
 - A `corner` end is the wall that runs through: end stud, 1-1/2" spacer
   blocks, then a backer stud. The butting wall's end stud is the third stud.
 - A partition tee puts a stud on each side of the partition.
+
+## Cut list
+
+For each lumber size, pieces are sorted longest first and each goes on the open
+board it leaves the least room on; when none fits, a new board is opened. The
+plan is tried a few ways (open the cheapest length that fits, or favor each
+stock length in turn) and the cheapest wins, then each board is cut down to
+the cheapest stock length that still holds its pieces.
+
+- Every cut loses the saw kerf (default 1/8"), and `end_trim` comes off each
+  board to square the factory end (default 0"). The last piece on a board may
+  run to its end.
+- With a price on every stock length of a size, the plan minimizes cost;
+  without prices it minimizes lumber bought.
+- A size with no `[[stock]]` entry is bought in 8', 10', 12', 14' and 16'
+  lengths.
+- A piece longer than the longest stock is never split by the cut list. It is
+  reported instead, until plate splitting over studs arrives in M3.
 
 ## Layout
 
