@@ -548,6 +548,7 @@ dependencies = [
  "serde_json",
  "sticks-core",
  "sticks-cutlist",
+ "sticks-export",
  "sticks-rules",
  "wasm-bindgen",
 ]

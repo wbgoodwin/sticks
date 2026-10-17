@@ -4,5 +4,6 @@ import { defineConfig } from "vite";
 export default defineConfig({
   clearScreen: false,
   server: { port: 5173, strictPort: true },
-  build: { target: "es2022", outDir: "dist" },
+  // three.js is most of the bundle; the app loads it once, offline.
+  build: { target: "es2022", outDir: "dist", chunkSizeWarningLimit: 900 },
 });

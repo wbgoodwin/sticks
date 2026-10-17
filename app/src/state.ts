@@ -1,47 +1,53 @@
 // The project being edited, kept in local storage between sessions.
 
-import type { OpeningJson, OpeningKind, ProjectJson, StockJson } from "./core";
+import shedToml from "../../examples/shed.toml?raw";
+import { isSide, projectFromToml, type OpeningJson, type OpeningKind, type ProjectJson, type StockJson } from "./core";
 
-const KEY = "sticks.project.v1";
+const KEY = "sticks.project.v2";
 
-/** The front wall of the reference shed from the PRD. */
-export function defaultProject(): ProjectJson {
-  return {
-    name: "Backyard shed",
+export type Template = "shed" | "wall";
+
+export const TEMPLATES: [Template, string][] = [
+  ["shed", "Lean-to shed"],
+  ["wall", "Single wall"],
+];
+
+/** A fresh project: the reference shed from the PRD, or one wall with a door. */
+export function fromTemplate(template: Template): ProjectJson {
+  if (template === "shed") return normalize(projectFromToml(shedToml));
+  return normalize({
+    name: "Partition wall",
     rules: { on_center: '16"', wall_lumber: "2x4", layout_from: "left", kerf: '1/8"' },
-    stock: [
-      { size: "2x4", lengths: ["8'", "10'", "12'", "16'"], prices_cents: [] },
-      newStock("2x8"),
-    ],
+    stock: [{ size: "2x4", lengths: ["8'", "10'", "12'", "16'"], prices_cents: [] }],
     wall: [
       {
-        id: "front",
-        length: "18'",
-        height: "10'",
-        left_end: "corner",
-        right_end: "corner",
+        id: "partition",
+        length: "12'",
+        height: "97-1/8\"",
+        left_end: "plain",
+        right_end: "plain",
         tees: [],
-        opening: [
-          {
-            kind: "door",
-            offset: "7' 3\"",
-            width: '38-1/2"',
-            height: '82-1/2"',
-            sill_height: "0",
-            header: "2x8",
-          },
-          {
-            kind: "penetration",
-            offset: "15'",
-            width: '4"',
-            height: '4"',
-            sill_height: "1'",
-            header: "2x4",
-          },
-        ],
+        opening: [newOpening("door", "3'")],
       },
     ],
-  };
+  });
+}
+
+/** Fills in what the project file leaves out, so the panel can edit it in place. */
+export function normalize(project: ProjectJson): ProjectJson {
+  project.wall ??= [];
+  for (const w of project.wall) {
+    w.opening ??= [];
+    w.tees ??= [];
+    for (const o of w.opening) o.sill_height ??= "0";
+    if (!project.building || !isSide(w.id)) {
+      w.left_end ??= "plain";
+      w.right_end ??= "plain";
+    }
+  }
+  for (const s of project.stock ?? []) s.prices_cents ??= [];
+  project.rules.layout_from ??= "left";
+  return project;
 }
 
 export function newOpening(kind: OpeningKind, offset: string): OpeningJson {
@@ -60,22 +66,44 @@ export function newStock(size: string): StockJson {
   return { size, lengths: ["8'", "10'", "12'", "14'", "16'"], prices_cents: [] };
 }
 
+/** The fascia the core uses when the roof names none: two sizes up from the rafter. */
+export function fascia(rafter: string): string {
+  const [t, w] = rafter.split("x").map(Number);
+  return `${t}x${w + 2}`;
+}
+
+/** Every lumber size the frame cuts. */
+export function sizesUsed(project: ProjectJson): string[] {
+  const sizes = [project.rules.wall_lumber, ...project.wall.flatMap((w) => w.opening.map((o) => o.header))];
+  if (project.floor) sizes.push(project.floor.joist, project.floor.beam);
+  if (project.roof) sizes.push(project.roof.rafter, project.roof.fascia ?? fascia(project.roof.rafter));
+  return [...new Set(sizes)];
+}
+
 /**
- * Adds stock for any lumber size the frame uses but the yard list lacks, so
- * every size can be priced. Returns whether anything was added.
+ * Adds stock for any lumber size the frame uses but the yard list lacks, and
+ * sheets for the subfloor, so everything can be priced. Returns whether
+ * anything was added.
  */
 export function ensureStock(project: ProjectJson): boolean {
   project.stock ??= [];
   const stock = project.stock;
-  const used = [project.rules.wall_lumber, ...project.wall.flatMap((w) => w.opening.map((o) => o.header))];
   let added = false;
-  for (const size of used) {
+  for (const size of sizesUsed(project)) {
     if (!stock.some((s) => s.size === size)) {
       stock.push(newStock(size));
       added = true;
     }
   }
   if (added) stock.sort((a, b) => sizeOrder(a.size) - sizeOrder(b.size));
+  if (project.floor) {
+    project.sheet ??= [];
+    const thickness = project.floor.subfloor;
+    if (!project.sheet.some((s) => s.thickness === thickness)) {
+      project.sheet.push({ thickness, length: "8'", width: "4'" });
+      added = true;
+    }
+  }
   return added;
 }
 
@@ -84,14 +112,15 @@ function sizeOrder(size: string): number {
   return t * 100 + w;
 }
 
-export function load(): ProjectJson {
+/** The saved project, or null when there is none or it can't be read. */
+export function load(): ProjectJson | null {
   try {
     const saved = localStorage.getItem(KEY);
-    if (saved) return JSON.parse(saved);
+    if (saved) return normalize(JSON.parse(saved));
   } catch {
     // Unreadable storage just means starting fresh.
   }
-  return defaultProject();
+  return null;
 }
 
 export function save(project: ProjectJson): void {
