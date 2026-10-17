@@ -1,21 +1,39 @@
 //! `sticks edit`: read a plain-English request, show what it would change,
 //! and save it once nothing is left to ask.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use sticks_core::Project;
-use sticks_intent::{apply_all, framing_problems, interpret, Answers, Interpretation};
+use sticks_intent::{
+    apply_all, framing_problems, interpret, questions, Answer, Answers, Interpretation,
+};
 
-pub fn run(
-    project: &Project,
-    path: &Path,
-    request: &str,
-    answers: &[String],
-    as_json: bool,
-    write: bool,
-) -> Result<(), String> {
-    let answers = parse_answers(answers)?;
+pub struct Opts {
+    pub questions: bool,
+    pub answers_file: Option<PathBuf>,
+    pub answers: Vec<String>,
+    pub json: bool,
+    pub write: bool,
+}
+
+pub fn run(project: &Project, path: &Path, request: &str, opts: &Opts) -> Result<(), String> {
+    if opts.questions {
+        let asks = serde_json::to_string_pretty(&questions(project, request))
+            .map_err(|e| e.to_string())?;
+        println!("{asks}");
+        return Ok(());
+    }
+    let mut answers = match &opts.answers_file {
+        Some(f) => {
+            let text = std::fs::read_to_string(f)
+                .map_err(|e| format!("can't read {}: {e}", f.display()))?;
+            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", f.display()))?
+        }
+        None => Answers::new(),
+    };
+    answers.extend(parse_answers(&opts.answers)?);
+    let (as_json, write) = (opts.json, opts.write);
     let reading = interpret(project, request, &answers);
     let preview = match reading.edits() {
         Some(edits) => Some(preview(project, &edits)?),
@@ -59,7 +77,7 @@ fn parse_answers(raw: &[String]) -> Result<Answers, String> {
     raw.iter()
         .map(|a| {
             a.split_once('=')
-                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+                .map(|(k, v)| (k.trim().to_string(), Answer::from_user(v.trim())))
                 .ok_or_else(|| format!("{a:?} isn't an answer; write it as ID=LABEL"))
         })
         .collect()
@@ -100,7 +118,7 @@ fn describe(reading: &Interpretation) -> String {
             out += &format!("    assumed: {a}\n");
         }
         if let Some(q) = &step.question {
-            out += &format!("  ? {}\n", q.prompt);
+            out += &format!("  ? {} ({})\n", q.prompt, q.reason);
             for c in &q.options {
                 out += &format!("      --answer {}={}   {}\n", q.id, c.label, c.description);
             }

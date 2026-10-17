@@ -38,6 +38,16 @@ impl Num {
         format!("{}{mark}", self.text).parse().ok()
     }
 
+    /// The number as a builder would write it back, like `20'` or `36`.
+    pub fn written(&self) -> String {
+        match (self.marked, self.unit) {
+            (true, _) => self.text.clone(),
+            (false, Some(Unit::Feet)) => format!("{}'", self.text),
+            (false, Some(Unit::Inches)) => format!("{}\"", self.text),
+            (false, None) => self.text.clone(),
+        }
+    }
+
     /// The amount as a plain number, ignoring units.
     pub fn amount(&self) -> Option<f64> {
         let t = self.text.trim_end_matches(['"', '\'']);
@@ -55,15 +65,6 @@ pub enum Tok {
     Pitch(Pitch),
     /// `AxB` or `A by B`.
     Pair(Num, Num),
-}
-
-impl Tok {
-    pub fn word(&self) -> Option<&str> {
-        match self {
-            Tok::Word(w) => Some(w),
-            _ => None,
-        }
-    }
 }
 
 /// Splits on commas, semicolons, sentence ends and joining words.

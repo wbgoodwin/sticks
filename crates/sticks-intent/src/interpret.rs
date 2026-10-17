@@ -1,6 +1,12 @@
-//! Turns a request into edits. Everything that words and numbers settle is
-//! settled here; what's left is a [`Question`] with a fixed set of options,
-//! for a classifier or the user to answer.
+//! Turns a request into edits.
+//!
+//! Rust reads what's notation: it splits the request into clauses and reads
+//! the lengths, pitches and sizes in each. Everything that's meaning (what
+//! kind of change, which wall, what a number is for) is a fixed-option
+//! question from [`questions`], answered by a classifier such as Jev. Rust
+//! then turns confident answers into edits; anything the classifier wasn't
+//! sure of, or the request doesn't say, comes back as a [`Question`] for the
+//! user.
 
 use std::collections::BTreeMap;
 
@@ -10,8 +16,52 @@ use sticks_core::{Length, Nominal, OpeningKind, Pitch, Project, RoofKind};
 use crate::edit::{kind_name, Dimension, Edit, Framing, Side};
 use crate::words::{clauses, lumber, tokens, Num, Tok, Unit};
 
-/// Answers to earlier questions, by question id.
-pub type Answers = BTreeMap<String, String>;
+/// Below this, a classifier's pick goes to the user to confirm.
+pub const CONFIDENT: f64 = 0.8;
+
+/// An answer to a question, by question id.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Answer {
+    /// The option label, or `yes` or `no` for a [`Ask::Fact`].
+    pub pick: String,
+    /// From zero to one.
+    pub confidence: f64,
+    /// The user answered, which settles it.
+    #[serde(default)]
+    pub by_user: bool,
+}
+
+impl Answer {
+    pub fn from_user(pick: &str) -> Self {
+        Answer {
+            pick: pick.to_string(),
+            confidence: 1.0,
+            by_user: true,
+        }
+    }
+}
+
+pub type Answers = BTreeMap<String, Answer>;
+
+/// A question for the classifier.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Ask {
+    /// Pick one option.
+    Choice {
+        id: String,
+        /// The clause it's about.
+        text: String,
+        prompt: String,
+        options: Vec<Choice>,
+    },
+    /// Rate whether a statement about the clause is true.
+    Fact {
+        id: String,
+        text: String,
+        statement: String,
+    },
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Interpretation {
@@ -47,7 +97,7 @@ pub struct Step {
     pub problem: Option<String>,
 }
 
-/// A choice between fixed options.
+/// A question for the user.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Question {
     /// Stable across runs of the same request: `{clause}.{slot}`.
@@ -56,9 +106,9 @@ pub struct Question {
     pub text: String,
     pub prompt: String,
     pub options: Vec<Choice>,
-    /// The clause has no words that bear on this, so a classifier could
-    /// only guess. Ask the user.
-    pub for_user: bool,
+    /// Why it's asked: the request doesn't say, or the classifier's pick
+    /// and how sure it was.
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,6 +177,39 @@ impl Intent {
     }
 }
 
+/// The intent option for requests that aren't about framing.
+const NOT_FRAMING: &str = "not_framing";
+
+/// What a number in a request is for.
+const ROLES: [(&str, &str); 7] = [
+    ("size", "The new size of what's being changed"),
+    ("change", "How much to add or take away"),
+    ("width", "How wide a new window or door is"),
+    ("height", "How tall a new window or door is"),
+    (
+        "from_left",
+        "How far a new window or door is from the wall's left end",
+    ),
+    (
+        "from_right",
+        "How far a new window or door is from the wall's right end",
+    ),
+    ("other", "Something else"),
+];
+
+/// Questions that come with a fact: "the request says which wall".
+const STATED: [(&str, &str); 6] = [
+    ("dimension", "which size of the building should change"),
+    ("direction", "whether it should get bigger or smaller"),
+    ("kind", "whether it's a window or a door"),
+    ("wall", "which wall"),
+    (
+        "framing",
+        "which framing members (studs, joists or rafters)",
+    ),
+    ("which", "which opening"),
+];
+
 enum Stop {
     Ask(Question),
     Problem(String),
@@ -162,22 +245,45 @@ fn opening_defaults(kind: OpeningKind) -> (Length, Length, Length, Nominal) {
 /// opening is 2-1/2" wider.
 const SLAB_WIDTHS: [i64; 9] = [24, 28, 30, 32, 34, 36, 42, 48, 72];
 
-/// The intent option for requests that aren't about framing.
-const NOT_FRAMING: &str = "not_framing";
+/// Every question a classifier should answer about `request`, in one batch.
+pub fn questions(project: &Project, request: &str) -> Vec<Ask> {
+    let empty = Answers::new();
+    clauses(request)
+        .into_iter()
+        .enumerate()
+        .flat_map(|(i, text)| {
+            let c = Clause::new(i, text, &empty, project);
+            let mut asks = Vec::new();
+            for slot in c.slots() {
+                let (prompt, options) = c.slot(&slot);
+                asks.push(Ask::Choice {
+                    id: c.id(&slot),
+                    text: c.text.clone(),
+                    prompt,
+                    options: options
+                        .into_iter()
+                        .map(|(label, description)| Choice { label, description })
+                        .collect(),
+                });
+                if let Some((_, topic)) = STATED.iter().find(|(s, _)| *s == slot) {
+                    asks.push(Ask::Fact {
+                        id: c.id(&format!("{slot}_stated")),
+                        text: c.text.clone(),
+                        statement: format!("The request says or clearly implies {topic}"),
+                    });
+                }
+            }
+            asks
+        })
+        .collect()
+}
 
 pub fn interpret(project: &Project, request: &str, answers: &Answers) -> Interpretation {
     let steps = clauses(request)
         .into_iter()
         .enumerate()
         .map(|(i, text)| {
-            let mut c = Clause {
-                index: i,
-                text: text.clone(),
-                toks: tokens(&text),
-                answers,
-                project,
-                assumed: Vec::new(),
-            };
+            let mut c = Clause::new(i, text.clone(), answers, project);
             let result = c.run();
             let mut step = Step {
                 text,
@@ -206,74 +312,33 @@ struct Clause<'a> {
     assumed: Vec<String>,
 }
 
-const REMOVE: &[&str] = &[
-    "remove", "delete", "drop", "no", "without", "lose", "rid", "ditch", "skip",
-];
-const GROW: &[&str] = &[
-    "wider", "deeper", "taller", "higher", "longer", "bigger", "larger", "more", "extend",
-    "increase", "add", "steeper", "raise",
-];
-const SHRINK: &[&str] = &[
-    "narrower",
-    "shallower",
-    "shorter",
-    "lower",
-    "smaller",
-    "less",
-    "reduce",
-    "decrease",
-    "shrink",
-    "flatter",
-    "trim",
-];
+/// A number's position among the clause's numbers, and the number.
+type Numbered<'n> = (usize, &'n Num);
 
-/// Words that carry no answer on their own.
-const FILLER: &[&str] = &[
-    "a", "an", "the", "it", "its", "this", "that", "to", "in", "into", "on", "at", "of", "for",
-    "with", "by", "from", "me", "i", "we", "my", "our", "some", "new", "another", "one", "put",
-    "make", "set", "want", "would", "like", "please", "let", "can", "could", "should", "be",
-    "need", "is", "change", "just", "bit", "little", "lot", "shed",
-];
-/// Words the interpreter already reads for meaning.
-const READ: &[&str] = &[
-    "window",
-    "door",
-    "penetration",
-    "opening",
-    "wall",
-    "side",
-    "porch",
-    "deck",
-    "roof",
-    "pitch",
-    "slope",
-    "overhang",
-    "stud",
-    "joist",
-    "rafter",
-    "spacing",
-];
-
-impl Clause<'_> {
-    fn has(&self, words: &[&str]) -> bool {
-        self.toks
-            .iter()
-            .filter_map(Tok::word)
-            .any(|w| words.contains(&w) || words.contains(&w.trim_end_matches('s')))
+impl<'a> Clause<'a> {
+    fn new(index: usize, text: String, answers: &'a Answers, project: &'a Project) -> Self {
+        Clause {
+            index,
+            toks: tokens(&text),
+            text,
+            answers,
+            project,
+            assumed: Vec::new(),
+        }
     }
 
-    fn has_phrase(&self, phrase: &str) -> bool {
-        let words: Vec<&str> = self.toks.iter().map(|t| t.word().unwrap_or("#")).collect();
-        words.join(" ").contains(phrase)
+    fn id(&self, slot: &str) -> String {
+        format!("{}.{slot}", self.index)
     }
 
-    fn nums(&self) -> Vec<&Num> {
+    fn nums(&self) -> Vec<Numbered<'_>> {
         self.toks
             .iter()
             .filter_map(|t| match t {
                 Tok::Num(n) => Some(n),
                 _ => None,
             })
+            .enumerate()
             .collect()
     }
 
@@ -284,10 +349,6 @@ impl Clause<'_> {
         })
     }
 
-    fn lumber(&self) -> Option<Nominal> {
-        self.pair().and_then(|(a, b)| lumber(a, b))
-    }
-
     fn pitch(&self) -> Option<Pitch> {
         self.toks.iter().find_map(|t| match t {
             Tok::Pitch(p) => Some(*p),
@@ -295,126 +356,213 @@ impl Clause<'_> {
         })
     }
 
-    /// +1 to grow, -1 to shrink, 0 for neither.
-    fn direction(&self) -> i64 {
-        match (self.has(GROW), self.has(SHRINK)) {
-            (true, false) => 1,
-            (false, true) => -1,
-            _ => 0,
+    /// The slots worth asking about for this clause.
+    fn slots(&self) -> Vec<String> {
+        let mut s: Vec<String> = [
+            "intent",
+            "dimension",
+            "direction",
+            "roof_kind",
+            "porch",
+            "deck",
+            "kind",
+            "wall",
+            "position",
+            "framing",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        if !self.openings().is_empty() {
+            s.push("which".into());
         }
+        s.extend(self.nums().iter().map(|(k, _)| format!("num{k}")));
+        s
     }
 
-    fn answer(&self, slot: &str) -> Option<&str> {
-        self.answers
-            .get(&format!("{}.{slot}", self.index))
-            .map(String::as_str)
-    }
-
-    fn ask(&self, slot: &str, prompt: &str, options: Vec<Choice>) -> Stop {
-        Stop::Ask(Question {
-            id: format!("{}.{slot}", self.index),
-            text: self.text.clone(),
-            prompt: prompt.to_string(),
-            options,
-            for_user: !self.has_unread_words(),
-        })
-    }
-
-    /// Whether any word is left once filler and the words already read are
-    /// set aside. "add a window" has none, so which wall is a pure guess.
-    fn has_unread_words(&self) -> bool {
-        self.toks.iter().filter_map(Tok::word).any(|w| {
-            let w = w.trim_end_matches('s');
-            ![FILLER, GROW, SHRINK, REMOVE, READ]
-                .iter()
-                .any(|list| list.contains(&w))
-        })
-    }
-
-    /// The answer to `slot` among `labels`, or a question offering them.
-    fn choose<T: Copy>(
-        &self,
-        slot: &str,
-        prompt: &str,
-        options: &[(T, String, String)],
-    ) -> Result<T, Stop> {
-        if let Some(a) = self.answer(slot) {
-            if let Some((v, ..)) = options.iter().find(|(_, l, _)| l == a) {
-                return Ok(*v);
-            }
-        }
-        let choices = options
-            .iter()
-            .map(|(_, label, description)| Choice {
-                label: label.clone(),
-                description: description.clone(),
-            })
-            .collect();
-        Err(self.ask(slot, prompt, choices))
-    }
-
-    fn intent(&self) -> Result<Intent, Stop> {
-        if let Some(i) = self
-            .answer("intent")
-            .and_then(|a| Intent::ALL.into_iter().find(|i| i.label() == a))
-        {
-            return Ok(i);
-        }
-        let opening = self.has(&["window", "door", "penetration", "opening"]);
-        let found = if opening && self.has(REMOVE) {
-            Some(Intent::RemoveOpening)
-        } else if opening {
-            Some(Intent::AddOpening)
-        } else if self.has(&["porch"]) {
-            Some(Intent::Porch)
-        } else if self.has(&["deck"]) {
-            Some(Intent::Deck)
-        } else if self.has(&["overhang", "eave"]) {
-            Some(Intent::Overhang)
-        } else if self.has(&["gable", "lean-to", "leanto"])
-            || self.has_phrase("shed roof")
-            || self.has_phrase("single slope")
-        {
-            Some(Intent::RoofKind)
-        } else if self.pitch().is_some() || self.has(&["pitch", "slope", "steeper", "flatter"]) {
-            Some(Intent::Pitch)
-        } else if self.has_phrase("on center") || self.has(&["oc", "spacing", "spaced"]) {
-            Some(Intent::Spacing)
-        } else if self.lumber().is_some() || self.has(&["stud", "joist", "rafter"]) {
-            Some(Intent::Lumber)
-        } else if self.dimension_words().next().is_some()
-            || self.pair().is_some()
-            || self.has(&["bigger", "smaller", "larger", "resize"])
-        {
-            Some(Intent::Resize)
-        } else {
-            None
+    /// The prompt and options for a slot.
+    fn slot(&self, slot: &str) -> (String, Vec<(String, String)>) {
+        let own = |v: &[(&str, &str)]| -> Vec<(String, String)> {
+            v.iter()
+                .map(|(l, d)| (l.to_string(), d.to_string()))
+                .collect()
         };
-        match found {
-            Some(i) => Ok(i),
-            None => {
-                if self.answer("intent") == Some(NOT_FRAMING) {
-                    return Err(Stop::Problem(
-                        "That isn't a change Sticks can make to the framing.".into(),
-                    ));
-                }
-                let mut options: Vec<_> = Intent::ALL
+        let b = self.project.building.as_ref();
+        match slot {
+            "intent" => {
+                let mut o: Vec<(String, String)> = Intent::ALL
                     .iter()
-                    .map(|i| (Some(*i), i.label().to_string(), i.description().to_string()))
+                    .map(|i| (i.label().to_string(), i.description().to_string()))
                     .collect();
-                options.push((
-                    None,
+                o.push((
                     NOT_FRAMING.into(),
                     "Something else, not a change to the framing".into(),
                 ));
-                match self.choose("intent", "What kind of change is this?", &options)? {
-                    Some(i) => Ok(i),
-                    None => Err(Stop::Problem(
-                        "That isn't a change Sticks can make to the framing.".into(),
-                    )),
-                }
+                ("What kind of change is this?".into(), o)
+            }
+            "dimension" => (
+                "Which size of the building should change?".into(),
+                Dimension::ALL
+                    .iter()
+                    .map(|d| {
+                        let word = match d {
+                            Dimension::Width => "along the front wall",
+                            Dimension::Depth => "front to back",
+                            Dimension::Height => "the front wall's height",
+                        };
+                        let now = b.map(|b| format!(", now {}", d.of(b))).unwrap_or_default();
+                        (
+                            d.label().to_string(),
+                            format!("The {} ({word}){now}", d.label()),
+                        )
+                    })
+                    .collect(),
+            ),
+            "direction" => (
+                "Should it get bigger or smaller (steeper or flatter, deeper or shallower)?".into(),
+                own(&[
+                    ("increase", "Bigger, longer, deeper, taller or steeper"),
+                    ("decrease", "Smaller, shorter, shallower, lower or flatter"),
+                ]),
+            ),
+            "roof_kind" => (
+                "Which roof shape?".into(),
+                own(&[
+                    ("gable", "Two slopes meeting at a ridge"),
+                    ("lean_to", "A single slope, also called a shed roof"),
+                ]),
+            ),
+            "porch" => (
+                "What should happen to the porch?".into(),
+                own(&[
+                    ("add_or_resize", "Add a porch or change its depth"),
+                    ("remove", "Take the porch off"),
+                ]),
+            ),
+            "deck" => (
+                "What should happen to the porch deck?".into(),
+                own(&[
+                    ("add", "Put a deck under the porch"),
+                    ("remove", "Take the deck out"),
+                    ("unmentioned", "The request doesn't mention a deck"),
+                ]),
+            ),
+            "kind" => (
+                "Window or door?".into(),
+                own(&[
+                    ("window", "A window"),
+                    ("door", "A door"),
+                    (
+                        "penetration",
+                        "A small hole, such as for a mini-split line set or a vent",
+                    ),
+                ]),
+            ),
+            "wall" => (
+                "Which wall?".into(),
+                self.wall_options()
+                    .into_iter()
+                    .map(|(_, l, d)| (l, d))
+                    .collect(),
+            ),
+            "position" => (
+                "Where along the wall?".into(),
+                own(&[
+                    ("centered", "Centered, or no place given"),
+                    ("left_end", "Near the wall's left end, seen from outside"),
+                    ("right_end", "Near the wall's right end, seen from outside"),
+                ]),
+            ),
+            "framing" => (
+                "Which framing members?".into(),
+                Framing::ALL
+                    .iter()
+                    .map(|f| (f.label().to_string(), format!("The {}", f.label())))
+                    .collect(),
+            ),
+            "which" => (
+                "Which opening?".into(),
+                self.openings()
+                    .into_iter()
+                    .map(|(_, l, d)| (l, d))
+                    .collect(),
+            ),
+            num => {
+                let k: usize = num.trim_start_matches("num").parse().unwrap_or(0);
+                let written = self
+                    .nums()
+                    .get(k)
+                    .map(|(_, n)| n.written())
+                    .unwrap_or_default();
+                (
+                    format!("In this request, what is {written} for?"),
+                    own(&ROLES),
+                )
             }
         }
+    }
+
+    /// The classifier's or user's pick for `slot`, or a question for the
+    /// user when there's none, it wasn't confident, or the request doesn't
+    /// say.
+    fn pick(&self, slot: &str) -> Result<String, Stop> {
+        let (prompt, options) = self.slot(slot);
+        let answer = self.answers.get(&self.id(slot));
+        let unstated = self
+            .answers
+            .get(&self.id(&format!("{slot}_stated")))
+            .is_some_and(|f| f.pick == "no" && f.confidence >= CONFIDENT);
+        let valid = |a: &&Answer| options.iter().any(|(l, _)| *l == a.pick);
+        let reason = match answer.filter(valid) {
+            Some(a) if a.by_user => return Ok(a.pick.clone()),
+            Some(_) if unstated => "The request doesn't say".to_string(),
+            Some(a) if a.confidence >= CONFIDENT => return Ok(a.pick.clone()),
+            Some(a) => format!("Best guess {} at {:.0}%", a.pick, a.confidence * 100.0),
+            None => "Not answered yet".to_string(),
+        };
+        Err(Stop::Ask(Question {
+            id: self.id(slot),
+            text: self.text.clone(),
+            prompt,
+            options: options
+                .into_iter()
+                .map(|(label, description)| Choice { label, description })
+                .collect(),
+            reason,
+        }))
+    }
+
+    /// A confident pick for a slot that has a sensible default, without
+    /// asking anyone.
+    fn maybe(&self, slot: &str) -> Option<String> {
+        self.answers
+            .get(&self.id(slot))
+            .filter(|a| a.by_user || a.confidence >= CONFIDENT)
+            .map(|a| a.pick.clone())
+    }
+
+    /// The numbers with a given role.
+    fn with_role(&self, roles: &[&str]) -> Result<Vec<(String, Num)>, Stop> {
+        let mut out = Vec::new();
+        for (k, n) in self.nums() {
+            let role = self.pick(&format!("num{k}"))?;
+            if roles.contains(&role.as_str()) {
+                out.push((role, n.clone()));
+            }
+        }
+        Ok(out)
+    }
+
+    fn intent(&self) -> Result<Intent, Stop> {
+        let pick = self.pick("intent")?;
+        if pick == NOT_FRAMING {
+            return Err(Stop::Problem(
+                "That isn't a change Sticks can make to the framing.".into(),
+            ));
+        }
+        Ok(Intent::ALL
+            .into_iter()
+            .find(|i| i.label() == pick)
+            .expect("picks are checked against the options"))
     }
 
     fn run(&mut self) -> Out {
@@ -432,51 +580,39 @@ impl Clause<'_> {
         }
     }
 
-    fn dimension_words(&self) -> impl Iterator<Item = Dimension> + '_ {
-        self.toks
-            .iter()
-            .filter_map(Tok::word)
-            .filter_map(|w| match w {
-                "wide" | "width" | "wider" | "narrower" | "narrow" => Some(Dimension::Width),
-                "deep" | "depth" | "deeper" | "shallower" => Some(Dimension::Depth),
-                "tall" | "height" | "taller" | "higher" | "high" | "shorter" | "raise"
-                | "lower" => Some(Dimension::Height),
-                _ => None,
-            })
-    }
-
-    /// `to` relative to `now`: a length after a grow or shrink word is a
-    /// change, a bare grow or shrink word moves by `step`.
-    fn amount(
-        &self,
-        now: Length,
-        given: Option<Length>,
-        step: Length,
-        what: &str,
-        [grow, shrink]: [&str; 2],
-    ) -> Result<Length, Stop> {
-        // "raise it to 10'" names the new size, even after a grow word.
-        let to_named = self
-            .toks
-            .windows(2)
-            .any(|w| w[0].word() == Some("to") && matches!(w[1], Tok::Num(_)));
-        let dir = if to_named { 0 } else { self.direction() };
-        match (given, dir) {
-            (Some(l), 0) => Ok(l),
-            (Some(l), d) => Ok(now + l * d),
-            // "Shed rain better" says which way, not how far.
-            (None, 0) => {
-                let options = [(1, grow), (-1, shrink)].map(|(d, word)| {
-                    (
-                        d,
-                        word.to_string(),
-                        format!("Make the {what} {word}, by {step:#}"),
-                    )
-                });
-                let d = self.choose("direction", &format!("{grow} or {shrink}?"), &options)?;
+    /// The new value of something that is `now`: a number given as the new
+    /// size, a number given as a change, or with no number, one `step` in
+    /// the direction asked for.
+    fn scalar(&mut self, now: Length, unit: Unit, step: Length) -> Result<Length, Stop> {
+        let given = self.with_role(&["size", "change"])?;
+        match given.first() {
+            Some((role, n)) => {
+                let Some(l) = n.length(unit) else {
+                    return Err(Stop::Problem(format!(
+                        "{} doesn't land on a sixteenth.",
+                        n.written()
+                    )));
+                };
+                if role == "size" {
+                    return Ok(l);
+                }
+                let d = if self.pick("direction")? == "increase" {
+                    1
+                } else {
+                    -1
+                };
+                Ok(now + l * d)
+            }
+            None => {
+                let d = if self.pick("direction")? == "increase" {
+                    1
+                } else {
+                    -1
+                };
+                self.assumed
+                    .push(format!("No amount given, so it moves by {step:#}"));
                 Ok(now + step * d)
             }
-            (None, d) => Ok(now + step * d),
         }
     }
 
@@ -492,6 +628,8 @@ impl Clause<'_> {
                     "Those sizes don't land on a sixteenth.".into(),
                 ));
             };
+            self.assumed
+                .push(format!("{w} by {d} is the width by the depth"));
             return Ok(vec![
                 Edit::Resize {
                     dimension: Dimension::Width,
@@ -503,52 +641,12 @@ impl Clause<'_> {
                 },
             ]);
         }
-        let dims: Vec<Dimension> = self.dimension_words().collect();
-        let nums: Vec<Length> = self
-            .nums()
-            .iter()
-            .filter_map(|n| n.length(Unit::Feet))
-            .collect();
-        if dims.len() > 1 && dims.len() == nums.len() && self.direction() == 0 {
-            return Ok(dims
-                .into_iter()
-                .zip(nums)
-                .map(|(dimension, to)| Edit::Resize { dimension, to })
-                .collect());
-        }
-        let dimension = match dims.first() {
-            Some(d) => *d,
-            None => {
-                let options: Vec<_> = Dimension::ALL
-                    .iter()
-                    .map(|d| {
-                        let word = match d {
-                            Dimension::Width => "along the front wall",
-                            Dimension::Depth => "front to back",
-                            Dimension::Height => "the front wall's height",
-                        };
-                        (
-                            *d,
-                            d.label().to_string(),
-                            format!("The {} ({word}), now {}", d.label(), d.of(b)),
-                        )
-                    })
-                    .collect();
-                self.choose("dimension", "Which size should change?", &options)?
-            }
+        let dimension = match self.pick("dimension")?.as_str() {
+            "width" => Dimension::Width,
+            "depth" => Dimension::Depth,
+            _ => Dimension::Height,
         };
-        let step = Length::feet(2);
-        let to = self.amount(
-            dimension.of(b),
-            nums.first().copied(),
-            step,
-            dimension.label(),
-            ["bigger", "smaller"],
-        )?;
-        if nums.is_empty() {
-            self.assumed
-                .push(format!("No amount given, so it moves by {step}"));
-        }
+        let to = self.scalar(dimension.of(b), Unit::Feet, Length::feet(2))?;
         Ok(vec![Edit::Resize { dimension, to }])
     }
 
@@ -559,20 +657,7 @@ impl Clause<'_> {
         let pitch = match self.pitch() {
             Some(p) => p,
             None => {
-                let given = self.nums().first().and_then(|n| n.length(Unit::Inches));
-                let step = Length::inches(1);
-                let rise = self.amount(
-                    roof.pitch.rise,
-                    given,
-                    step,
-                    "pitch",
-                    ["steeper", "flatter"],
-                )?;
-                if given.is_none() {
-                    self.assumed.push(format!(
-                        "No amount given, so the rise moves by {step} per foot"
-                    ));
-                }
+                let rise = self.scalar(roof.pitch.rise, Unit::Inches, Length::inches(1))?;
                 format!("{}:12", format!("{rise:#}").trim_end_matches('"'))
                     .parse()
                     .map_err(Stop::Problem)?
@@ -585,10 +670,9 @@ impl Clause<'_> {
         if self.project.roof.is_none() {
             return Err(Stop::Problem("This project has no roof.".into()));
         }
-        let kind = if self.has(&["gable"]) {
-            RoofKind::Gable
-        } else {
-            RoofKind::LeanTo
+        let kind = match self.pick("roof_kind")?.as_str() {
+            "gable" => RoofKind::Gable,
+            _ => RoofKind::LeanTo,
         };
         let mut edits = vec![Edit::SetRoofKind { kind }];
         if let Some(pitch) = self.pitch() {
@@ -601,75 +685,58 @@ impl Clause<'_> {
         let Some(roof) = self.project.roof.as_ref() else {
             return Err(Stop::Problem("This project has no roof.".into()));
         };
-        let given = self.nums().first().and_then(|n| n.length(Unit::Inches));
-        let step = Length::inches(6);
-        let to = self.amount(
-            roof.front_overhang,
-            given,
-            step,
-            "overhang",
-            ["longer", "shorter"],
-        )?;
-        if given.is_none() {
-            self.assumed
-                .push(format!("No amount given, so it moves by {step}"));
-        }
+        let to = self.scalar(roof.front_overhang, Unit::Inches, Length::inches(6))?;
         Ok(vec![Edit::SetOverhang {
             to: to.max(Length::ZERO),
         }])
     }
 
     fn porch(&mut self) -> Out {
-        if self.has(REMOVE) {
+        if self.pick("porch")? == "remove" {
             return match self.project.porch {
-                Some(_) if self.has(&["deck"]) => Ok(vec![Edit::RemoveDeck]),
                 Some(_) => Ok(vec![Edit::RemovePorch]),
                 None => Err(Stop::Problem("There's no porch to remove.".into())),
             };
         }
-        let given = self.nums().first().and_then(|n| n.length(Unit::Feet));
-        let mut edits = match (&self.project.porch, given) {
-            (Some(p), given) if self.direction() != 0 || given.is_some() => {
-                let step = Length::feet(1);
-                let to = self.amount(p.depth, given, step, "porch", ["deeper", "shallower"])?;
-                if given.is_none() {
-                    self.assumed
-                        .push(format!("No amount given, so it moves by {step}"));
-                }
+        let mut edits = match &self.project.porch {
+            Some(p) => {
+                let now = p.depth;
+                let to = self.scalar(now, Unit::Feet, Length::feet(1))?;
                 vec![Edit::SetPorch { depth: to }]
             }
-            (Some(_), _) if self.has(&["deck"]) => vec![],
-            (Some(_), _) => {
-                return Err(Stop::Problem(
-                    "There's already a porch. Say how deep it should be.".into(),
-                ))
-            }
-            (None, Some(depth)) => vec![Edit::SetPorch { depth }],
-            (None, None) => {
-                let depth = sticks_core::Porch::default().depth;
-                self.assumed
-                    .push(format!("No depth given, so the porch is {depth} deep"));
+            None => {
+                let given = self.with_role(&["size"])?;
+                let depth = match given.first().and_then(|(_, n)| n.length(Unit::Feet)) {
+                    Some(d) => d,
+                    None => {
+                        let d = sticks_core::Porch::default().depth;
+                        self.assumed
+                            .push(format!("No depth given, so the porch is {d} deep"));
+                        d
+                    }
+                };
                 vec![Edit::SetPorch { depth }]
             }
         };
-        if self.has(&["deck"]) {
+        if self.maybe("deck").as_deref() == Some("add") {
             edits.push(Edit::AddDeck);
         }
         Ok(edits)
     }
 
     fn deck(&mut self) -> Out {
-        if self.has(REMOVE) {
-            return Ok(vec![Edit::RemoveDeck]);
+        match self.pick("deck")?.as_str() {
+            "remove" => Ok(vec![Edit::RemoveDeck]),
+            _ if self.project.porch.is_none() => Err(Stop::Problem(
+                "The deck goes under the porch, and there's no porch yet. Try \"add a porch with a deck\".".into(),
+            )),
+            _ => Ok(vec![Edit::AddDeck]),
         }
-        if self.project.porch.is_none() {
-            return Err(Stop::Problem("The deck goes under the porch, and there's no porch yet. Try \"add a porch with a deck\".".into()));
-        }
-        Ok(vec![Edit::AddDeck])
     }
 
     fn spacing(&mut self) -> Out {
-        let Some(on_center) = self.nums().first().and_then(|n| n.length(Unit::Inches)) else {
+        let given = self.with_role(&["size", "change"])?;
+        let Some(on_center) = given.first().and_then(|(_, n)| n.length(Unit::Inches)) else {
             return Err(Stop::Problem(
                 "Give the spacing, like 24\" on center.".into(),
             ));
@@ -681,53 +748,15 @@ impl Clause<'_> {
     }
 
     fn lumber_edit(&mut self) -> Out {
-        let Some(size) = self.lumber() else {
+        let Some(size) = self.pair().and_then(|(a, b)| lumber(a, b)) else {
             return Err(Stop::Problem("Which size? Write it like 2x6.".into()));
         };
-        let framing = if self.has(&["stud", "wall"]) {
-            Framing::Studs
-        } else if self.has(&["joist", "floor"]) {
-            Framing::Joists
-        } else if self.has(&["rafter", "roof"]) {
-            Framing::Rafters
-        } else {
-            let options: Vec<_> = Framing::ALL
-                .iter()
-                .map(|f| {
-                    (
-                        *f,
-                        f.label().to_string(),
-                        format!("Use {size} for the {}", f.label()),
-                    )
-                })
-                .collect();
-            self.choose("framing", "Which members should change size?", &options)?
+        let framing = match self.pick("framing")?.as_str() {
+            "studs" => Framing::Studs,
+            "joists" => Framing::Joists,
+            _ => Framing::Rafters,
         };
         Ok(vec![Edit::SetLumber { framing, size }])
-    }
-
-    /// Side words in order, with whether the next word is "wall".
-    fn sides(&self) -> Vec<(Side, bool)> {
-        let side = |w: &str| match w {
-            "front" => Some(Side::Front),
-            "back" | "rear" => Some(Side::Back),
-            "left" => Some(Side::Left),
-            "right" => Some(Side::Right),
-            _ => None,
-        };
-        self.toks
-            .iter()
-            .enumerate()
-            .filter_map(|(i, t)| {
-                let s = side(t.word()?)?;
-                let wall = self
-                    .toks
-                    .get(i + 1)
-                    .and_then(Tok::word)
-                    .is_some_and(|w| w.starts_with("wall"));
-                Some((s, wall))
-            })
-            .collect()
     }
 
     fn wall_options(&self) -> Vec<(Side, String, String)> {
@@ -759,55 +788,51 @@ impl Clause<'_> {
             .collect()
     }
 
+    /// Every opening in a building wall, labeled like `front-2`.
+    fn openings(&self) -> Vec<((Side, usize), String, String)> {
+        Side::ALL
+            .iter()
+            .flat_map(|s| {
+                self.project
+                    .walls
+                    .iter()
+                    .filter(move |w| w.id == s.id())
+                    .flat_map(|w| w.openings.iter().enumerate())
+                    .map(move |(i, o)| {
+                        (
+                            (*s, i),
+                            format!("{}-{}", s.id(), i + 1),
+                            format!(
+                                "The {} on the {} wall, {} wide at {}",
+                                kind_name(o.kind),
+                                s.id(),
+                                o.width,
+                                o.offset
+                            ),
+                        )
+                    })
+            })
+            .collect()
+    }
+
     fn add_opening(&mut self) -> Out {
         let Some(b) = self.project.building.as_ref() else {
             return Err(Stop::Problem(
                 "This prototype only adds openings to a building's walls.".into(),
             ));
         };
-        let kind = if self.has(&["door"]) {
-            OpeningKind::Door
-        } else if self.has(&["window"]) {
-            OpeningKind::Window
-        } else if self.has(&["penetration"]) {
-            OpeningKind::Penetration
-        } else {
-            let options = [OpeningKind::Window, OpeningKind::Door]
-                .map(|k| (k, kind_name(k).to_string(), format!("A {}", kind_name(k))));
-            self.choose("kind", "Window or door?", &options)?
+        let kind = match self.pick("kind")?.as_str() {
+            "door" => OpeningKind::Door,
+            "penetration" => OpeningKind::Penetration,
+            _ => OpeningKind::Window,
+        };
+        let wall = match self.pick("wall")?.as_str() {
+            "front" => Side::Front,
+            "back" => Side::Back,
+            "left" => Side::Left,
+            _ => Side::Right,
         };
 
-        let sides = self.sides();
-        let wall = match sides.iter().find(|(_, w)| *w).or(if sides.len() == 1 {
-            sides.first()
-        } else {
-            None
-        }) {
-            Some((s, _)) => *s,
-            None => self.choose("wall", "Which wall should it go in?", &self.wall_options())?,
-        };
-
-        // A length right before "from" places the opening; the rest size it.
-        let words: Vec<Option<&str>> = self.toks.iter().map(Tok::word).collect();
-        let from = words.iter().position(|w| *w == Some("from"));
-        let placed = from.and_then(|f| match self.toks.get(f.checked_sub(1)?) {
-            Some(Tok::Num(n)) => n
-                .length(Unit::Inches)
-                .filter(|_| n.has_unit())
-                .or_else(|| n.length(Unit::Feet)),
-            _ => None,
-        });
-        let from_right = from.is_some_and(|f| words[f..].contains(&Some("right")));
-        let sizes: Vec<&Num> = self
-            .toks
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| from.is_none_or(|f| *i + 1 != f))
-            .filter_map(|(_, t)| match t {
-                Tok::Num(n) => Some(n),
-                _ => None,
-            })
-            .collect();
         // A bare number up to 8 is feet ("a 3 window"), above that inches.
         let read = |n: &Num| {
             let unit = if !n.has_unit() && n.amount().is_some_and(|a| a > 8.0) {
@@ -817,57 +842,61 @@ impl Clause<'_> {
             };
             n.length(unit)
         };
+        let nums = self.with_role(&["size", "width", "height", "from_left", "from_right"])?;
+        let role = |r: &[&str]| {
+            nums.iter()
+                .find(|(x, _)| r.contains(&x.as_str()))
+                .and_then(|(_, n)| read(n))
+        };
 
         let (dw, dh, sill, header) = opening_defaults(kind);
-        let (mut width, mut height) = match (self.pair(), sizes.first()) {
-            (Some((w, h)), _) => (read(w).unwrap_or(dw), read(h).unwrap_or(dh)),
-            (None, Some(w)) => (read(w).unwrap_or(dw), dh),
-            (None, None) => {
-                self.assumed.push(format!(
-                    "No size given, so it's the usual {dw} x {dh} rough opening"
-                ));
-                (dw, dh)
-            }
-        };
-        if kind == OpeningKind::Door && (self.pair().is_some() || !sizes.is_empty()) {
+        let given_width = self
+            .pair()
+            .and_then(|(w, _)| read(w))
+            .or(role(&["width", "size"]));
+        let given_height = self.pair().and_then(|(_, h)| read(h)).or(role(&["height"]));
+        let mut width = given_width.unwrap_or(dw);
+        let height = given_height.unwrap_or(dh);
+        if given_width.is_none() && given_height.is_none() {
+            self.assumed.push(format!(
+                "No size given, so it's the usual {dw} x {dh} rough opening"
+            ));
+        }
+        if kind == OpeningKind::Door && given_width.is_some() {
             let w = width.as_inches_f64();
             if w.fract() == 0.0 && SLAB_WIDTHS.contains(&(w as i64)) {
                 let slab = width;
                 width = slab + Length::from_sixteenths(40);
-                if self.pair().is_none() {
-                    height = dh;
-                }
                 self.assumed
                     .push(format!("A {slab} door needs a {width} rough opening"));
             }
         }
 
         let wall_len = wall.length(b);
+        let placed = match (role(&["from_left"]), role(&["from_right"])) {
+            (Some(at), _) => Some(at),
+            (None, Some(at)) => Some(wall_len - at - width),
+            (None, None) => None,
+        };
         let slide = placed.is_none();
         let offset = match placed {
-            Some(at) if from_right => wall_len - at - width,
             Some(at) => at,
-            None => {
-                let near = sides
-                    .iter()
-                    .find(|(s, w)| !*w && *s != wall && matches!(s, Side::Left | Side::Right));
-                match near {
-                    Some((Side::Left, _)) => {
-                        self.assumed
-                            .push("Placed 2' from the wall's left end, seen from outside".into());
-                        Length::feet(2)
-                    }
-                    Some(_) => {
-                        self.assumed
-                            .push("Placed 2' from the wall's right end, seen from outside".into());
-                        wall_len - width - Length::feet(2)
-                    }
-                    None => {
-                        self.assumed.push("Centered on the wall".into());
-                        (wall_len - width).mul_div(1, 2)
-                    }
+            None => match self.maybe("position").as_deref() {
+                Some("left_end") => {
+                    self.assumed
+                        .push("Placed 2' from the wall's left end, seen from outside".into());
+                    Length::feet(2)
                 }
-            }
+                Some("right_end") => {
+                    self.assumed
+                        .push("Placed 2' from the wall's right end, seen from outside".into());
+                    wall_len - width - Length::feet(2)
+                }
+                _ => {
+                    self.assumed.push("Centered on the wall".into());
+                    (wall_len - width).mul_div(1, 2)
+                }
+            },
         };
         let edit = |offset, header| Edit::AddOpening {
             wall,
@@ -902,8 +931,7 @@ impl Clause<'_> {
         } else {
             vec![offset]
         };
-        let first_problem = self.wall_problem(wall, &edit(offset, header));
-        let Some(first_problem) = first_problem else {
+        let Some(first_problem) = self.wall_problem(wall, &edit(offset, header)) else {
             self.assumed.push(format!(
                 "{header} header, the app's default; check it for this span"
             ));
@@ -951,83 +979,15 @@ impl Clause<'_> {
     }
 
     fn remove_opening(&mut self) -> Out {
-        let kind = if self.has(&["door"]) {
-            Some(OpeningKind::Door)
-        } else if self.has(&["window"]) {
-            Some(OpeningKind::Window)
-        } else if self.has(&["penetration"]) {
-            Some(OpeningKind::Penetration)
-        } else {
-            None
-        };
-        let sides = self.sides();
-        let wall = sides
-            .iter()
-            .find(|(_, w)| *w)
-            .or(if sides.len() == 1 {
-                sides.first()
-            } else {
-                None
-            })
-            .map(|(s, _)| *s);
-        let found: Vec<(Side, usize, String)> = Side::ALL
-            .iter()
-            .filter(|s| wall.is_none_or(|w| w == **s))
-            .flat_map(|s| {
-                self.project
-                    .walls
-                    .iter()
-                    .filter(move |w| w.id == s.id())
-                    .flat_map(|w| w.openings.iter().enumerate())
-                    .filter(|(_, o)| kind.is_none_or(|k| k == o.kind))
-                    .map(move |(i, o)| {
-                        (
-                            *s,
-                            i,
-                            format!(
-                                "The {} on the {} wall, {} wide at {}",
-                                kind_name(o.kind),
-                                s.id(),
-                                o.width,
-                                o.offset
-                            ),
-                        )
-                    })
-            })
-            .collect();
-        let what = kind.map(kind_name).unwrap_or("opening");
-        let place = wall
-            .map(|w| format!(" on the {} wall", w.id()))
-            .unwrap_or_default();
-        match found.len() {
-            0 => Err(Stop::Problem(format!(
-                "There's no {what}{place} to remove."
-            ))),
-            1 => Ok(vec![Edit::RemoveOpening {
-                wall: found[0].0,
-                index: found[0].1,
-            }]),
-            _ if self.has(&["all", "every", "both"]) => {
-                // Highest index first, so earlier removals don't shift later ones.
-                let mut all: Vec<_> = found
-                    .iter()
-                    .map(|(s, i, _)| Edit::RemoveOpening {
-                        wall: *s,
-                        index: *i,
-                    })
-                    .collect();
-                all.reverse();
-                Ok(all)
-            }
-            _ => {
-                let options: Vec<_> = found
-                    .iter()
-                    .map(|(s, i, d)| ((*s, *i), format!("{}-{}", s.id(), i + 1), d.clone()))
-                    .collect();
-                let (wall, index) =
-                    self.choose("which", &format!("Which {what}{place}?"), &options)?;
-                Ok(vec![Edit::RemoveOpening { wall, index }])
-            }
+        let openings = self.openings();
+        if openings.is_empty() {
+            return Err(Stop::Problem("There are no openings to remove.".into()));
         }
+        let pick = self.pick("which")?;
+        let ((wall, index), ..) = openings
+            .into_iter()
+            .find(|(_, l, _)| *l == pick)
+            .expect("picks are checked against the options");
+        Ok(vec![Edit::RemoveOpening { wall, index }])
     }
 }

@@ -36,25 +36,29 @@ doesn't have are skipped.
 ### Changes in plain English (prototype)
 
 ```sh
-cargo run -p sticks-cli -- edit examples/shed.toml "make it 20' wide and add a window on the left wall"
-cargo run -p sticks-cli -- edit examples/shed.toml "add a window" --answer 0.wall=back --write
+cargo run -p sticks-cli -- edit examples/shed.toml "add a window" --questions > questions.json
+# a classifier answers them, as {"0.intent": {"pick": "add_opening", "confidence": 0.98}, ...}
+cargo run -p sticks-cli -- edit examples/shed.toml "add a window" --answers answers.json --answer 0.wall=back --write
 ```
 
-`edit` reads the request into typed edits (`sticks-intent`), applies them to a
-copy, frames it and shows the change in boards and sheets. Rust settles every
-number, unit and keyword it can. What words don't settle comes back as a
-question with fixed options, built from the current design, plus each answer's
-`--answer ID=LABEL`. A question the request has no words for ("add a window":
-which wall?) is marked `for_user`, so no classifier guesses at it. A new
-opening slides to the nearest spot that frames, and a door up to 4' wide drops
-to a 2x6 header if that's what it takes to fit under the top plates.
-`--json` prints the same for a program to answer, and
-`--write` saves once it frames (comments in the file are not kept).
+Rust reads only the notation: it splits the request into clauses and reads
+lengths (`20 ft`, `3' 6"`), pitches (`4 in 12`) and sizes (`12x16`, `2x6`).
+The meaning comes from a classifier: `--questions` lists one batch of
+multiple-choice questions per request (what kind of change, which wall,
+window or door, what each number is for) plus yes/no checks such as "the
+request says which wall". `edit` turns answers at 80% confidence or more into
+typed edits (`sticks-intent`). Anything less sure, or not in the request,
+comes back as a question for you, answered with `--answer ID=LABEL`. Rust then
+places the edits, sliding a new opening to the nearest spot that frames and
+giving a door up to 4' wide a 2x6 header if that's what fits under the top
+plates. It frames the result and shows the change in boards and sheets.
+`--json` prints the same for a program, and `--write` saves once it frames
+(comments in the file are not kept).
 
-`app/scripts/jev-probe.ts` sends those questions to
-[Jev](https://docs.typesafe.ai/introduction/quickstart) and takes its pick
-only when it's confident: `cargo build -p sticks-cli`, then
-`TYPESAFE_API_KEY=... npm run probe:jev` in `app/`.
+`app/scripts/jev-probe.ts` runs sample requests through
+[Jev](https://docs.typesafe.ai/introduction/quickstart):
+`cargo build -p sticks-cli`, then `TYPESAFE_API_KEY=... npm run probe:jev` in
+`app/`.
 
 ## Project file
 

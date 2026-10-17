@@ -48,7 +48,15 @@ enum Command {
     Edit {
         project: PathBuf,
         request: String,
-        /// Answer a question from an earlier run, as `ID=LABEL`.
+        /// Print the questions a classifier such as Jev should answer, as
+        /// JSON, and stop.
+        #[arg(long)]
+        questions: bool,
+        /// A classifier's answers: JSON mapping question ids to
+        /// `{"pick": ..., "confidence": ...}`.
+        #[arg(long = "answers", value_name = "FILE")]
+        answers_file: Option<PathBuf>,
+        /// Your answer to a question, as `ID=LABEL`. Settles it.
         #[arg(long = "answer", value_name = "ID=LABEL")]
         answers: Vec<String>,
         /// Print the reading of the request and the preview as JSON.
@@ -71,10 +79,21 @@ fn main() -> ExitCode {
         Command::Edit {
             project,
             request,
+            questions,
+            answers_file,
             answers,
             json,
             write,
-        } => load(&project).and_then(|p| edit::run(&p, &project, &request, &answers, json, write)),
+        } => load(&project).and_then(|p| {
+            let opts = edit::Opts {
+                questions,
+                answers_file,
+                answers,
+                json,
+                write,
+            };
+            edit::run(&p, &project, &request, &opts)
+        }),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

@@ -1,17 +1,20 @@
 //! Design changes in plain English, turned into typed edits.
 //!
-//! Rust settles everything it can: numbers, units, which part a sentence is
-//! about, and whether the result still frames. What words alone can't settle
-//! comes back as a [`Question`] with fixed options, for a classifier (Jev, or
-//! a local model) or the user to answer. Answers go back in by question id and
-//! the request is read again, so nothing is kept between calls.
+//! Rust reads the notation (clauses, lengths, pitches, lumber sizes) and asks
+//! a classifier such as Jev a fixed batch of multiple-choice questions about
+//! the meaning ([`questions`]). Confident answers become typed edits; the
+//! rest come back as a [`Question`] for the user. Answers go back in by
+//! question id and the request is read again, so nothing is kept between
+//! calls. Rust then places, checks and frames the result.
 
 mod edit;
 mod interpret;
 mod words;
 
 pub use edit::{Dimension, Edit, EditError, Framing, Side};
-pub use interpret::{interpret, Answers, Choice, Interpretation, Question, Step};
+pub use interpret::{
+    interpret, questions, Answer, Answers, Ask, Choice, Interpretation, Question, Step, CONFIDENT,
+};
 
 use sticks_core::Project;
 use sticks_rules::frame_project;
