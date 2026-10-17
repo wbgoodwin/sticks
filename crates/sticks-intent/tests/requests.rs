@@ -242,6 +242,29 @@ fn asks_the_user_when_the_request_doesnt_say() {
 }
 
 #[test]
+fn needs_a_confident_yes_that_the_request_says() {
+    let mut answers = sure(&[
+        ("0.intent", "add_opening"),
+        ("0.kind", "window"),
+        ("0.wall", "front"),
+    ]);
+    let unsure = Answer {
+        pick: "yes".into(),
+        confidence: 0.6,
+        by_user: false,
+    };
+    answers.insert("0.wall_stated".into(), unsure);
+    let r = read("add a window", &answers);
+    assert_eq!(
+        r.questions().next().unwrap().reason,
+        "The request doesn't say"
+    );
+
+    answers.extend(sure(&[("0.wall_stated", "yes")]));
+    assert!(read("add a window", &answers).edits().is_some());
+}
+
+#[test]
 fn waits_for_answers_before_doing_anything() {
     let r = read("make it 20' wide", &Answers::new());
     let q = r.questions().next().unwrap();

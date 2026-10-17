@@ -90,8 +90,12 @@ for (const request of REQUESTS) {
   const asked = reading.steps.some((s) => s.question);
   console.log(`\n"${request}"  [${asked ? "asks you" : "settled"}]`);
   for (const s of reading.steps) {
-    const intent = picked[`${reading.steps.indexOf(s)}.intent`];
-    if (intent) console.log(`  "${s.text}": ${intent.pick} (${Math.round(intent.confidence * 100)}%)`);
+    const i = reading.steps.indexOf(s);
+    const intent = picked[`${i}.intent`];
+    const pct = (a: Answer) => `${a.pick} ${Math.round(a.confidence * 100)}%`;
+    if (intent) console.log(`  "${s.text}": ${pct(intent)}`);
+    const stated = Object.entries(picked).filter(([id]) => id.startsWith(`${i}.`) && id.endsWith("_stated"));
+    console.log(`    says: ${stated.map(([id, a]) => `${id.slice(id.indexOf(".") + 1, -"_stated".length)} ${pct(a)}`).join(", ")}`);
     for (const e of s.edits) console.log(`    edit: ${JSON.stringify(e)}`);
     for (const a of s.assumed ?? []) console.log(`    assumed: ${a}`);
     if (s.question) console.log(`    ask: ${s.question.prompt} (${s.question.reason})`);

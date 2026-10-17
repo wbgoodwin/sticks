@@ -507,10 +507,12 @@ impl<'a> Clause<'a> {
     fn pick(&self, slot: &str) -> Result<String, Stop> {
         let (prompt, options) = self.slot(slot);
         let answer = self.answers.get(&self.id(slot));
+        // Only a confident "yes, the request says" lets the pick through: a
+        // classifier can be sure of a pick it has no grounds for.
         let unstated = self
             .answers
             .get(&self.id(&format!("{slot}_stated")))
-            .is_some_and(|f| f.pick == "no" && f.confidence >= CONFIDENT);
+            .is_some_and(|f| !(f.pick == "yes" && f.confidence >= CONFIDENT));
         let valid = |a: &&Answer| options.iter().any(|(l, _)| *l == a.pick);
         let reason = match answer.filter(valid) {
             Some(a) if a.by_user => return Ok(a.pick.clone()),
