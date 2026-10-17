@@ -45,8 +45,9 @@ Rust reads only the notation: it splits the request into clauses and reads
 lengths (`20 ft`, `3' 6"`), pitches (`4 in 12`) and sizes (`12x16`, `2x6`).
 The meaning comes from a classifier: `--questions` lists one batch of
 multiple-choice questions per request (what kind of change, which wall,
-window or door, what each number is for) plus yes/no checks such as "the
-request says which wall". `edit` turns answers at 80% confidence or more into
+window or door, what each number is for). Questions the request may not
+answer, such as which wall, also offer "the request doesn't say". `edit`
+turns answers at 80% confidence or more into
 typed edits (`sticks-intent`). Anything less sure, or not in the request,
 comes back as a question for you, answered with `--answer ID=LABEL`. Rust then
 places the edits, sliding a new opening to the nearest spot that frames and

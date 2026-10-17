@@ -22,7 +22,7 @@ pub const CONFIDENT: f64 = 0.8;
 /// An answer to a question, by question id.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Answer {
-    /// The option label, or `yes` or `no` for a [`Ask::Fact`].
+    /// The option label.
     pub pick: String,
     /// From zero to one.
     pub confidence: f64,
@@ -54,12 +54,6 @@ pub enum Ask {
         text: String,
         prompt: String,
         options: Vec<Choice>,
-    },
-    /// Rate whether a statement about the clause is true.
-    Fact {
-        id: String,
-        text: String,
-        statement: String,
     },
 }
 
@@ -197,18 +191,13 @@ const ROLES: [(&str, &str); 7] = [
     ("other", "Something else"),
 ];
 
-/// Questions that come with a fact: "the request says which wall".
-const STATED: [(&str, &str); 6] = [
-    ("dimension", "which size of the building should change"),
-    ("direction", "whether it should get bigger or smaller"),
-    ("kind", "whether it's a window or a door"),
-    ("wall", "which wall"),
-    (
-        "framing",
-        "which framing members (studs, joists or rafters)",
-    ),
-    ("which", "which opening"),
-];
+/// Slots whose answer the request may simply not give ("add a window":
+/// which wall?). Their questions offer [`UNSAID`] so the classifier can say
+/// so, rather than being sure of a guess.
+const MAY_BE_UNSAID: [&str; 6] = ["dimension", "direction", "kind", "wall", "framing", "which"];
+
+/// The option for "the request doesn't say".
+const UNSAID: &str = "unsaid";
 
 enum Stop {
     Ask(Question),
@@ -255,7 +244,10 @@ pub fn questions(project: &Project, request: &str) -> Vec<Ask> {
             let c = Clause::new(i, text, &empty, project);
             let mut asks = Vec::new();
             for slot in c.slots() {
-                let (prompt, options) = c.slot(&slot);
+                let (prompt, mut options) = c.slot(&slot);
+                if MAY_BE_UNSAID.contains(&slot.as_str()) {
+                    options.push((UNSAID.into(), "The request doesn't say".into()));
+                }
                 asks.push(Ask::Choice {
                     id: c.id(&slot),
                     text: c.text.clone(),
@@ -265,13 +257,6 @@ pub fn questions(project: &Project, request: &str) -> Vec<Ask> {
                         .map(|(label, description)| Choice { label, description })
                         .collect(),
                 });
-                if let Some((_, topic)) = STATED.iter().find(|(s, _)| *s == slot) {
-                    asks.push(Ask::Fact {
-                        id: c.id(&format!("{slot}_stated")),
-                        text: c.text.clone(),
-                        statement: format!("The request says or clearly implies {topic}"),
-                    });
-                }
             }
             asks
         })
@@ -507,16 +492,11 @@ impl<'a> Clause<'a> {
     fn pick(&self, slot: &str) -> Result<String, Stop> {
         let (prompt, options) = self.slot(slot);
         let answer = self.answers.get(&self.id(slot));
-        // Only a confident "yes, the request says" lets the pick through: a
-        // classifier can be sure of a pick it has no grounds for.
-        let unstated = self
-            .answers
-            .get(&self.id(&format!("{slot}_stated")))
-            .is_some_and(|f| !(f.pick == "yes" && f.confidence >= CONFIDENT));
+        let unsaid = answer.is_some_and(|a| a.pick == UNSAID && !a.by_user);
         let valid = |a: &&Answer| options.iter().any(|(l, _)| *l == a.pick);
         let reason = match answer.filter(valid) {
+            _ if unsaid => "The request doesn't say".to_string(),
             Some(a) if a.by_user => return Ok(a.pick.clone()),
-            Some(_) if unstated => "The request doesn't say".to_string(),
             Some(a) if a.confidence >= CONFIDENT => return Ok(a.pick.clone()),
             Some(a) => format!("Best guess {} at {:.0}%", a.pick, a.confidence * 100.0),
             None => "Not answered yet".to_string(),

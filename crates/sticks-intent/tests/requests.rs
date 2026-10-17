@@ -163,26 +163,19 @@ fn asks_one_batch_of_questions_built_from_the_design() {
     let ids: Vec<&str> = asks
         .iter()
         .map(|a| match a {
-            Ask::Choice { id, .. } | Ask::Fact { id, .. } => id.as_str(),
+            Ask::Choice { id, .. } => id.as_str(),
         })
         .collect();
-    for want in [
-        "0.intent",
-        "0.wall",
-        "0.wall_stated",
-        "0.kind",
-        "0.which",
-        "0.num0",
-    ] {
+    for want in ["0.intent", "0.wall", "0.kind", "0.which", "0.num0"] {
         assert!(ids.contains(&want), "{want} missing from {ids:?}");
     }
     let wall = asks.iter().find_map(|a| match a {
         Ask::Choice { id, options, .. } if id == "0.wall" => Some(options),
         _ => None,
     });
-    assert!(wall.unwrap()[0]
-        .description
-        .contains("has door, penetration"));
+    let wall = wall.unwrap();
+    assert!(wall[0].description.contains("has door, penetration"));
+    assert_eq!(wall.last().unwrap().label, "unsaid");
     let num = asks.iter().find_map(|a| match a {
         Ask::Choice { id, prompt, .. } if id == "0.num0" => Some(prompt.as_str()),
         _ => None,
@@ -223,8 +216,7 @@ fn asks_the_user_when_the_request_doesnt_say() {
     let mut answers = sure(&[
         ("0.intent", "add_opening"),
         ("0.kind", "window"),
-        ("0.wall", "front"),
-        ("0.wall_stated", "no"),
+        ("0.wall", "unsaid"),
     ]);
     let r = read("add a window", &answers);
     let q = r.questions().next().unwrap();
@@ -239,29 +231,6 @@ fn asks_the_user_when_the_request_doesnt_say() {
         r.edits().unwrap()[0].to_string(),
         "Add a 3' x 3' window to the back wall, 7' 6\" from its left end"
     );
-}
-
-#[test]
-fn needs_a_confident_yes_that_the_request_says() {
-    let mut answers = sure(&[
-        ("0.intent", "add_opening"),
-        ("0.kind", "window"),
-        ("0.wall", "front"),
-    ]);
-    let unsure = Answer {
-        pick: "yes".into(),
-        confidence: 0.6,
-        by_user: false,
-    };
-    answers.insert("0.wall_stated".into(), unsure);
-    let r = read("add a window", &answers);
-    assert_eq!(
-        r.questions().next().unwrap().reason,
-        "The request doesn't say"
-    );
-
-    answers.extend(sure(&[("0.wall_stated", "yes")]));
-    assert!(read("add a window", &answers).edits().is_some());
 }
 
 #[test]
