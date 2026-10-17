@@ -139,3 +139,71 @@ fn edits_round_trip_as_json() {
     let back: Vec<sticks_intent::Edit> = serde_json::from_str(&text).unwrap();
     assert_eq!(back, e);
 }
+
+#[test]
+fn leaves_questions_the_request_cant_answer_to_the_user() {
+    let q = read("add a window", &[])
+        .questions()
+        .next()
+        .cloned()
+        .unwrap();
+    assert!(q.for_user, "nothing in \"add a window\" names a wall");
+    let q = read("let some light into the right wall", &[])
+        .questions()
+        .next()
+        .cloned()
+        .unwrap();
+    assert!(!q.for_user, "\"light\" is something a classifier can read");
+}
+
+#[test]
+fn asks_which_way_when_only_the_goal_is_given() {
+    let r = read("the roof should shed rain better", &[("0.intent", "pitch")]);
+    let q = r.questions().next().unwrap();
+    assert_eq!(q.id, "0.direction");
+    let labels: Vec<&str> = q.options.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["steeper", "flatter"]);
+    let r = read(
+        "the roof should shed rain better",
+        &[("0.intent", "pitch"), ("0.direction", "steeper")],
+    );
+    assert_eq!(
+        r.edits().unwrap()[0].to_string(),
+        "Set the roof pitch to 3:12"
+    );
+}
+
+#[test]
+fn slides_a_new_opening_clear_of_the_others() {
+    let r = read("add a window on the front wall", &[]);
+    let e = r.edits().unwrap();
+    assert_eq!(
+        e[0].to_string(),
+        "Add a 3' x 3' window to the front wall, 11' from its left end"
+    );
+    assert!(r.steps[0]
+        .assumed
+        .iter()
+        .any(|a| a.starts_with("Moved 3' 6\" right")));
+    assert!(framing_problems(&apply_all(&shed(), &e).unwrap()).is_empty());
+}
+
+#[test]
+fn drops_a_header_size_to_fit_a_door_under_a_low_wall() {
+    let r = read("add a door on the back wall", &[]);
+    let e = r.edits().unwrap();
+    assert!(
+        matches!(&e[0], sticks_intent::Edit::AddOpening { header, .. } if header.to_string() == "2x6")
+    );
+    assert!(framing_problems(&apply_all(&shed(), &e).unwrap()).is_empty());
+}
+
+#[test]
+fn says_why_an_opening_wont_fit_anywhere() {
+    let r = read("add a 10' x 7' door on the back wall", &[]);
+    let p = r.steps[0].problem.as_deref().expect("a problem");
+    assert!(
+        p.starts_with("A 10' x 7' door won't fit in the back wall"),
+        "{p}"
+    );
+}

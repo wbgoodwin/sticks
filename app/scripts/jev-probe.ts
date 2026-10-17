@@ -37,6 +37,8 @@ interface Question {
   text: string;
   prompt: string;
   options: Choice[];
+  // Nothing in the request bears on it, so Jev could only guess.
+  for_user: boolean;
 }
 interface Step {
   text: string;
@@ -69,6 +71,9 @@ for (const request of REQUESTS) {
   // Each answer can open the next question (intent, then wall, ...).
   for (let round = 0; round < 4; round++) {
     const open = reading.steps.flatMap((s) => (s.question ? [s.question] : []));
+    for (const q of open.filter((q) => q.for_user && !forYou.some((f) => f.startsWith(q.id)))) {
+      forYou.push(`${q.id} ${q.prompt} (the request doesn't say)`);
+    }
     const unasked = open.filter((q) => !forYou.some((f) => f.startsWith(q.id)));
     if (unasked.length === 0) break;
     if (!client) {

@@ -44,7 +44,11 @@ cargo run -p sticks-cli -- edit examples/shed.toml "add a window" --answer 0.wal
 copy, frames it and shows the change in boards and sheets. Rust settles every
 number, unit and keyword it can. What words don't settle comes back as a
 question with fixed options, built from the current design, plus each answer's
-`--answer ID=LABEL`. `--json` prints the same for a program to answer, and
+`--answer ID=LABEL`. A question the request has no words for ("add a window":
+which wall?) is marked `for_user`, so no classifier guesses at it. A new
+opening slides to the nearest spot that frames, and a door up to 4' wide drops
+to a 2x6 header if that's what it takes to fit under the top plates.
+`--json` prints the same for a program to answer, and
 `--write` saves once it frames (comments in the file are not kept).
 
 `app/scripts/jev-probe.ts` sends those questions to

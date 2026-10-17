@@ -56,6 +56,9 @@ pub struct Question {
     pub text: String,
     pub prompt: String,
     pub options: Vec<Choice>,
+    /// The clause has no words that bear on this, so a classifier could
+    /// only guess. Ask the user.
+    pub for_user: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -224,6 +227,33 @@ const SHRINK: &[&str] = &[
     "trim",
 ];
 
+/// Words that carry no answer on their own.
+const FILLER: &[&str] = &[
+    "a", "an", "the", "it", "its", "this", "that", "to", "in", "into", "on", "at", "of", "for",
+    "with", "by", "from", "me", "i", "we", "my", "our", "some", "new", "another", "one", "put",
+    "make", "set", "want", "would", "like", "please", "let", "can", "could", "should", "be",
+    "need", "is", "change", "just", "bit", "little", "lot", "shed",
+];
+/// Words the interpreter already reads for meaning.
+const READ: &[&str] = &[
+    "window",
+    "door",
+    "penetration",
+    "opening",
+    "wall",
+    "side",
+    "porch",
+    "deck",
+    "roof",
+    "pitch",
+    "slope",
+    "overhang",
+    "stud",
+    "joist",
+    "rafter",
+    "spacing",
+];
+
 impl Clause<'_> {
     fn has(&self, words: &[&str]) -> bool {
         self.toks
@@ -286,6 +316,18 @@ impl Clause<'_> {
             text: self.text.clone(),
             prompt: prompt.to_string(),
             options,
+            for_user: !self.has_unread_words(),
+        })
+    }
+
+    /// Whether any word is left once filler and the words already read are
+    /// set aside. "add a window" has none, so which wall is a pure guess.
+    fn has_unread_words(&self) -> bool {
+        self.toks.iter().filter_map(Tok::word).any(|w| {
+            let w = w.trim_end_matches('s');
+            ![FILLER, GROW, SHRINK, REMOVE, READ]
+                .iter()
+                .any(|list| list.contains(&w))
         })
     }
 
@@ -411,6 +453,7 @@ impl Clause<'_> {
         given: Option<Length>,
         step: Length,
         what: &str,
+        [grow, shrink]: [&str; 2],
     ) -> Result<Length, Stop> {
         // "raise it to 10'" names the new size, even after a grow word.
         let to_named = self
@@ -421,9 +464,18 @@ impl Clause<'_> {
         match (given, dir) {
             (Some(l), 0) => Ok(l),
             (Some(l), d) => Ok(now + l * d),
-            (None, 0) => Err(Stop::Problem(format!(
-                "How much? Give a length for the {what}."
-            ))),
+            // "Shed rain better" says which way, not how far.
+            (None, 0) => {
+                let options = [(1, grow), (-1, shrink)].map(|(d, word)| {
+                    (
+                        d,
+                        word.to_string(),
+                        format!("Make the {what} {word}, by {step:#}"),
+                    )
+                });
+                let d = self.choose("direction", &format!("{grow} or {shrink}?"), &options)?;
+                Ok(now + step * d)
+            }
             (None, d) => Ok(now + step * d),
         }
     }
@@ -491,6 +543,7 @@ impl Clause<'_> {
             nums.first().copied(),
             step,
             dimension.label(),
+            ["bigger", "smaller"],
         )?;
         if nums.is_empty() {
             self.assumed
@@ -508,7 +561,13 @@ impl Clause<'_> {
             None => {
                 let given = self.nums().first().and_then(|n| n.length(Unit::Inches));
                 let step = Length::inches(1);
-                let rise = self.amount(roof.pitch.rise, given, step, "pitch")?;
+                let rise = self.amount(
+                    roof.pitch.rise,
+                    given,
+                    step,
+                    "pitch",
+                    ["steeper", "flatter"],
+                )?;
                 if given.is_none() {
                     self.assumed.push(format!(
                         "No amount given, so the rise moves by {step} per foot"
@@ -544,7 +603,13 @@ impl Clause<'_> {
         };
         let given = self.nums().first().and_then(|n| n.length(Unit::Inches));
         let step = Length::inches(6);
-        let to = self.amount(roof.front_overhang, given, step, "overhang")?;
+        let to = self.amount(
+            roof.front_overhang,
+            given,
+            step,
+            "overhang",
+            ["longer", "shorter"],
+        )?;
         if given.is_none() {
             self.assumed
                 .push(format!("No amount given, so it moves by {step}"));
@@ -566,7 +631,7 @@ impl Clause<'_> {
         let mut edits = match (&self.project.porch, given) {
             (Some(p), given) if self.direction() != 0 || given.is_some() => {
                 let step = Length::feet(1);
-                let to = self.amount(p.depth, given, step, "porch depth")?;
+                let to = self.amount(p.depth, given, step, "porch", ["deeper", "shallower"])?;
                 if given.is_none() {
                     self.assumed
                         .push(format!("No amount given, so it moves by {step}"));
@@ -778,6 +843,7 @@ impl Clause<'_> {
         }
 
         let wall_len = wall.length(b);
+        let slide = placed.is_none();
         let offset = match placed {
             Some(at) if from_right => wall_len - at - width,
             Some(at) => at,
@@ -803,12 +869,7 @@ impl Clause<'_> {
                 }
             }
         };
-        let header_note = format!(
-            "{} header, the app's default; check it for this span",
-            header
-        );
-        self.assumed.push(header_note);
-        Ok(vec![Edit::AddOpening {
+        let edit = |offset, header| Edit::AddOpening {
             wall,
             kind,
             offset,
@@ -816,7 +877,77 @@ impl Clause<'_> {
             height,
             sill_height: sill,
             header,
-        }])
+        };
+
+        // Rust tries the nearest spots and, for a door up to 4' wide, one
+        // header size down, and keeps the first that frames.
+        let headers: &[Nominal] = match kind {
+            OpeningKind::Door if width <= Length::feet(4) => &[header, Nominal::new(2, 6)],
+            _ => &[header],
+        };
+        let room = wall_len - width;
+        let offsets: Vec<Length> = if slide {
+            let inch = Length::inches(1);
+            let mut v = vec![offset];
+            let mut k = 1;
+            while offset - inch * k >= Length::ZERO || offset + inch * k <= room {
+                for at in [offset - inch * k, offset + inch * k] {
+                    if at >= Length::ZERO && at <= room {
+                        v.push(at);
+                    }
+                }
+                k += 1;
+            }
+            v
+        } else {
+            vec![offset]
+        };
+        let first_problem = self.wall_problem(wall, &edit(offset, header));
+        let Some(first_problem) = first_problem else {
+            self.assumed.push(format!(
+                "{header} header, the app's default; check it for this span"
+            ));
+            return Ok(vec![edit(offset, header)]);
+        };
+        for &h in headers {
+            for &at in &offsets {
+                if self.wall_problem(wall, &edit(at, h)).is_none() {
+                    if at != offset {
+                        let side = if at < offset { "left" } else { "right" };
+                        let by = if at < offset {
+                            offset - at
+                        } else {
+                            at - offset
+                        };
+                        self.assumed
+                            .push(format!("Moved {by} {side} to clear the other openings"));
+                    }
+                    self.assumed.push(if h == header {
+                        format!("{h} header, the app's default; check it for this span")
+                    } else {
+                        format!(
+                            "{h} header so it fits under the top plates; check it for this span"
+                        )
+                    });
+                    return Ok(vec![edit(at, h)]);
+                }
+            }
+        }
+        Err(Stop::Problem(format!(
+            "A {width} x {height} {} won't fit in the {} wall: {first_problem}",
+            kind_name(kind),
+            wall.id()
+        )))
+    }
+
+    /// The first reason `edit` keeps its wall from framing.
+    fn wall_problem(&self, wall: Side, edit: &Edit) -> Option<String> {
+        let mut p = self.project.clone();
+        edit.apply(&mut p).ok()?;
+        let prefix = format!("wall {}: ", wall.id());
+        crate::framing_problems(&p)
+            .into_iter()
+            .find_map(|e| e.strip_prefix(&prefix).map(str::to_string))
     }
 
     fn remove_opening(&mut self) -> Out {
