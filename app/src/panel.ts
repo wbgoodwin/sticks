@@ -8,6 +8,7 @@ import {
   isSide,
   parseLength,
   type BuildingJson,
+  type OpeningJson,
   type OpeningKind,
   type PorchJson,
   type ProjectJson,
@@ -729,6 +730,13 @@ function endField(
 
 /** Openings folded to their summary; new ones start unfolded. */
 const foldedOpenings = new WeakSet<object>();
+/** The opening to unfold and mark on the next render, after a click on it in the drawing. */
+let revealed: OpeningJson | null = null;
+
+export function revealOpening(o: OpeningJson): void {
+  foldedOpenings.delete(o);
+  revealed = o;
+}
 
 function openingsSection(
   wall: WallJson | undefined,
@@ -783,8 +791,9 @@ function openingsSection(
       !foldedOpenings.has(o),
       (open) => (open ? foldedOpenings.delete(o) : foldedOpenings.add(o)),
     );
-    return h("div", { class: "card" }, head, body);
+    return h("div", { class: o === revealed ? "card revealed" : "card" }, head, body);
   });
+  revealed = null;
   return h(
     "section",
     { class: "panel-section", "data-section": "openings" },

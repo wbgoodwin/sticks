@@ -980,6 +980,7 @@ dialog.settings header p {
   border-radius: 8px;
   background: var(--text);
   color: var(--bg);
+  max-width: 320px;
   font-size: 12.5px;
   pointer-events: none;
   box-shadow: var(--shadow);
@@ -1099,6 +1100,78 @@ dialog.settings header p {
   stroke: var(--text-3);
   stroke-width: 1;
   stroke-dasharray: 5 4;
+}
+.rough-opening.ideal {
+  stroke: var(--accent);
+}
+.rough-opening.dragging {
+  fill: color-mix(in srgb, var(--accent) 10%, transparent);
+  stroke: var(--accent);
+  stroke-dasharray: none;
+  stroke-width: 1.5;
+}
+.opening-handle {
+  fill: transparent;
+  cursor: grab;
+}
+.opening-handle:hover {
+  fill: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.elevation.dragging,
+.elevation.dragging .opening-handle {
+  cursor: grabbing;
+}
+.elevation.dragging .member {
+  pointer-events: none;
+}
+.opening-ideal {
+  text-anchor: middle;
+  fill: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.snap-guide {
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+.dimension.gap line {
+  stroke: var(--text-3);
+}
+.dimension.gap text {
+  fill: var(--text-2);
+  font-size: 12px;
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 4px;
+}
+.dimension.gap.even line {
+  stroke: var(--accent);
+}
+.dimension.gap.even text {
+  fill: var(--accent);
+}
+.drag-ghost {
+  fill: var(--danger-soft);
+  fill-opacity: 0.6;
+  stroke: var(--danger);
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+.drag-overlay {
+  pointer-events: none;
+}
+.tooltip .good {
+  opacity: 1;
+  color: color-mix(in srgb, var(--accent) 55%, var(--bg));
+}
+.tooltip .bad {
+  opacity: 1;
+  color: color-mix(in srgb, var(--danger) 55%, var(--bg));
+}
+.tooltip .hint {
+  opacity: 0.6;
 }
 .opening-name,
 .opening-size {
@@ -1635,7 +1708,8 @@ tbody tr.highlight {
   background: none;
   cursor: pointer;
 }
-.panel-section.flash {
+.panel-section.flash,
+.card.flash {
   animation: flash 1.6s ease-out;
 }
 @keyframes flash {
