@@ -225,7 +225,7 @@ fn asks_the_target_first_then_its_own_questions() {
     let door = options.iter().find(|o| o.label == "front-1").unwrap();
     assert_eq!(
         door.description,
-        "The door in the front wall, 3' 2-1/2\" x 6' 10-1/2\", 7' 3\" from its left end"
+        "The only door, in the front wall, 3' 2-1/2\" x 6' 10-1/2\", 7' 3\" from its left end"
     );
     assert!(options.iter().any(|o| o.label == "new_opening"));
 
@@ -470,7 +470,7 @@ fn puts_it_beside_the_only_door_or_window_when_unsure_which() {
     });
     assert_eq!(
         unsaid.unwrap().description,
-        "The request doesn't mention a door or window to go beside"
+        "The request names nothing already there to go next to"
     );
 
     let mut answers = sure(&picks);

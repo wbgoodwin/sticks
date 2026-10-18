@@ -16,7 +16,8 @@ pub use interpret::{
     interpret, questions, Answer, Answers, Ask, Choice, Interpretation, Question, Step, CONFIDENT,
 };
 
-use sticks_core::{Length, Project, RoofKind};
+use edit::kind_name;
+use sticks_core::{Length, OpeningKind, Project, RoofKind};
 use sticks_rules::frame_project;
 
 /// The project with `edits` applied, in order.
@@ -76,11 +77,47 @@ pub fn describe(project: &Project) -> String {
             (Some(l), Some(h)) => format!("{l} long, {h} tall"),
             _ => "sized by the building".to_string(),
         };
-        out += &format!(
-            "  wall {}: {size}, {} opening(s)\n",
-            wall.id,
-            wall.openings.len()
-        );
+        let openings: Vec<String> = wall
+            .openings
+            .iter()
+            .map(|o| {
+                format!(
+                    "a {} {} x {}, {} from its left end",
+                    kind_name(o.kind),
+                    o.width,
+                    o.height,
+                    o.offset
+                )
+            })
+            .collect();
+        let has = if openings.is_empty() {
+            "no openings".to_string()
+        } else {
+            openings.join("; ")
+        };
+        out += &format!("  wall {}: {size}; {has}\n", wall.id);
     }
+    // Totals, so "the door" can be read as the only door.
+    let count = |kind| {
+        project
+            .walls
+            .iter()
+            .flat_map(|w| &w.openings)
+            .filter(|o| o.kind == kind)
+            .count()
+    };
+    let all: Vec<String> = [
+        OpeningKind::Door,
+        OpeningKind::Window,
+        OpeningKind::Penetration,
+    ]
+    .into_iter()
+    .map(|kind| match count(kind) {
+        0 => format!("no {}s", kind_name(kind)),
+        1 => format!("1 {}", kind_name(kind)),
+        n => format!("{n} {}s", kind_name(kind)),
+    })
+    .collect();
+    out += &format!("  in all: {}\n", all.join(", "));
     out
 }

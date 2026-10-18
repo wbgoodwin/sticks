@@ -267,7 +267,7 @@ fn may_be_unsaid(slot: &str) -> bool {
 fn unsaid(slot: &str) -> &'static str {
     match slot {
         "wall" => "The request doesn't name a wall or point to one",
-        "ref" => "The request doesn't mention a door or window to go beside",
+        "ref" => "The request names nothing already there to go next to",
         "place" => "The request doesn't say where along the wall",
         "count" => "The request doesn't say how many",
         "kind" => "The request doesn't say what kind",
@@ -1069,12 +1069,18 @@ impl<'a> Clause<'a> {
                     .filter(move |w| w.id == s.id())
                     .flat_map(|w| w.openings.iter().enumerate())
                     .map(move |(i, o)| {
+                        // Say when it's the only one, so "the door" plainly means it.
+                        let kind = kind_name(o.kind);
+                        let which = if self.count_of(o.kind) == 1 {
+                            format!("The only {kind}, in")
+                        } else {
+                            format!("The {kind} in")
+                        };
                         (
                             (*s, i),
                             format!("{}-{}", s.id(), i + 1),
                             format!(
-                                "The {} in the {} wall, {} x {}, {} from its left end",
-                                kind_name(o.kind),
+                                "{which} the {} wall, {} x {}, {} from its left end",
                                 s.id(),
                                 o.width,
                                 o.height,
@@ -1084,6 +1090,17 @@ impl<'a> Clause<'a> {
                     })
             })
             .collect()
+    }
+
+    /// How many openings of `kind` the building's walls have.
+    fn count_of(&self, kind: OpeningKind) -> usize {
+        self.project
+            .walls
+            .iter()
+            .filter(|w| Side::ALL.iter().any(|s| s.id() == w.id))
+            .flat_map(|w| &w.openings)
+            .filter(|o| o.kind == kind)
+            .count()
     }
 
     fn opening(&self, side: Side, index: usize) -> sticks_core::Opening {
