@@ -80,6 +80,12 @@ body {
     "panel stage";
   height: 100vh;
 }
+#app.panel-collapsed {
+  grid-template-columns: 0 1fr;
+}
+#app.panel-collapsed .panel {
+  display: none;
+}
 
 /* Top bar */
 .topbar {
@@ -484,13 +490,57 @@ button:focus-visible {
   min-height: 0;
   min-width: 0;
 }
+.viewbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 16px 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
 .views {
   display: flex;
   flex-wrap: wrap;
   gap: 2px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+}
+.pane-toggle {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.pane-toggle:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.pane-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pane-toggle[data-pane="panel"][aria-expanded="false"] {
+  color: var(--accent);
+}
+.pane-toggle[data-pane="schedule"] {
+  align-self: center;
+  margin-left: 4px;
+}
+.pane-toggle[data-pane="schedule"] svg {
+  transition: transform 0.15s;
+}
+.pane-toggle[data-pane="schedule"][aria-expanded="false"] svg {
+  transform: rotate(180deg);
 }
 .views button {
   height: 28px;
@@ -914,6 +964,20 @@ button:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 .tab-panel[hidden] {
+  display: none;
+}
+#app.schedule-collapsed .schedule {
+  padding-bottom: 0;
+  overflow: hidden;
+}
+#app.schedule-collapsed .tabs {
+  margin-bottom: 0;
+  border-bottom: none;
+}
+#app.schedule-collapsed .tabs [role="tab"] {
+  border-bottom-color: transparent;
+}
+#app.schedule-collapsed .tab-panel {
   display: none;
 }
 #shopping table {
