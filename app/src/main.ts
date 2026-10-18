@@ -17,7 +17,8 @@ import {
 import { mountCommand } from "./command";
 import { dollars, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES } from "./elevation";
-import { renderPanel, wallName, type PanelContext } from "./panel";
+import { openSection, renderPanel, wallName, type PanelContext, type PanelTab } from "./panel";
+import { renderSettings } from "./settings";
 import { ensureStock, fromTemplate, load, normalize, save, TEMPLATES } from "./state";
 import { HIDDEN_LAYERS, LAYERS, Viewer } from "./view3d";
 
@@ -28,6 +29,9 @@ app.innerHTML = `
     <input class="project-name" aria-label="Project name" spellcheck="false" autocomplete="off" />
     <div class="stats" aria-live="polite"></div>
     <div class="actions">
+      <button type="button" class="button icon-only" data-action="settings" aria-label="Settings" title="Settings: lumber prices and saw kerf">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h7M12 4h2M2 8h2M7 8h7M2 12h9"/><circle cx="10.5" cy="4" r="1.5"/><circle cx="5.5" cy="8" r="1.5"/><circle cx="12.5" cy="12" r="1.5"/></svg>
+      </button>
       <details class="menu">
         <summary class="button">New</summary>
         <div class="menu-items" role="menu"></div>
@@ -74,6 +78,16 @@ app.innerHTML = `
       <div class="tab-panel" id="cuts" role="tabpanel" aria-labelledby="tab-cuts" hidden></div>
     </section>
   </main>
+  <dialog class="settings" aria-labelledby="settings-title">
+    <header>
+      <div>
+        <h2 id="settings-title">Lumber yard</h2>
+        <p>What the cut list can buy, saved with this project.</p>
+      </div>
+      <button type="button" class="icon-button" data-action="close-settings" aria-label="Close">×</button>
+    </header>
+    <div class="settings-body"></div>
+  </dialog>
   <div class="print-preview" hidden>
     <div class="print-bar">
       <strong>Build packet</strong>
@@ -107,6 +121,8 @@ const legend = $<HTMLDivElement>(".legend");
 const nameInput = $<HTMLInputElement>(".project-name");
 const fileInput = $<HTMLInputElement>('input[type="file"]');
 const preview = $<HTMLDivElement>(".print-preview");
+const settings = $<HTMLDialogElement>("dialog.settings");
+const settingsBody = $<HTMLDivElement>(".settings-body");
 const previewFrame = $<HTMLIFrameElement>(".print-preview iframe");
 
 /** What the stage shows: the 3D model, a wall's elevation, or a printed drawing. */
@@ -116,6 +132,8 @@ let project: ProjectJson;
 let view: View = { kind: "3d" };
 /** The wall the panel edits. */
 let wall = "front";
+/** The panel's tab, for a building. */
+let tab: PanelTab = "building";
 /** The last frame that worked, kept on screen while an edit doesn't. */
 let framed: FrameView | null = null;
 /** The last wall elevation drawn, redrawn when the stage resizes. */
@@ -141,8 +159,17 @@ const panelContext: PanelContext = {
   },
   selectWall(id) {
     wall = id;
+    tab = "walls";
     setView({ kind: "wall", id });
     renderPanel(panel, project, panelContext, events);
+  },
+  get tab() {
+    return tab;
+  },
+  selectTab(next) {
+    tab = next;
+    renderPanel(panel, project, panelContext, events);
+    liveHints();
   },
   wallLength(id) {
     const w = framed?.walls.find((v) => v.id === id);
@@ -211,8 +238,10 @@ function renderViews(): void {
         b.className = i > 0 && v.kind !== list[i - 1][0].kind ? "group-start" : "";
         b.addEventListener("click", () => {
           setView(v);
-          if (v.kind === "wall" && v.id !== wall) {
+          // Picking a wall shows its openings in the panel.
+          if (v.kind === "wall" && (v.id !== wall || tab !== "walls")) {
             wall = v.id;
+            tab = "walls";
             renderPanel(panel, project, panelContext, events);
             liveHints();
           }
@@ -599,10 +628,17 @@ mountCommand($<HTMLDivElement>(".command"), {
   reveal(target) {
     const opening = /^(front|back|left|right)-\d+$/.exec(target);
     if (opening) panelContext.selectWall(opening[1]);
-    const title = opening || target === "new_opening" ? "Openings" : PANEL_SECTIONS[target];
-    const section = [...panel.querySelectorAll<HTMLElement>(".panel-section")].find(
-      (s) => s.querySelector("h2")?.textContent === title,
-    );
+    const key = opening || target === "new_opening" ? "openings" : PANEL_SECTIONS[target];
+    if (!key) return;
+    if (key !== "openings") {
+      tab = "building";
+      openSection(key);
+      renderPanel(panel, project, panelContext, events);
+      liveHints();
+    } else if (tab !== "walls") {
+      panelContext.selectTab("walls");
+    }
+    const section = panel.querySelector<HTMLElement>(`[data-section="${key}"]`);
     if (!section) return;
     section.scrollIntoView({ block: "center", behavior: "smooth" });
     section.classList.remove("flash");
@@ -613,20 +649,20 @@ mountCommand($<HTMLDivElement>(".command"), {
 
 /** The panel section where each command-bar target is edited. */
 const PANEL_SECTIONS: Record<string, string> = {
-  width: "Shed",
-  depth: "Shed",
-  height: "Shed",
-  footprint: "Shed",
-  studs: "Shed",
-  spacing: "Shed",
-  pitch: "Roof",
-  roof_shape: "Roof",
-  overhangs: "Roof",
-  rafters: "Roof",
-  joists: "Floor",
-  porch: "Porch",
-  porch_depth: "Porch",
-  deck: "Porch",
+  width: "shed",
+  depth: "shed",
+  height: "shed",
+  footprint: "shed",
+  studs: "framing",
+  spacing: "framing",
+  pitch: "roof",
+  roof_shape: "roof",
+  overhangs: "roof",
+  rafters: "roof",
+  joists: "floor",
+  porch: "porch",
+  porch_depth: "porch",
+  deck: "porch",
 };
 
 /** Starts editing another project. */
@@ -635,6 +671,7 @@ function openProject(next: ProjectJson): void {
   framed = null;
   view = { kind: "3d" };
   wall = project.building ? "front" : (project.wall[0]?.id ?? "front");
+  tab = "building";
   info.hidden = true;
   update();
   renderPanel(panel, project, panelContext, events);
@@ -672,10 +709,22 @@ app.addEventListener("click", (e) => {
     case "close-preview":
       preview.hidden = true;
       break;
+    case "settings":
+      renderSettings(settingsBody, project, update);
+      settings.showModal();
+      break;
+    case "close-settings":
+      settings.close();
+      break;
   }
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !preview.hidden) preview.hidden = true;
+});
+
+// A click on the backdrop, outside the dialog's box, closes it.
+settings.addEventListener("click", (e) => {
+  if (e.target === settings) settings.close();
 });
 
 fileInput.addEventListener("change", async () => {
