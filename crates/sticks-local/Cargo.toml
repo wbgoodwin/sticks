@@ -1,0 +1,27 @@
+[package]
+name = "sticks-local"
+description = "Answers Sticks' plain-English questions with a small model on this machine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# llama.cpp itself. Off by default so the workspace builds without cmake.
+# On a Mac it runs on the GPU through Metal.
+llama = ["dep:llama-cpp-2"]
+
+[dependencies]
+sticks-core.workspace = true
+sticks-intent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+llama-cpp-2 = { version = "0.1.160", optional = true, default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+llama-cpp-2 = { version = "0.1.160", optional = true, default-features = false, features = ["metal"] }
+
+[[bin]]
+name = "sticks-local-probe"
+required-features = ["llama"]

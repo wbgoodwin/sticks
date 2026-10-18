@@ -77,6 +77,22 @@ key in `app/.env.local`. A bundled build can't reach Jev yet.
 line: `TYPESAFE_API_KEY=... npm run probe:jev` in `app/`, which builds
 `sticks` first.
 
+Without Jev, a small model on your machine answers the same questions
+(`crates/sticks-local`: Qwen2.5 1.5B Instruct through llama.cpp, which needs
+cmake and a C++ compiler to build: `brew install cmake` on a Mac). It picks
+only from the listed options and its odds over them are the confidence, so the
+80% rule still holds. In `app/`:
+
+- `npm run model:get` downloads the model (about 1 GB) into `models/`.
+- `npm run probe:local` runs the Jev probe's requests through it, in the same
+  layout; pass your own requests after `--`.
+- `npm run tauri dev -- --features local-model` builds the desktop app with
+  it (on the GPU on a Mac). The command bar then falls back to it
+  when Jev can't be reached, and a bundled build uses it outright. Set
+  `VITE_STICKS_ANSWERER=local` or `=jev` in `app/.env.local` to force one.
+  A bundled build looks for the model in the app's data folder, under
+  `models/`.
+
 ## Project file
 
 `examples/shed.toml` is the reference shed from the PRD. A `[building]` gives
