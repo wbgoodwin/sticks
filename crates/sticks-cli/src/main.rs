@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use sticks_core::Project;
 use sticks_cutlist::{cut_list_with_sheets, CutList};
+use sticks_hardware::HardwareList;
 use sticks_rules::{frame_project, FramedProject};
 
 #[derive(Parser)]
@@ -80,7 +81,8 @@ fn main() -> ExitCode {
         Command::Cuts { project } => load(&project).and_then(|p| {
             let f = framed(&p)?;
             let cl = plan_framed(&p, &f)?;
-            print!("{}", text::cut_list(&cl, &f.on_hand_names(&p.on_hand)));
+            let hw = hardware(&p, &f);
+            print!("{}", text::cut_list(&cl, &f.on_hand_names(&p.on_hand), &hw));
             Ok(())
         }),
         Command::Build { project, out } => load(&project).and_then(|p| build(&p, &out)),
@@ -177,14 +179,22 @@ fn plan_framed(project: &Project, f: &FramedProject) -> Result<CutList, String> 
     .map_err(|e| e.to_string())
 }
 
+/// Connectors for every section but the ones the project has on hand.
+fn hardware(project: &Project, f: &FramedProject) -> HardwareList {
+    let (buy, _) = f.split(&project.on_hand);
+    sticks_hardware::for_project(&buy.joints, project.hardware.as_ref())
+}
+
 fn build(project: &Project, out: &Path) -> Result<(), String> {
     let f = framed(project)?;
     let cl = plan_framed(project, &f)?;
+    let hw = hardware(project, &f);
     let from = project.rules.layout_from;
     let name = &project.name;
     let mut files = vec![
         ("bom.csv".to_string(), sticks_export::bom_csv(&cl)),
         ("cut-list.csv".to_string(), sticks_export::cut_list_csv(&cl)),
+        ("hardware.csv".to_string(), sticks_export::hardware_csv(&hw)),
     ];
     for w in f.walls.iter().flatten() {
         files.push((
@@ -238,7 +248,7 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
     }
     files.push((
         "print.html".to_string(),
-        sticks_export::print_html(project, &f, &cl),
+        sticks_export::print_html(project, &f, &cl, &hw),
     ));
 
     std::fs::create_dir_all(out).map_err(|e| format!("can't create {}: {e}", out.display()))?;

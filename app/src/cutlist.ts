@@ -1,7 +1,7 @@
 // The shopping list and the board-by-board cut list, drawn from the core's
 // plan. Boards cut the same way are shown once with a count.
 
-import type { BoardView, CutListView } from "./core";
+import type { BoardView, CutListView, HardwareView } from "./core";
 import { KIND_NAMES } from "./elevation";
 
 function esc(text: string): string {
@@ -36,10 +36,49 @@ export function renderShopping(root: HTMLElement, plan: CutListView, toggle: OnH
     </table>
     ${leftOff(plan)}
     ${notes(plan, priced ? [] : ["Add a price to every stock length in the lumber yard to see what this costs."])}
+    ${hardware(plan.hardware)}
   `;
   for (const b of root.querySelectorAll<HTMLButtonElement>(".have button")) {
     b.addEventListener("click", () => toggle(b.dataset.key!));
   }
+}
+
+/** Connectors, then boxes of nails or screws, then what nothing fits. */
+function hardware(hw: HardwareView): string {
+  if (hw.parts.length === 0 && hw.warnings.length === 0) return "";
+  const price = (c: number | null) => (c === null ? "" : dollars(c));
+  const parts = hw.parts
+    .map((p) => {
+      const note = p.note ? `<span class="hw-note">${esc(p.note)}</span>` : "";
+      return (
+        `<tr><td>${p.count}</td><td><strong>${esc(p.model)}</strong> <span class="hw-name">${esc(p.name)}</span></td>` +
+        `<td>${esc(list(p.joints))}${note}</td><td class="num">${price(p.unit_price_cents)}</td><td class="num">${price(p.total_cents)}</td></tr>`
+      );
+    })
+    .join("");
+  const fasteners = hw.fasteners
+    .map(
+      (f) =>
+        `<tr><td>${f.boxes}</td><td>${esc(f.name)}</td><td>${f.count} pieces</td>` +
+        `<td class="num">${price(f.box_price_cents)}</td><td class="num">${price(f.total_cents)}</td></tr>`,
+    )
+    .join("");
+  const total =
+    hw.total_cents === null
+      ? ""
+      : `<tr class="total"><td></td><td>Total</td><td></td><td></td><td class="num">${dollars(hw.total_cents)}</td></tr>`;
+  const items = hw.warnings.map(esc);
+  if (hw.parts.length > 0 && hw.total_cents === null) items.push("Add hardware prices in Settings to see what it costs.");
+  const warnings = items.length === 0 ? "" : `<ul class="warnings">${items.map((t) => `<li>${t}</li>`).join("")}</ul>`;
+  return `
+    <h3 class="hardware-heading">Hardware <span>${esc(hw.brand)}</span></h3>
+    <table class="hardware">
+      <thead><tr><th>Qty</th><th>Part</th><th>For</th><th class="num">Each</th><th class="num">Total</th></tr></thead>
+      <tbody>${parts}${fasteners}${total}</tbody>
+    </table>
+    ${warnings}
+    <p class="hw-notice">Each joint gets the usual part for its lumber sizes. Sticks doesn't check loads, so check them against your local code.</p>
+  `;
 }
 
 /** A button per stage of the build; pressed ones are already on hand. */

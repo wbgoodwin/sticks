@@ -187,6 +187,42 @@ export interface CutListView {
   on_hand_boards: BoardView[];
   /** What the stages left off would have cost. */
   on_hand: { boards: number; sheets: number; total_cents: number | null };
+  /** Connectors and fasteners for the stages still to buy. */
+  hardware: HardwareView;
+}
+
+export interface HardwareView {
+  /** Whose catalog the parts come from. */
+  brand: string;
+  parts: HardwarePartView[];
+  fasteners: FastenerView[];
+  /** Joints nothing in the catalog fits, and models it doesn't know. */
+  warnings: string[];
+  /** When every line has a price. */
+  total_cents: number | null;
+}
+
+export interface HardwarePartView {
+  /** Like `H2.5A`; prices are kept under it. */
+  model: string;
+  name: string;
+  /** What it's for, like `rafter on plate`. */
+  joints: string[];
+  count: number;
+  note?: string;
+  unit_price_cents: number | null;
+  total_cents: number | null;
+}
+
+export interface FastenerView {
+  /** Like `10d` or `SD9212`; box prices are kept under it. */
+  key: string;
+  name: string;
+  count: number;
+  per_box: number;
+  boxes: number;
+  box_price_cents: number | null;
+  total_cents: number | null;
 }
 
 export interface SectionView {
@@ -217,7 +253,21 @@ export interface ProjectJson {
   roof?: RoofJson;
   porch?: PorchJson;
   sheathing?: SheathingJson;
+  hardware?: HardwareJson;
   wall: WallJson[];
+}
+
+/** Connector settings. Left out, every needed connector is listed, nailed. */
+export interface HardwareJson {
+  fasten_with?: "nails" | "screws";
+  /** Every extra tie for a high-wind area. */
+  high_wind?: boolean;
+  /** Extra ties by joint, like `joist_on_beam`. */
+  add?: string[];
+  /** A model in place of the catalog's pick, or `none`, by joint. */
+  parts?: Record<string, string>;
+  /** By model for connectors, and per box for fasteners. */
+  prices_cents?: Record<string, number>;
 }
 
 export interface BuildingJson {
@@ -234,7 +284,11 @@ export interface FloorJson {
   beam: string;
   beam_plies: number;
   beams: number;
-  support: "piers" | "skids";
+  support: "piers" | "skids" | "posts";
+  /** When the beams sit on posts. Default 4x4. */
+  post?: string;
+  /** Pier top to beam bottom, when on posts. Default 12". */
+  post_height?: string;
   pier_spacing: string;
   pier_inset: string;
   subfloor: string;

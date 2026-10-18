@@ -1769,3 +1769,49 @@ tbody tr.highlight {
     background: transparent;
   }
 }
+
+/* Hardware under the shopping list. */
+.hardware-heading {
+  margin: 24px 0 8px;
+  font-size: 14px;
+}
+.hardware-heading span {
+  margin-left: 6px;
+  color: var(--text-2);
+  font-weight: 400;
+  font-size: 12.5px;
+}
+#shopping table.hardware {
+  max-width: 760px;
+}
+.hw-name {
+  color: var(--text-2);
+}
+.hw-note {
+  display: block;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.hw-notice {
+  max-width: 640px;
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 14px;
+  font-size: 13px;
+}
+.hw-row .sheet-size {
+  font-size: 12.5px;
+}
+.check-field input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+}

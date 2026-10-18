@@ -1,17 +1,26 @@
 // The settings dialog: the lumber yard the cut list buys from, with the
-// lengths and prices of every board size and sheet, and the saw's kerf. It all
-// saves with the project, like the rest of the design.
+// lengths and prices of every board size and sheet, the hardware and its
+// prices, and the saw's kerf. It all saves with the project, like the rest of
+// the design.
 
-import { parseLength, type ProjectJson, type SheetJson, type StockJson } from "./core";
+import { parseLength, type HardwareView, type ProjectJson, type SheetJson, type StockJson } from "./core";
 import { h, lengthField, type PanelEvents } from "./panel";
 
-/** What the right side shows: one board size, one sheet, or the kerf. */
-type Pick = { kind: "stock"; size: string } | { kind: "sheet"; thickness: string } | { kind: "kerf" };
+/** What the right side shows: one board size, one sheet, the hardware, or the kerf. */
+type Pick = { kind: "stock"; size: string } | { kind: "sheet"; thickness: string } | { kind: "hardware" } | { kind: "kerf" };
 
 let pick: Pick | null = null;
 
-/** Draws the dialog's body. `changed` re-frames after any edit. */
-export function renderSettings(root: HTMLElement, project: ProjectJson, changed: () => void): void {
+/**
+ * Draws the dialog's body. `changed` re-frames after any edit; `hardware`
+ * gives the hardware list as the design stands.
+ */
+export function renderSettings(
+  root: HTMLElement,
+  project: ProjectJson,
+  changed: () => void,
+  hardware: () => HardwareView,
+): void {
   const stock = project.stock ?? [];
   const sheets = project.sheet ?? [];
   // A size the design no longer uses can drop off the list.
@@ -32,7 +41,7 @@ export function renderSettings(root: HTMLElement, project: ProjectJson, changed:
           "aria-current": String(sameItem(p, pick!)),
           onclick: () => {
             pick = p;
-            renderSettings(root, project, changed);
+            renderSettings(root, project, changed, hardware);
           },
         },
         h("span", {}, label),
@@ -49,6 +58,8 @@ export function renderSettings(root: HTMLElement, project: ProjectJson, changed:
           s.price_cents === undefined ? "no price" : `$${formatCents(s.price_cents)}`,
         ),
       ),
+      h("span", { class: "settings-group" }, "Hardware"),
+      item({ kind: "hardware" }, "Connectors", hardwarePriced(hardware())),
       h("span", { class: "settings-group" }, "Cutting"),
       item({ kind: "kerf" }, "Saw kerf", project.rules.kerf ?? '1/8"'),
     );
@@ -62,13 +73,14 @@ export function renderSettings(root: HTMLElement, project: ProjectJson, changed:
     },
     restructured() {
       changed();
-      renderSettings(root, project, changed);
+      renderSettings(root, project, changed, hardware);
     },
   };
   const p = pick;
   let detail: HTMLElement;
   if (p.kind === "stock") detail = stockDetail(stock.find((s) => s.size === p.size)!, events);
   else if (p.kind === "sheet") detail = sheetDetail(project, sheets.find((s) => s.thickness === p.thickness)!, events);
+  else if (p.kind === "hardware") detail = hardwareDetail(project, hardware(), events);
   else {
     const rules = project.rules;
     detail = h(
@@ -233,6 +245,111 @@ function stockRow(stock: StockJson, i: number, events: PanelEvents): HTMLElement
       "×",
     ),
   );
+}
+
+/** How much of the hardware list has prices. */
+function hardwarePriced(hw: HardwareView): string {
+  const lines = [...hw.parts.map((p) => p.unit_price_cents), ...hw.fasteners.map((f) => f.box_price_cents)];
+  if (lines.length === 0) return "none needed";
+  const n = lines.filter((c) => c !== null).length;
+  if (n === 0) return "no prices";
+  if (n === lines.length) return "priced";
+  return `${n} of ${lines.length} priced`;
+}
+
+/** How the connectors go on, and a price for each part and box in the design. */
+function hardwareDetail(project: ProjectJson, hw: HardwareView, events: PanelEvents): HTMLElement {
+  const settings = () => (project.hardware ??= {});
+  const tidy = () => {
+    const s = project.hardware;
+    if (s && Object.keys(s).length === 0) delete project.hardware;
+  };
+  const fasten = h(
+    "select",
+    {
+      "aria-label": "Fasten with",
+      onchange: () => {
+        if (fasten.value === "screws") settings().fasten_with = "screws";
+        else delete settings().fasten_with;
+        tidy();
+        events.restructured();
+      },
+    },
+    h("option", { value: "nails" }, "Nails"),
+    h("option", { value: "screws" }, "Connector screws"),
+  );
+  fasten.value = project.hardware?.fasten_with ?? "nails";
+  const wind = h("input", {
+    type: "checkbox",
+    onchange: () => {
+      if (wind.checked) settings().high_wind = true;
+      else delete settings().high_wind;
+      tidy();
+      events.restructured();
+    },
+  });
+  wind.checked = project.hardware?.high_wind ?? false;
+  const priceRow = (key: string, label: string, get: number | null, unit: string) =>
+    h(
+      "div",
+      { class: "stock-row hw-row" },
+      h("div", { class: "sheet-size" }, label),
+      priceField(`${key} price ${unit}`, get, (cents) => {
+        const prices = (settings().prices_cents ??= {});
+        if (cents === null) delete prices[key];
+        else prices[key] = cents;
+        if (Object.keys(prices).length === 0) delete settings().prices_cents;
+        tidy();
+        events.changed();
+      }),
+    );
+  return h(
+    "div",
+    { class: "settings-detail" },
+    h("h3", {}, `Connectors (${hw.brand})`),
+    h("label", { class: "field" }, h("span", { class: "field-label" }, "Fasten with"), fasten),
+    h("label", { class: "check-field" }, wind, h("span", {}, "High wind: add every extra tie")),
+    h(
+      "div",
+      { class: "stock-head", "aria-hidden": "true" },
+      h("span", {}, "Part"),
+      h("span", {}, "Price"),
+    ),
+    ...hw.parts.map((p) => priceRow(p.model, `${p.model} ${p.name}`, p.unit_price_cents, "each")),
+    ...hw.fasteners.map((f) => priceRow(f.key, f.name, f.box_price_cents, "per box")),
+    h(
+      "p",
+      { class: "settings-note" },
+      hw.parts.length === 0
+        ? "Nothing in the design needs a connector yet."
+        : "Connectors are priced each, and nails and screws by the box. Only parts the design uses are listed.",
+    ),
+  );
+}
+
+/** A price box that reports cents, or null when cleared. */
+function priceField(label: string, cents: number | null, set: (cents: number | null) => void): HTMLElement {
+  const message = h("div", { class: "field-error", role: "alert" });
+  const input = h("input", {
+    type: "text",
+    inputmode: "decimal",
+    placeholder: "$",
+    value: formatCents(cents),
+    autocomplete: "off",
+    "aria-label": label,
+    oninput: () => {
+      const c = parseCents(input.value);
+      if (c === undefined) {
+        input.classList.add("invalid");
+        message.textContent = "Try a price like 0.89";
+        return;
+      }
+      input.classList.remove("invalid");
+      message.textContent = "";
+      set(c);
+    },
+  });
+  return h("label", { class: "field" }, input, message);
 }
 
 /** Cents from `4.98` or `$4.98`; null when blank; undefined when unreadable. */

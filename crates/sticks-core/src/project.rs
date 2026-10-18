@@ -1,11 +1,13 @@
 //! The project file: a plain-text TOML description of a structure that diffs
 //! cleanly in Git.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::joint::JointKind;
 use crate::lumber::Nominal;
 use crate::units::Length;
 
@@ -37,6 +39,10 @@ pub struct Project {
     pub porch: Option<Porch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheathing: Option<Sheathing>,
+    /// Connectors and their nails. Left out, the shopping list carries the
+    /// connectors every design needs, nailed, with no prices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<Hardware>,
     #[serde(default, rename = "wall", skip_serializing_if = "Vec::is_empty")]
     pub walls: Vec<Wall>,
 }
@@ -74,6 +80,13 @@ pub struct Floor {
     pub beams: u8,
     /// What the beams sit on. Default piers.
     pub support: FloorSupport,
+    /// Post size, when the beams sit on posts. Default 4x4.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post: Option<Nominal>,
+    /// Post length, pier top to beam bottom, when the beams sit on posts.
+    /// Default 12".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_height: Option<Length>,
     /// Most room between piers along a beam. Default 6'.
     pub pier_spacing: Length,
     /// From each end of a beam to the center of its end pier. Default 12".
@@ -91,6 +104,8 @@ impl Default for Floor {
             beam_plies: 1,
             beams: 2,
             support: FloorSupport::Piers,
+            post: None,
+            post_height: None,
             pier_spacing: Length::feet(6),
             pier_inset: Length::inches(12),
             subfloor: Length::from_sixteenths(12),
@@ -106,6 +121,67 @@ pub enum FloorSupport {
     Piers,
     /// Beams laid on grade as skids; no piers.
     Skids,
+    /// Beams on short posts, each post on a pier; beam joints land on a post.
+    Posts,
+}
+
+impl Floor {
+    /// The post under each beam, when the beams sit on posts.
+    pub fn post_size(&self) -> Nominal {
+        self.post.unwrap_or(Nominal::new(4, 4))
+    }
+
+    /// Pier top to beam bottom, when the beams sit on posts.
+    pub fn post_length(&self) -> Length {
+        self.post_height.unwrap_or(Length::inches(12))
+    }
+}
+
+/// The metal connectors at the joints and the nails or screws that hold
+/// them. Every connector the design needs is on the list unless `parts`
+/// says `none` for its joint; the extra ties are off unless asked for.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Hardware {
+    /// Nails or connector screws. Default nails.
+    pub fasten_with: Fastening,
+    /// Every extra tie for a high-wind area: rafters at the ridge, joists on
+    /// beams, studs to plates and the deck's lateral ties.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub high_wind: bool,
+    /// Extra ties to add without `high_wind`, by joint, such as
+    /// `joist_on_beam`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub add: Vec<JointKind>,
+    /// A model to use in place of the catalog's pick for a kind of joint, or
+    /// `none` to leave that joint's connector off, such as
+    /// `rafter_on_plate = "H1"`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub parts: BTreeMap<JointKind, String>,
+    /// Price in cents by model for connectors, and per box for fasteners,
+    /// such as `"H2.5A" = 89`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub prices_cents: BTreeMap<String, u32>,
+}
+
+impl Hardware {
+    /// Whether joints of `kind` get a connector.
+    pub fn wants(&self, kind: JointKind) -> bool {
+        if self.parts.get(&kind).is_some_and(|p| p == "none") {
+            return false;
+        }
+        kind.required() || self.high_wind || self.add.contains(&kind)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fastening {
+    /// The nails each connector's catalog listing calls for.
+    #[default]
+    Nails,
+    /// Connector screws, one in each nail hole.
+    Screws,
 }
 
 /// The roof over a building.
@@ -596,6 +672,45 @@ id = "front"
         assert_eq!(floor.joist, Nominal::new(2, 6));
         assert_eq!(p.sheets[0].length, Length::feet(8));
         assert_eq!(p.walls[0].length, None);
+        let text = p.to_toml().unwrap();
+        assert_eq!(Project::from_toml(&text).unwrap(), p);
+    }
+
+    #[test]
+    fn loads_hardware_and_posts() {
+        let p = Project::from_toml(
+            r#"
+name = "Shed"
+[building]
+width = "12'"
+depth = "8'"
+height = "8'"
+[floor]
+support = "posts"
+post_height = "18\""
+[hardware]
+fasten_with = "screws"
+add = ["joist_on_beam"]
+[hardware.parts]
+rafter_on_plate = "H1"
+stud_to_plate = "none"
+[hardware.prices_cents]
+"H2.5A" = 89
+"#,
+        )
+        .unwrap();
+        let floor = p.floor.as_ref().unwrap();
+        assert_eq!(floor.support, FloorSupport::Posts);
+        assert_eq!(floor.post_size(), Nominal::new(4, 4));
+        assert_eq!(floor.post_length(), Length::inches(18));
+        let hw = p.hardware.as_ref().unwrap();
+        assert_eq!(hw.fasten_with, Fastening::Screws);
+        assert!(hw.wants(JointKind::JoistOnBeam));
+        assert!(hw.wants(JointKind::RafterOnPlate));
+        assert!(!hw.wants(JointKind::StudToPlate));
+        assert!(!hw.wants(JointKind::DeckLateral));
+        assert_eq!(hw.parts[&JointKind::RafterOnPlate], "H1");
+        assert_eq!(hw.prices_cents["H2.5A"], 89);
         let text = p.to_toml().unwrap();
         assert_eq!(Project::from_toml(&text).unwrap(), p);
     }

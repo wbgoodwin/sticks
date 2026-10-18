@@ -76,6 +76,7 @@ export function fascia(rafter: string): string {
 export function sizesUsed(project: ProjectJson): string[] {
   const sizes = [project.rules.wall_lumber, ...project.wall.flatMap((w) => w.opening.map((o) => o.header))];
   if (project.floor) sizes.push(project.floor.joist, project.floor.beam);
+  if (project.floor?.support === "posts") sizes.push(project.floor.post ?? "4x4");
   if (project.roof) sizes.push(project.roof.rafter, project.roof.fascia ?? fascia(project.roof.rafter));
   if (project.porch) {
     const p = project.porch;
