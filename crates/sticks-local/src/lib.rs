@@ -18,7 +18,7 @@ mod llama;
 
 #[cfg(feature = "llama")]
 pub use llama::LocalModel;
-pub use prompt::{letters, Prompt};
+pub use prompt::{letters, Ending, Prompt};
 
 use std::path::{Path, PathBuf};
 

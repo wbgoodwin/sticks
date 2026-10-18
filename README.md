@@ -84,6 +84,8 @@ only from the listed options and its odds over them are the confidence, so the
 80% rule still holds. In `app/`:
 
 - `npm run model:get` downloads the model (about 1 GB) into `models/`.
+  `npm run model:get -- 4b` gets Qwen3 4B Instruct instead (about 2.5 GB);
+  point `STICKS_MODEL` at it to use it.
 - `npm run probe:local` runs the Jev probe's requests through it, in the same
   layout; pass your own requests after `--`.
 - `npm run tauri dev -- --features local-model` builds the desktop app with

@@ -5,6 +5,10 @@
 //! the request), so the model reads it once and only the question itself
 //! changes. The reply starts right after the prompt, and its first token is
 //! the letter of an option.
+//!
+//! Small models lean toward options by where they sit in the list, so each
+//! question is also asked with its options in reverse, and the two readings
+//! are averaged.
 
 use crate::{Error, Query};
 
@@ -19,11 +23,19 @@ pub fn letters() -> impl Iterator<Item = char> {
 }
 
 /// The prompt for one request: an opening shared by all its questions, then
-/// one ending per question.
+/// for each question, its endings: one per order of the options.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Prompt {
     pub opening: String,
-    pub endings: Vec<String>,
+    pub endings: Vec<Vec<Ending>>,
+}
+
+/// One question with its options in one order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ending {
+    pub text: String,
+    /// The index of the option under each letter.
+    pub order: Vec<usize>,
 }
 
 impl Prompt {
@@ -38,7 +50,7 @@ impl Prompt {
     }
 }
 
-fn ending(q: &Query) -> Result<String, Error> {
+fn ending(q: &Query) -> Result<Vec<Ending>, Error> {
     let max = letters().count();
     if q.options.len() > max {
         return Err(Error::TooManyOptions {
@@ -47,12 +59,24 @@ fn ending(q: &Query) -> Result<String, Error> {
             max,
         });
     }
-    let mut out = format!("About \"{}\": {}\n", q.text, q.prompt);
-    for (letter, o) in letters().zip(&q.options) {
-        out += &format!("{letter}. {}\n", o.description);
+    let forward: Vec<usize> = (0..q.options.len()).collect();
+    let mut orders = vec![forward.clone()];
+    if q.options.len() > 1 {
+        orders.push(forward.into_iter().rev().collect());
     }
-    out += "Answer with one letter.<|im_end|>\n<|im_start|>assistant\n";
-    Ok(out)
+    Ok(orders
+        .into_iter()
+        .map(|order| {
+            let mut text = format!("About \"{}\": {}\n", q.text, q.prompt);
+            for (letter, &i) in letters().zip(&order) {
+                // The label too, since the design names openings by it.
+                let o = &q.options[i];
+                text += &format!("{letter}. {}: {}\n", o.label, o.description);
+            }
+            text += "Answer with one letter.<|im_end|>\n<|im_start|>assistant\n";
+            Ending { text, order }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -66,10 +90,17 @@ mod tests {
         let p = Prompt::new("make it 20' wide", "Shed\n  building: 18' wide\n", &[q]).unwrap();
         assert!(p.opening.ends_with("The request: \"make it 20' wide\"\n\n"));
         assert!(p.opening.contains("building: 18' wide\n\nThe request"));
-        let e = &p.endings[0];
+        let [forward, reversed] = &p.endings[0][..] else {
+            panic!("two orders")
+        };
+        let e = &forward.text;
         assert!(e.starts_with("About \"make it 20' wide\": What in the design does this change?\n"));
-        assert!(e.contains("A. The width\nB. The depth\n"));
+        assert!(e.contains("A. width: The width\nB. depth: The depth\n"));
         assert!(e.ends_with("<|im_start|>assistant\n"));
+        assert!(reversed
+            .text
+            .contains("A. depth: The depth\nB. width: The width\n"));
+        assert_eq!(reversed.order, [1, 0]);
     }
 
     #[test]

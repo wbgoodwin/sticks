@@ -2,16 +2,34 @@
 // repository root, where the desktop dev build and `npm run probe:local`
 // look for it. About 1 GB; run once.
 //
-//   npm run model:get
+//   npm run model:get          Qwen2.5 1.5B, the default
+//   npm run model:get -- 4b    Qwen3 4B Instruct, about 2.5 GB: slower, and
+//                              likely better at picking what a request changes.
+//                              Use it with STICKS_MODEL=models/<its file>.
 
 import { createWriteStream, existsSync, mkdirSync, renameSync } from "node:fs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
-// Qwen2.5 1.5B Instruct, 4-bit, Apache 2.0. Keep the name in step with
+// Both 4-bit and Apache 2.0. Keep the default's name in step with
 // DEFAULT_MODEL in crates/sticks-local.
-const NAME = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
-const SOURCE = `https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/${NAME}`;
+const MODELS = {
+  default: {
+    name: "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    repo: "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+  },
+  "4b": {
+    name: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+    repo: "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+  },
+};
+const pick = MODELS[process.argv[2] ?? "default"];
+if (!pick) {
+  console.error(`Pick one of: ${Object.keys(MODELS).join(", ")}`);
+  process.exit(1);
+}
+const NAME = pick.name;
+const SOURCE = `https://huggingface.co/${pick.repo}/resolve/main/${NAME}`;
 
 const dir = new URL("../../models/", import.meta.url).pathname;
 const dest = dir + NAME;
