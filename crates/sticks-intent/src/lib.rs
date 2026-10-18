@@ -7,10 +7,12 @@
 //! question id and the request is read again, so nothing is kept between
 //! calls. Rust then places, checks and frames the result.
 
+mod design;
 mod edit;
 mod interpret;
 mod words;
 
+pub use design::{design, Design};
 pub use edit::{Dimension, Edit, EditError, Framing, Side};
 pub use interpret::{
     interpret, questions, Answer, Answers, Ask, Choice, Interpretation, Question, Step, CONFIDENT,
@@ -37,8 +39,8 @@ pub fn framing_problems(project: &Project) -> Vec<String> {
     }
 }
 
-/// The design in a few lines of builder English, as context for the
-/// classifier and as `sticks check` prints it.
+/// The design in a few lines of builder English, as `sticks check` prints
+/// it. The classifier reads [`design`] instead.
 pub fn describe(project: &Project) -> String {
     let mut out = format!("{}\n", project.name);
     out += &format!(

@@ -5,12 +5,12 @@
 // so this only works under `npm run dev` or `npm run tauri dev` for now.
 
 import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
-import type { EditAnswer, EditAsk } from "./core";
+import type { EditAnswer, EditAsk, Json } from "./core";
 
 let client: TypeSafeClient | null = null;
 
 /** Jev's pick for each question, with how sure it was. */
-export async function askJev(request: string, design: string, asks: EditAsk[]): Promise<Record<string, EditAnswer>> {
+export async function askJev(request: string, design: { [key: string]: Json }, asks: EditAsk[]): Promise<Record<string, EditAnswer>> {
   if (!import.meta.env.DEV) {
     throw new Error("Plain-English changes need the dev server for now: run npm run dev or npm run tauri dev.");
   }

@@ -81,13 +81,14 @@ pub fn print_packet(project_json: &str) -> Result<String, JsError> {
     print_html(project_json).map_err(|e| JsError::new(&e))
 }
 
-/// The design in a few lines of builder English, the context a classifier
-/// reads with each request.
+/// The design as JSON, in the shape a classifier reads with each request:
+/// sizes in builder notation and each opening labeled like `front-1`.
 #[wasm_bindgen]
 pub fn describe_design(project_json: &str) -> Result<String, JsError> {
     let project: Project =
         serde_json::from_str(project_json).map_err(|e| JsError::new(&e.to_string()))?;
-    Ok(sticks_intent::describe(&project))
+    serde_json::to_string(&sticks_intent::design(&project))
+        .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// The multiple-choice questions a classifier such as Jev should answer

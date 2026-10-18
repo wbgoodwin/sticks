@@ -397,9 +397,12 @@ export interface EditReading {
   problems: string[];
 }
 
-/** The design in a few lines, the context Jev reads with each request. */
-export function describeDesign(project: ProjectJson): string {
-  return wasm.describe_design(JSON.stringify(forCore(project)));
+/** A plain JSON value. */
+export type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+
+/** The design as Jev reads it with each request: the same shape every time, openings labeled like `front-1`. */
+export function describeDesign(project: ProjectJson): { [key: string]: Json } {
+  return JSON.parse(wasm.describe_design(JSON.stringify(forCore(project))));
 }
 
 /** The questions Jev should answer next about a request, given the answers so far. Empty when done. */

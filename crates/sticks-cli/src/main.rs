@@ -24,7 +24,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Load a project file and summarize what it describes.
-    Check { project: PathBuf },
+    Check {
+        project: PathBuf,
+        /// Print the design as JSON, as a classifier such as Jev reads it.
+        #[arg(long)]
+        json: bool,
+    },
     /// Frame the walls, floor and roof and print their members and layout marks.
     Frame {
         project: PathBuf,
@@ -70,7 +75,7 @@ enum Command {
 
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
-        Command::Check { project } => load(&project).map(|p| check(&p)),
+        Command::Check { project, json } => load(&project).and_then(|p| check(&p, json)),
         Command::Frame { project, part } => load(&project).and_then(|p| frame(&p, part.as_deref())),
         Command::Cuts { project } => load(&project)
             .and_then(|p| plan(&p))
@@ -264,6 +269,15 @@ fn file_safe(id: &str) -> String {
         .collect()
 }
 
-fn check(project: &Project) {
-    print!("{}", sticks_intent::describe(project));
+fn check(project: &Project, json: bool) -> Result<(), String> {
+    if json {
+        let design = sticks_intent::design(project);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&design).map_err(|e| e.to_string())?
+        );
+    } else {
+        print!("{}", sticks_intent::describe(project));
+    }
+    Ok(())
 }

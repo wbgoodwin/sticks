@@ -62,7 +62,8 @@ interface Reading {
 }
 
 const run = (args: string[]) => execFileSync(STICKS, ["edit", SHED, ...args], { encoding: "utf8" });
-const design = execFileSync(STICKS, ["check", SHED], { encoding: "utf8" });
+// The design as the app sends it: the same JSON for every project.
+const design = JSON.parse(execFileSync(STICKS, ["check", SHED, "--json"], { encoding: "utf8" }));
 const dir = mkdtempSync(join(tmpdir(), "jev-probe-"));
 
 const key = process.env.TYPESAFE_API_KEY;

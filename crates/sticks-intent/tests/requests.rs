@@ -497,3 +497,22 @@ fn steps_the_pitch_when_no_amount_is_given() {
         ["No amount given, so it changes by 1 in 12"]
     );
 }
+
+#[test]
+fn gives_the_classifier_the_design_with_the_options_labels() {
+    let d = serde_json::to_value(sticks_intent::design(&shed())).unwrap();
+    let walls: Vec<&str> = d["walls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(walls, ["front", "back", "left", "right"]);
+    let door = &d["walls"][0]["openings"][0];
+    assert_eq!(
+        (&door["id"], &door["kind"]),
+        (&"front-1".into(), &"door".into())
+    );
+    assert_eq!(d["openings"]["doors"], 1);
+    assert_eq!(d["roof"]["pitch"], "2:12");
+}
