@@ -9,16 +9,16 @@
     "build": "npm run wasm && tsc && vite build",
     "typecheck": "tsc",
     "tauri": "tauri",
-    "probe:jev": "node scripts/jev-probe.ts"
+    "probe:jev": "cargo build -q -p sticks-cli && node scripts/jev-probe.ts"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.3",
     "@types/three": "^0.186.0",
-    "@typesafe-ai/sdk": "^0.7.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
   },
   "dependencies": {
+    "@typesafe-ai/sdk": "^0.7.0",
     "three": "^0.186.1"
   }
 }

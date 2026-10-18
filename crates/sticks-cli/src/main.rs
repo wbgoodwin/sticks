@@ -24,7 +24,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Load a project file and summarize what it describes.
-    Check { project: PathBuf },
+    Check {
+        project: PathBuf,
+        /// Print the design as JSON, as a classifier such as Jev reads it.
+        #[arg(long)]
+        json: bool,
+    },
     /// Frame the walls, floor and roof and print their members and layout marks.
     Frame {
         project: PathBuf,
@@ -70,7 +75,7 @@ enum Command {
 
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
-        Command::Check { project } => load(&project).map(|p| check(&p)),
+        Command::Check { project, json } => load(&project).and_then(|p| check(&p, json)),
         Command::Frame { project, part } => load(&project).and_then(|p| frame(&p, part.as_deref())),
         Command::Cuts { project } => load(&project)
             .and_then(|p| plan(&p))
@@ -264,48 +269,15 @@ fn file_safe(id: &str) -> String {
         .collect()
 }
 
-fn check(project: &Project) {
-    println!("{}", project.name);
-    println!(
-        "  studs {:#} on center, kerf {}",
-        project.rules.on_center, project.rules.kerf
-    );
-    if let Some(b) = &project.building {
+fn check(project: &Project, json: bool) -> Result<(), String> {
+    if json {
+        let design = sticks_intent::design(project);
         println!(
-            "  building: {} wide, {} deep, {} tall at the front",
-            b.width, b.depth, b.height
+            "{}",
+            serde_json::to_string_pretty(&design).map_err(|e| e.to_string())?
         );
+    } else {
+        print!("{}", sticks_intent::describe(project));
     }
-    if let Some(f) = &project.floor {
-        println!(
-            "  floor: {} joists on {} {} beams",
-            f.joist, f.beams, f.beam
-        );
-    }
-    if let Some(r) = &project.roof {
-        let kind = match r.kind {
-            sticks_core::RoofKind::LeanTo => "lean-to",
-            sticks_core::RoofKind::Gable => "gable",
-        };
-        println!("  roof: {kind} at {}, {} rafters", r.pitch, r.rafter);
-    }
-    if let Some(p) = &project.porch {
-        let deck = if p.deck.is_some() { " with a deck" } else { "" };
-        println!("  porch: {} deep on {} posts{deck}", p.depth, p.post);
-    }
-    if let Some(s) = &project.sheathing {
-        let t = |l: Option<sticks_core::Length>| l.map_or("none".to_string(), |l| format!("{l:#}"));
-        println!("  sheathing: walls {}, roof {}", t(s.wall), t(s.roof));
-    }
-    for wall in &project.walls {
-        let size = match (wall.length, wall.height) {
-            (Some(l), Some(h)) => format!("{l} long, {h} tall"),
-            _ => "sized by the building".to_string(),
-        };
-        println!(
-            "  wall {}: {size}, {} opening(s)",
-            wall.id,
-            wall.openings.len()
-        );
-    }
+    Ok(())
 }

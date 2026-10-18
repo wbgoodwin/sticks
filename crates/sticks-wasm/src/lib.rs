@@ -81,6 +81,36 @@ pub fn print_packet(project_json: &str) -> Result<String, JsError> {
     print_html(project_json).map_err(|e| JsError::new(&e))
 }
 
+/// The design as JSON, in the shape a classifier reads with each request:
+/// sizes in builder notation and each opening labeled like `front-1`.
+#[wasm_bindgen]
+pub fn describe_design(project_json: &str) -> Result<String, JsError> {
+    let project: Project =
+        serde_json::from_str(project_json).map_err(|e| JsError::new(&e.to_string()))?;
+    serde_json::to_string(&sticks_intent::design(&project))
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// The multiple-choice questions a classifier such as Jev should answer
+/// next about a plain-English request, given the answers so far (a JSON
+/// map of question id to answer). Ask until it comes back empty.
+#[wasm_bindgen]
+pub fn edit_questions(
+    project_json: &str,
+    request: &str,
+    answers_json: &str,
+) -> Result<String, JsError> {
+    edit_questions_json(project_json, request, answers_json).map_err(|e| JsError::new(&e))
+}
+
+/// What a request comes to with the answers so far (a JSON map of question
+/// id to answer): each clause's changes, what was assumed, what is left to
+/// ask, and the changed project once nothing is.
+#[wasm_bindgen]
+pub fn read_edit(project_json: &str, request: &str, answers_json: &str) -> Result<String, JsError> {
+    read_edit_json(project_json, request, answers_json).map_err(|e| JsError::new(&e))
+}
+
 #[derive(Serialize)]
 struct FrameView {
     walls: Vec<WallView>,
@@ -325,6 +355,79 @@ fn piece_view(m: Member) -> PieceView {
         size: m.size.to_string(),
         length_16: m.length.sixteenths(),
     }
+}
+
+#[derive(Serialize)]
+struct EditView {
+    steps: Vec<StepView>,
+    /// The project with every change made, once nothing is left to ask.
+    project: Option<Project>,
+    /// Why the changed project won't frame, if it won't.
+    problems: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct StepView {
+    text: String,
+    /// What in the design it changes, once that's settled, such as
+    /// `width` or `front-1`.
+    target: Option<String>,
+    /// Each change in builder English.
+    changes: Vec<String>,
+    assumed: Vec<String>,
+    question: Option<sticks_intent::Question>,
+    problem: Option<String>,
+}
+
+pub fn edit_questions_json(
+    project_json: &str,
+    request: &str,
+    answers_json: &str,
+) -> Result<String, String> {
+    let project: Project = serde_json::from_str(project_json).map_err(|e| e.to_string())?;
+    let answers: sticks_intent::Answers =
+        serde_json::from_str(answers_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&sticks_intent::questions(&project, request, &answers))
+        .map_err(|e| e.to_string())
+}
+
+pub fn read_edit_json(
+    project_json: &str,
+    request: &str,
+    answers_json: &str,
+) -> Result<String, String> {
+    let project: Project = serde_json::from_str(project_json).map_err(|e| e.to_string())?;
+    let answers: sticks_intent::Answers =
+        serde_json::from_str(answers_json).map_err(|e| e.to_string())?;
+    let reading = sticks_intent::interpret(&project, request, &answers);
+    let (changed, problems) = match reading.edits() {
+        Some(edits) => match sticks_intent::apply_all(&project, &edits) {
+            Ok(p) => {
+                let problems = sticks_intent::framing_problems(&p);
+                (Some(p), problems)
+            }
+            Err(e) => (None, vec![e.to_string()]),
+        },
+        None => (None, Vec::new()),
+    };
+    let steps = reading
+        .steps
+        .into_iter()
+        .map(|s| StepView {
+            text: s.text,
+            target: s.target,
+            changes: s.edits.iter().map(|e| e.to_string()).collect(),
+            assumed: s.assumed,
+            question: s.question,
+            problem: s.problem,
+        })
+        .collect();
+    let view = EditView {
+        steps,
+        project: changed,
+        problems,
+    };
+    serde_json::to_string(&view).map_err(|e| e.to_string())
 }
 
 fn framed(project_json: &str) -> Result<(Project, FramedProject), String> {
@@ -786,5 +889,55 @@ mod tests {
             Project::from_toml(&back).unwrap(),
             Project::from_toml(toml).unwrap()
         );
+    }
+
+    #[test]
+    fn reads_a_request_into_a_changed_project() {
+        let project = serde_json::to_string(
+            &Project::from_toml(include_str!("../../../examples/shed.toml")).unwrap(),
+        )
+        .unwrap();
+        // First the target, then, once it's settled, its own questions.
+        let ids = |answers: &str| -> Vec<String> {
+            let asks: serde_json::Value = serde_json::from_str(
+                &edit_questions_json(&project, "add a window", answers).unwrap(),
+            )
+            .unwrap();
+            asks.as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(ids("{}"), ["0.target"]);
+        let target = r#"{"0.target": {"pick": "new_opening", "confidence": 0.95}}"#;
+        assert!(ids(target).contains(&"0.wall".to_string()));
+
+        let sure = r#"{"0.target": {"pick": "new_opening", "confidence": 0.95},
+                       "0.kind": {"pick": "window", "confidence": 0.95}}"#;
+        let out: serde_json::Value =
+            serde_json::from_str(&read_edit_json(&project, "add a window", sure).unwrap()).unwrap();
+        assert_eq!(out["steps"][0]["question"]["id"], "0.wall");
+        assert!(out["project"].is_null());
+
+        let answered = sure.replace(
+            "}}",
+            r#"}, "0.wall": {"pick": "back", "confidence": 1, "by_user": true}}"#,
+        );
+        let out: serde_json::Value =
+            serde_json::from_str(&read_edit_json(&project, "add a window", &answered).unwrap())
+                .unwrap();
+        assert_eq!(
+            out["steps"][0]["changes"][0],
+            "Add a 3' x 3' window to the back wall, 7' 6\" from its left end"
+        );
+        assert!(out["problems"].as_array().unwrap().is_empty());
+        let back = out["project"]["wall"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == "back")
+            .unwrap();
+        assert_eq!(back["opening"].as_array().unwrap().len(), 1);
     }
 }

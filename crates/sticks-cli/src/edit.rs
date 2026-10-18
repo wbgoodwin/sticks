@@ -18,12 +18,6 @@ pub struct Opts {
 }
 
 pub fn run(project: &Project, path: &Path, request: &str, opts: &Opts) -> Result<(), String> {
-    if opts.questions {
-        let asks = serde_json::to_string_pretty(&questions(project, request))
-            .map_err(|e| e.to_string())?;
-        println!("{asks}");
-        return Ok(());
-    }
     let mut answers = match &opts.answers_file {
         Some(f) => {
             let text = std::fs::read_to_string(f)
@@ -33,6 +27,12 @@ pub fn run(project: &Project, path: &Path, request: &str, opts: &Opts) -> Result
         None => Answers::new(),
     };
     answers.extend(parse_answers(&opts.answers)?);
+    if opts.questions {
+        let asks = serde_json::to_string_pretty(&questions(project, request, &answers))
+            .map_err(|e| e.to_string())?;
+        println!("{asks}");
+        return Ok(());
+    }
     let (as_json, write) = (opts.json, opts.write);
     let reading = interpret(project, request, &answers);
     let preview = match reading.edits() {
