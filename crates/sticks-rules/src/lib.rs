@@ -10,7 +10,7 @@ pub mod roof;
 pub mod sheathing;
 pub mod wall;
 
-pub use building::{frame_project, side_plan_y, FramedProject, SIDES};
+pub use building::{frame_project, side_plan_y, FramedProject, Section, SIDES};
 pub use floor::{frame_floor, Bay, FramedFloor, Pier, PlacedSheet};
 pub use layout::{LayoutMark, Placed, Rect, Splice};
 pub use model::{bounds, model, wall_ids, OtherKind, Solid, SolidKind};

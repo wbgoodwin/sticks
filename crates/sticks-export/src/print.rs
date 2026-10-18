@@ -70,6 +70,14 @@ td.num, th.num {{ text-align: right; }}
         "<p>{} boards and {} sheets for {} pieces, {:.1}% lumber waste{cost}. Kerf {:#}, end trim {:#}.</p>",
         s.boards, s.sheets, s.pieces, s.waste_percent, cl.kerf, cl.end_trim
     );
+    let on_hand = framed.on_hand_names(&project.on_hand);
+    if !on_hand.is_empty() {
+        let _ = writeln!(
+            out,
+            "<p>Not on the shopping list, since you have it: {}.</p>",
+            esc(&on_hand.join(", "))
+        );
+    }
     for e in framed.errors() {
         let _ = writeln!(
             out,

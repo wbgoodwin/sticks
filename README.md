@@ -81,7 +81,10 @@ line: `TYPESAFE_API_KEY=... npm run probe:jev` in `app/`, which builds
 
 `examples/shed.toml` is the reference shed from the PRD. A `[building]` gives
 the footprint and the front wall's height; `[floor]`, `[roof]`, `[porch]` and
-`[sheathing]` build on it.
+`[sheathing]` build on it. A top-level `on_hand` list keeps stages you
+already have off the shopping list, such as `on_hand = ["floor"]`. The stages
+are `floor`, `subfloor`, `wall front` (and each other wall by id), `roof`,
+`porch`, `deck`, `wall sheathing` and `roof sheathing`.
 
 ```toml
 [building]

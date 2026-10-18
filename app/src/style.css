@@ -1278,6 +1278,54 @@ dialog.settings header p {
 #shopping table {
   max-width: 640px;
 }
+.have {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.have-label {
+  margin-right: 4px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.have button {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.have button:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.have button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.have button[aria-pressed="true"]::before {
+  content: "✓ ";
+}
+.left-off {
+  max-width: 640px;
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.on-hand-heading {
+  margin: 20px 0 4px;
+  font-size: 14px;
+}
+.boards.on-hand .board {
+  opacity: 0.6;
+}
 tr.total td {
   font-weight: 600;
   border-bottom: none;

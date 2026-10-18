@@ -362,12 +362,14 @@ function openingItems(w: WallView): Item[] | null {
 function renderPlan(): void {
   try {
     const plan = cutList(project);
-    renderShopping(shopping, plan);
+    renderShopping(shopping, plan, toggleOnHand);
     renderCuts(cuts, plan);
     const s = plan.summary;
     const cost = s.total_cents === null ? "" : ` · ${dollars(s.total_cents)}`;
     const sheets = s.sheets > 0 ? ` · ${s.sheets} sheets` : "";
-    tabSummary.textContent = `${s.boards} boards${sheets} · ${s.waste_percent.toFixed(1)}% waste${cost}`;
+    const had = plan.sections.filter((p) => p.on_hand).length;
+    const kept = had === 0 ? "" : ` · ${had} on hand`;
+    tabSummary.textContent = `${s.boards} boards${sheets} · ${s.waste_percent.toFixed(1)}% waste${cost}${kept}`;
   } catch (e) {
     const p = document.createElement("p");
     p.className = "plan-error";
@@ -376,6 +378,15 @@ function renderPlan(): void {
     cuts.replaceChildren(p.cloneNode(true));
     tabSummary.textContent = "";
   }
+}
+
+/** Marks a stage of the build had, or to buy again. */
+function toggleOnHand(key: string): void {
+  const had = project.on_hand ?? [];
+  const next = had.includes(key) ? had.filter((k) => k !== key) : [...had, key];
+  if (next.length > 0) project.on_hand = next;
+  else delete project.on_hand;
+  update();
 }
 
 function showProblem(text: string): void {
