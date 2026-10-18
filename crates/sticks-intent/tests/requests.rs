@@ -516,3 +516,31 @@ fn gives_the_classifier_the_design_with_the_options_labels() {
     assert_eq!(d["openings"]["doors"], 1);
     assert_eq!(d["roof"]["pitch"], "2:12");
 }
+
+#[test]
+fn asks_which_end_a_distance_is_from_when_unsure() {
+    let request = "put a 36x48 window in the right wall 2' from the left";
+    let mut answers = sure(&[
+        ("0.target", "new_opening"),
+        ("0.kind", "window"),
+        ("0.wall", "right"),
+        ("0.num0", "distance"),
+    ]);
+    answers.insert(
+        "0.place".into(),
+        Answer {
+            pick: "left_end".into(),
+            confidence: 0.6,
+            by_user: false,
+        },
+    );
+    // Not centered with the 2' dropped: the 2' needs its end.
+    let r = read(request, &answers);
+    assert_eq!(r.questions().next().unwrap().id, "0.place");
+
+    answers.insert("0.place".into(), Answer::from_user("left_end"));
+    assert_eq!(
+        read(request, &answers).edits().unwrap()[0].to_string(),
+        "Add a 3' x 4' window to the right wall, 2' from its left end"
+    );
+}
