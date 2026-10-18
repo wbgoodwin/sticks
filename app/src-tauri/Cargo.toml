@@ -15,3 +15,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+sticks-intent = { path = "../../crates/sticks-intent" }
+sticks-local = { path = "../../crates/sticks-local" }
+
+[features]
+# Plain-English edits with a model on this machine when Jev can't be reached.
+# Needs cmake and a C++ compiler to build llama.cpp. Uses the GPU on a Mac.
+local-model = ["sticks-local/llama"]
