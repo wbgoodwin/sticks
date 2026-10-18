@@ -38,10 +38,13 @@ app.innerHTML = `
       <input type="file" accept=".toml,text/plain" hidden />
     </div>
   </header>
-  <aside class="panel" aria-label="Design"></aside>
+  <aside class="panel" id="design-panel" aria-label="Design"></aside>
   <main class="stage">
     <div class="command"></div>
-    <nav class="views" aria-label="Views"></nav>
+    <div class="viewbar">
+      <button type="button" class="pane-toggle" data-pane="panel" aria-controls="design-panel"></button>
+      <nav class="views" aria-label="Views"></nav>
+    </div>
     <div class="drawing">
       <svg class="elevation" role="img" aria-label="Wall elevation"></svg>
       <div class="sheet" hidden></div>
@@ -51,12 +54,13 @@ app.innerHTML = `
       <div class="banner" hidden></div>
       <div class="tooltip" hidden></div>
     </div>
-    <section class="schedule">
+    <section class="schedule" id="schedule">
       <div class="tabs" role="tablist" aria-label="Lists">
         <button type="button" role="tab" id="tab-members" aria-controls="members" aria-selected="true">Members</button>
         <button type="button" role="tab" id="tab-shopping" aria-controls="shopping" aria-selected="false">Shopping list</button>
         <button type="button" role="tab" id="tab-cuts" aria-controls="cuts" aria-selected="false">Cut list</button>
         <span class="tab-summary"></span>
+        <button type="button" class="pane-toggle" data-pane="schedule" aria-controls="schedule"></button>
       </div>
       <div class="tab-panel" id="members" role="tabpanel" aria-labelledby="tab-members">
         <div class="legend"></div>
@@ -497,7 +501,11 @@ function selectTab(tab: HTMLButtonElement): void {
 }
 for (const [i, tab] of tabs.entries()) {
   tab.tabIndex = i === 0 ? 0 : -1;
-  tab.addEventListener("click", () => selectTab(tab));
+  tab.addEventListener("click", () => {
+    // A tab on the folded-away lists opens them on that list.
+    if (collapsed.schedule) setCollapsed("schedule", false);
+    selectTab(tab);
+  });
   tab.addEventListener("keydown", (e) => {
     const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
     if (!step) return;
@@ -506,6 +514,51 @@ for (const [i, tab] of tabs.entries()) {
     next.focus();
   });
 }
+
+// The design panel and the lists fold away to give the drawing the room.
+type Pane = "panel" | "schedule";
+const PANES_KEY = "sticks.collapsed";
+const PANE_KEYS: Record<Pane, string> = { panel: "B", schedule: "J" };
+const PANE_NAMES: Record<Pane, string> = { panel: "design panel", schedule: "lists" };
+const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
+const collapsed: Record<Pane, boolean> = { panel: false, schedule: false };
+try {
+  Object.assign(collapsed, JSON.parse(localStorage.getItem(PANES_KEY) ?? "{}"));
+} catch {
+  // Nothing remembered; both start open.
+}
+const paneToggles = [...app.querySelectorAll<HTMLButtonElement>(".pane-toggle")];
+function setCollapsed(pane: Pane, value: boolean): void {
+  collapsed[pane] = value;
+  app.classList.toggle(`${pane}-collapsed`, value);
+  for (const b of paneToggles) {
+    if (b.dataset.pane !== pane) continue;
+    const label = `${value ? "Show" : "Hide"} ${PANE_NAMES[pane]} (${mod}${PANE_KEYS[pane]})`;
+    b.setAttribute("aria-expanded", String(!value));
+    b.setAttribute("aria-label", label);
+    b.title = label;
+  }
+  try {
+    localStorage.setItem(PANES_KEY, JSON.stringify(collapsed));
+  } catch {
+    // Not remembered this time; the toggle still works.
+  }
+}
+for (const b of paneToggles) {
+  const pane = b.dataset.pane as Pane;
+  b.innerHTML = pane === "panel"
+    ? `<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg>`
+    : `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6.5l4 4 4-4"/></svg>`;
+  b.addEventListener("click", () => setCollapsed(pane, !collapsed[pane]));
+  setCollapsed(pane, collapsed[pane]);
+}
+document.addEventListener("keydown", (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+  const pane = (Object.keys(PANE_KEYS) as Pane[]).find((p) => PANE_KEYS[p] === e.key.toUpperCase());
+  if (!pane) return;
+  e.preventDefault();
+  setCollapsed(pane, !collapsed[pane]);
+});
 
 // Project name, templates, files and printing.
 nameInput.addEventListener("input", () => {
