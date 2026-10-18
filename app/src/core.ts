@@ -181,11 +181,27 @@ export interface CutListView {
   };
   /** Parts that don't frame, such as `wall front` or `floor`. */
   skipped: string[];
+  /** Every stage of the build, and whether it's kept off the shopping list. */
+  sections: SectionView[];
+  /** Boards for the stages already on hand, numbered on from `boards`. */
+  on_hand_boards: BoardView[];
+  /** What the stages left off would have cost. */
+  on_hand: { boards: number; sheets: number; total_cents: number | null };
+}
+
+export interface SectionView {
+  /** What `ProjectJson.on_hand` names it by, like `floor` or `wall front`. */
+  key: string;
+  /** Like `Floor framing`. */
+  name: string;
+  on_hand: boolean;
 }
 
 /** The project file's shape. Lengths stay as the builder typed them. */
 export interface ProjectJson {
   name: string;
+  /** Stages of the build already on hand, kept off the shopping list. */
+  on_hand?: string[];
   rules: {
     on_center: string;
     wall_lumber: string;

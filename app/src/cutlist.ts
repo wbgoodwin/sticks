@@ -12,7 +12,10 @@ export function dollars(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-export function renderShopping(root: HTMLElement, plan: CutListView): void {
+/** Called with a section's key when the builder marks it had or not. */
+export type OnHandToggle = (key: string) => void;
+
+export function renderShopping(root: HTMLElement, plan: CutListView, toggle: OnHandToggle): void {
   const priced = plan.summary.total_cents !== null;
   const rows = plan.bom
     .map(
@@ -26,27 +29,78 @@ export function renderShopping(root: HTMLElement, plan: CutListView): void {
     ? `<tr class="total"><td></td><td>Total</td><td></td><td></td><td class="num">${dollars(plan.summary.total_cents!)}</td></tr>`
     : "";
   root.innerHTML = `
+    ${have(plan)}
     <table>
       <thead><tr><th>Qty</th><th>Size</th><th class="num">Length</th><th class="num">Each</th><th class="num">Total</th></tr></thead>
       <tbody>${rows}${total}</tbody>
     </table>
+    ${leftOff(plan)}
     ${notes(plan, priced ? [] : ["Add a price to every stock length in the lumber yard to see what this costs."])}
   `;
+  for (const b of root.querySelectorAll<HTMLButtonElement>(".have button")) {
+    b.addEventListener("click", () => toggle(b.dataset.key!));
+  }
+}
+
+/** A button per stage of the build; pressed ones are already on hand. */
+function have(plan: CutListView): string {
+  if (plan.sections.length === 0) return "";
+  const buttons = plan.sections
+    .map(
+      (s) =>
+        `<button type="button" data-key="${esc(s.key)}" aria-pressed="${s.on_hand}" ` +
+        `title="${s.on_hand ? "On hand, so it's left off. Click to buy it again." : "Click if you already have it, to leave it off."}">${esc(s.name)}</button>`,
+    )
+    .join("");
+  return `<div class="have"><span class="have-label">Already have</span>${buttons}</div>`;
+}
+
+/** What the list leaves out, so its total doesn't look short. */
+function leftOff(plan: CutListView): string {
+  const names = plan.sections.filter((s) => s.on_hand).map((s) => s.name);
+  if (names.length === 0) return "";
+  const o = plan.on_hand;
+  const parts = [o.boards > 0 ? plural(o.boards, "board") : "", o.sheets > 0 ? plural(o.sheets, "sheet") : ""].filter(Boolean);
+  const cost = o.total_cents === null || o.total_cents === 0 ? "" : `, about ${dollars(o.total_cents)}`;
+  const what = parts.length > 0 ? ` (${parts.join(" and ")}${cost})` : "";
+  return `<p class="left-off">Leaves out ${esc(list(names).toLowerCase())}${what}, since you have ${names.length === 1 ? "it" : "them"}.</p>`;
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function list(items: string[]): string {
+  if (items.length <= 2) return items.join(" and ");
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 export function renderCuts(root: HTMLElement, plan: CutListView): void {
+  const names = plan.sections.filter((s) => s.on_hand).map((s) => s.name);
+  const kept =
+    plan.on_hand_boards.length === 0
+      ? ""
+      : `<h3 class="on-hand-heading">Already have: ${esc(list(names))}</h3>
+         <p class="cuts-hint">These aren't on the shopping list. They're here in case you still need to cut them.</p>
+         <div class="boards on-hand">${groupBoards(plan.on_hand_boards).map(board).join("")}</div>`;
+  root.innerHTML = `
+    <p class="cuts-hint">Pieces are listed in cutting order, measured from one end. Kerf is ${plan.summary.kerf}.</p>
+    <div class="boards">${groupBoards(plan.boards).map(board).join("")}</div>
+    ${kept}
+    ${notes(plan, [])}
+  `;
+}
+
+/** Boards cut the same way, together. */
+function groupBoards(boards: BoardView[]): BoardView[][] {
   const groups = new Map<string, BoardView[]>();
-  for (const b of plan.boards) {
+  for (const b of boards) {
     const key = [b.size, b.length_16, ...b.pieces.map((p) => `${p.kind}:${p.length_16}`)].join("|");
     const group = groups.get(key);
     if (group) group.push(b);
     else groups.set(key, [b]);
   }
-  root.innerHTML = `
-    <p class="cuts-hint">Pieces are listed in cutting order, measured from one end. Kerf is ${plan.summary.kerf}.</p>
-    <div class="boards">${[...groups.values()].map(board).join("")}</div>
-    ${notes(plan, [])}
-  `;
+  return [...groups.values()];
 }
 
 function board(group: BoardView[]): string {

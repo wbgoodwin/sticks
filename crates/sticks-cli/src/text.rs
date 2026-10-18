@@ -281,10 +281,15 @@ pub fn sheathing(s: &FramedSheathing) -> String {
     out
 }
 
-pub fn cut_list(cl: &CutList) -> String {
+/// The shopping list and cut list. `on_hand` names the sections left off
+/// because the builder already has them.
+pub fn cut_list(cl: &CutList, on_hand: &[String]) -> String {
     let mut out = String::new();
     let s = cl.summary();
     let _ = writeln!(out, "Shopping list");
+    if !on_hand.is_empty() {
+        let _ = writeln!(out, "  (leaves out what you have: {})", on_hand.join(", "));
+    }
     let _ = writeln!(out);
     for line in cl.bom() {
         let price = match (line.unit_price_cents, line.total_cents) {

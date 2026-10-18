@@ -13,6 +13,11 @@ use crate::units::Length;
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub name: String,
+    /// Stages of the build the builder already has the lumber for, such as
+    /// `floor` or `wall front`, kept off the shopping list. See the rules
+    /// crate's `Section` for the names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_hand: Vec<String>,
     #[serde(default)]
     pub rules: Rules,
     #[serde(default, rename = "stock", skip_serializing_if = "Vec::is_empty")]

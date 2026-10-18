@@ -77,9 +77,12 @@ fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::Check { project, json } => load(&project).and_then(|p| check(&p, json)),
         Command::Frame { project, part } => load(&project).and_then(|p| frame(&p, part.as_deref())),
-        Command::Cuts { project } => load(&project)
-            .and_then(|p| plan(&p))
-            .map(|cl| print!("{}", text::cut_list(&cl))),
+        Command::Cuts { project } => load(&project).and_then(|p| {
+            let f = framed(&p)?;
+            let cl = plan_framed(&p, &f)?;
+            print!("{}", text::cut_list(&cl, &f.on_hand_names(&p.on_hand)));
+            Ok(())
+        }),
         Command::Build { project, out } => load(&project).and_then(|p| build(&p, &out)),
         Command::Edit {
             project,
@@ -161,10 +164,12 @@ pub(crate) fn plan(project: &Project) -> Result<CutList, String> {
     plan_framed(project, &framed(project)?)
 }
 
+/// What to buy: every section but the ones the project has on hand.
 fn plan_framed(project: &Project, f: &FramedProject) -> Result<CutList, String> {
+    let (buy, _) = f.split(&project.on_hand);
     cut_list_with_sheets(
-        &f.members(),
-        &f.sheet_pieces(),
+        &buy.members,
+        &buy.sheets,
         &project.stock,
         &project.sheets,
         &project.rules,

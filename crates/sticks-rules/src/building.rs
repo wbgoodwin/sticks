@@ -14,10 +14,10 @@ use sticks_core::{
 };
 
 use crate::floor::{frame_floor, FramedFloor};
-use crate::layout::LayoutMark;
+use crate::layout::{LayoutMark, Placed};
 use crate::porch::{frame_porch, FramedPorch};
 use crate::roof::{frame_roof, gable_studs, wall_heights, FramedRoof, RoofPlane};
-use crate::sheathing::{frame_sheathing, FramedSheathing, WallFace};
+use crate::sheathing::{frame_sheathing, FramedSheathing, SheathedFace, WallFace};
 use crate::wall::{frame_wall, frame_wall_shaped, FramedWall, WallShape};
 use crate::FramingError;
 
@@ -37,40 +37,141 @@ pub struct FramedProject {
     pub sheathing: Option<Result<FramedSheathing, FramingError>>,
 }
 
+/// One stage of the build that can come off the shopping list on its own,
+/// such as the floor framing or the front wall.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Section {
+    /// What a project's `on_hand` list names it by: `floor`, `subfloor`,
+    /// `wall front`, `roof`, `porch`, `deck`, `wall sheathing` or
+    /// `roof sheathing`.
+    pub key: String,
+    /// How the builder reads it, like `Floor framing`.
+    pub name: String,
+    pub members: Vec<Member>,
+    pub sheets: Vec<SheetPiece>,
+}
+
+impl Section {
+    fn new(key: &str, name: &str, members: Vec<Member>, sheets: Vec<SheetPiece>) -> Section {
+        Section {
+            key: key.to_string(),
+            name: name.to_string(),
+            members,
+            sheets,
+        }
+    }
+}
+
 impl FramedProject {
+    /// The parts that framed, split into the stages of the build, each with
+    /// its lumber and sheets. Stages with nothing in them are left out.
+    pub fn sections(&self) -> Vec<Section> {
+        let lumber = |placed: &[Placed]| placed.iter().map(|p| p.member.clone()).collect();
+        let mut out = Vec::new();
+        for w in self.walls.iter().flatten() {
+            let name = if SIDES.contains(&w.id.as_str()) {
+                format!("{}{} wall", w.id[..1].to_uppercase(), &w.id[1..])
+            } else {
+                format!("Wall {}", w.id)
+            };
+            out.push(Section::new(
+                &format!("wall {}", w.id),
+                &name,
+                lumber(&w.members),
+                Vec::new(),
+            ));
+        }
+        if let Some(Ok(f)) = &self.floor {
+            out.push(Section::new(
+                "floor",
+                "Floor framing",
+                lumber(&f.members),
+                Vec::new(),
+            ));
+            let subfloor = f.subfloor.iter().map(|s| s.piece.clone()).collect();
+            out.push(Section::new("subfloor", "Subfloor", Vec::new(), subfloor));
+        }
+        if let Some(Ok(r)) = &self.roof {
+            out.push(Section::new(
+                "roof",
+                "Roof framing",
+                lumber(&r.members),
+                Vec::new(),
+            ));
+        }
+        if let Some(Ok(p)) = &self.porch {
+            out.push(Section::new(
+                "porch",
+                "Porch framing",
+                lumber(&p.members),
+                Vec::new(),
+            ));
+            if let Some(d) = &p.deck {
+                out.push(Section::new("deck", "Deck", lumber(&d.members), Vec::new()));
+            }
+        }
+        if let Some(Ok(s)) = &self.sheathing {
+            let panels = |faces: &[SheathedFace]| {
+                faces
+                    .iter()
+                    .flat_map(|f| &f.panels)
+                    .map(|p| p.piece.clone())
+                    .collect()
+            };
+            out.push(Section::new(
+                "wall sheathing",
+                "Wall sheathing",
+                Vec::new(),
+                panels(&s.walls),
+            ));
+            out.push(Section::new(
+                "roof sheathing",
+                "Roof sheathing",
+                Vec::new(),
+                panels(&s.roofs),
+            ));
+        }
+        out.retain(|s| !s.members.is_empty() || !s.sheets.is_empty());
+        out
+    }
+
     /// Every member of every part that framed.
     pub fn members(&self) -> Vec<Member> {
-        let walls = self.walls.iter().flatten().flat_map(|w| &w.members);
-        let floor = self.floor.iter().flatten().flat_map(|f| &f.members);
-        let roof = self.roof.iter().flatten().flat_map(|r| &r.members);
-        let porch = self.porch.iter().flatten().flat_map(|p| {
-            p.members
-                .iter()
-                .chain(p.deck.iter().flat_map(|d| &d.members))
-        });
-        walls
-            .chain(floor)
-            .chain(roof)
-            .chain(porch)
-            .map(|p| p.member.clone())
+        self.sections()
+            .into_iter()
+            .flat_map(|s| s.members)
             .collect()
     }
 
     /// Every piece of sheet goods: the subfloor and the sheathing.
     pub fn sheet_pieces(&self) -> Vec<SheetPiece> {
-        let subfloor = self
-            .floor
-            .iter()
-            .flatten()
-            .flat_map(|f| &f.subfloor)
-            .map(|s| &s.piece);
-        let sheathing = self
-            .sheathing
-            .iter()
-            .flatten()
-            .flat_map(|s| s.panels())
-            .map(|p| &p.piece);
-        subfloor.chain(sheathing).cloned().collect()
+        self.sections().into_iter().flat_map(|s| s.sheets).collect()
+    }
+
+    /// The lumber and sheets to buy, leaving out the sections `on_hand`
+    /// names, and the lumber and sheets of the ones it does name.
+    pub fn split(&self, on_hand: &[String]) -> (Section, Section) {
+        let mut buy = Section::new("buy", "To buy", Vec::new(), Vec::new());
+        let mut have = Section::new("on hand", "On hand", Vec::new(), Vec::new());
+        for s in self.sections() {
+            let into = if on_hand.contains(&s.key) {
+                &mut have
+            } else {
+                &mut buy
+            };
+            into.members.extend(s.members);
+            into.sheets.extend(s.sheets);
+        }
+        (buy, have)
+    }
+
+    /// The names of the sections `on_hand` keeps off the shopping list.
+    pub fn on_hand_names(&self, on_hand: &[String]) -> Vec<String> {
+        self.sections()
+            .into_iter()
+            .filter(|s| on_hand.contains(&s.key))
+            .map(|s| s.name)
+            .collect()
     }
 
     /// The parts that didn't frame.

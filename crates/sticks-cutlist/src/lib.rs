@@ -205,6 +205,20 @@ pub fn cut_list_with_sheets(
 }
 
 impl CutList {
+    /// Numbers this plan's boards on from `earlier`'s, size by size, so the
+    /// two plans can be shown together without repeating an id.
+    pub fn number_after(&mut self, earlier: &CutList) {
+        let mut next: BTreeMap<Nominal, usize> = BTreeMap::new();
+        for b in &earlier.boards {
+            *next.entry(b.size).or_default() += 1;
+        }
+        for b in &mut self.boards {
+            let n = next.entry(b.size).or_default();
+            *n += 1;
+            b.id = format!("{}-{:02}", b.size, n);
+        }
+    }
+
     /// Sheet goods on the shopping list.
     pub fn sheet_bom(&self) -> Vec<SheetLine> {
         sheet_bom(&self.sheets)
