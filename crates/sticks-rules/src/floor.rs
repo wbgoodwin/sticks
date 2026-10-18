@@ -44,7 +44,8 @@ pub struct Pier {
 pub struct FramedFloor {
     pub width: Length,
     pub depth: Length,
-    /// Rims, joists and blocking, then the beams under them.
+    /// Rims, joists and blocking, then the beams under them, then any posts
+    /// under the beams.
     pub members: Vec<Placed>,
     pub piers: Vec<Pier>,
     /// Bays between joists, left to right.
@@ -95,7 +96,10 @@ pub fn frame_floor(
             floor.beams
         )));
     }
-    let piers_used = floor.support == FloorSupport::Piers;
+    let piers_used = floor.support != FloorSupport::Skids;
+    if floor.support == FloorSupport::Posts && floor.post_length() <= Length::ZERO {
+        return Err(fail("posts under the beams need a height".to_string()));
+    }
     if piers_used && floor.pier_spacing <= Length::ZERO {
         return Err(fail("pier spacing must be more than zero".to_string()));
     }
@@ -215,7 +219,7 @@ pub fn frame_floor(
     } else {
         Vec::new()
     };
-    let piers = beam_y
+    let piers: Vec<Pier> = beam_y
         .iter()
         .flat_map(|&y| {
             pier_x.iter().map(move |&x| Pier {
@@ -228,7 +232,7 @@ pub fn frame_floor(
     // Beams: each ply spliced over a pier (or a joist, for skids), the plies'
     // joints kept on different supports.
     let (kind, prefix) = match floor.support {
-        FloorSupport::Piers => (MemberKind::Beam, "BM"),
+        FloorSupport::Piers | FloorSupport::Posts => (MemberKind::Beam, "BM"),
         FloorSupport::Skids => (MemberKind::Skid, "SK"),
     };
     let supports = if piers_used {
@@ -283,6 +287,28 @@ pub fn frame_floor(
     }
     splices.sort_by_key(|s| s.at);
     splices.dedup();
+
+    // Posts: one on each pier, centered under its beam.
+    if floor.support == FloorSupport::Posts {
+        let post = floor.post_size();
+        let (pw, pd) = (post.actual_width(), post.actual_thickness());
+        for (i, pier) in piers.iter().enumerate() {
+            let mut p = placed(
+                format!("floor-P{:02}", i + 1),
+                MemberKind::Post,
+                post,
+                Rect {
+                    x: pier.x - half(pw),
+                    y: pier.y - half(pd),
+                    w: pw,
+                    h: pd,
+                },
+                false,
+            );
+            p.member.length = floor.post_length();
+            members.push(p);
+        }
+    }
 
     // Subfloor: sheets run across the joists in rows, every other row
     // starting with a half sheet so end joints stagger.

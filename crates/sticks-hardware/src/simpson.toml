@@ -1,0 +1,231 @@
+# Simpson Strong-Tie connectors for the joints Sticks frames.
+#
+# Each part lists the joints it fits, the sizes of the member it holds (and of
+# what it sits on, where that matters), and the nails per piece from Simpson's
+# catalog tables. `exposed` is the ZMAX model, used outdoors and against
+# treated lumber. Fastener counts were read from Simpson catalog pages hosted
+# by distributors in October 2026; check the current catalog before you build.
+
+brand = "Simpson Strong-Tie"
+
+# Nails, and the Strong-Drive SD connector screw that goes in their holes
+# instead. Nail boxes are 1 lb, so their counts are approximate.
+
+[[fastener]]
+key = "8d"
+name = "8d common nail, 0.131 x 2-1/2\" (1 lb box)"
+screw = "SD9112"
+screw_name = "SD connector screw, #9 x 1-1/2\" (box of 100)"
+nails_per_box = 106
+screws_per_box = 100
+
+[[fastener]]
+key = "10d"
+name = "10d common nail, 0.148 x 3\" (1 lb box)"
+screw = "SD9212"
+screw_name = "SD connector screw, #9 x 2-1/2\" (box of 100)"
+nails_per_box = 69
+screws_per_box = 100
+
+[[fastener]]
+key = "10d x 1-1/2"
+name = "10d connector nail, 0.148 x 1-1/2\" (1 lb box)"
+screw = "SD9112"
+screw_name = "SD connector screw, #9 x 1-1/2\" (box of 100)"
+nails_per_box = 135
+screws_per_box = 100
+
+[[fastener]]
+key = "16d"
+name = "16d common nail, 0.162 x 3-1/2\" (1 lb box)"
+screw = "SD10212"
+screw_name = "SD connector screw, #10 x 2-1/2\" (box of 100)"
+nails_per_box = 49
+screws_per_box = 100
+
+# Rafters and joists sitting on a plate or beam: five nails into each.
+
+[[part]]
+model = "H2.5A"
+exposed = "H2.5AZ"
+name = "hurricane tie"
+joints = ["rafter_on_plate", "rafter_on_beam", "joist_on_beam"]
+sizes = ["2x4", "2x6", "2x8", "2x10", "2x12"]
+nails = { "8d" = 10 }
+
+# Rafters butting a ledger, sloped to the pitch. ZMAX only.
+
+[[part]]
+model = "LRU26Z"
+name = "slopeable rafter hanger"
+joints = ["rafter_on_ledger"]
+sizes = ["2x6"]
+nails = { "16d" = 9 }
+
+[[part]]
+model = "LRU28Z"
+name = "slopeable rafter hanger"
+joints = ["rafter_on_ledger"]
+sizes = ["2x8"]
+nails = { "16d" = 11 }
+
+[[part]]
+model = "LRU210Z"
+name = "slopeable rafter hanger"
+joints = ["rafter_on_ledger"]
+sizes = ["2x10"]
+nails = { "16d" = 13 }
+
+# Joists hung on a ledger or rim.
+
+[[part]]
+model = "LUS26"
+exposed = "LUS26Z"
+name = "face-mount joist hanger"
+joints = ["joist_on_ledger"]
+sizes = ["2x6"]
+nails = { "10d" = 8 }
+
+[[part]]
+model = "LUS28"
+exposed = "LUS28Z"
+name = "face-mount joist hanger"
+joints = ["joist_on_ledger"]
+sizes = ["2x8"]
+nails = { "10d" = 10 }
+
+[[part]]
+model = "LUS210"
+exposed = "LUS210Z"
+name = "face-mount joist hanger"
+joints = ["joist_on_ledger"]
+sizes = ["2x10", "2x12"]
+nails = { "10d" = 12 }
+
+[[part]]
+model = "LUS26-2"
+exposed = "LUS26-2Z"
+name = "face-mount hanger for a doubled joist"
+joints = ["joist_on_ledger"]
+sizes = ["2x6"]
+plies = 2
+nails = { "16d" = 8 }
+
+# Gable rafter pairs strapped across the ridge.
+
+[[part]]
+model = "LSTA18"
+exposed = "LSTA18Z"
+name = "strap tie"
+joints = ["rafter_at_ridge"]
+nails = { "10d" = 14 }
+
+# Beams on posts.
+
+[[part]]
+model = "BC4"
+exposed = "BC4Z"
+name = "post cap"
+joints = ["beam_on_post"]
+sizes = ["4x4", "4x6", "4x8", "4x10", "4x12"]
+on = ["4x4"]
+nails = { "16d" = 12 }
+
+[[part]]
+model = "BC46"
+exposed = "BC46Z"
+name = "post cap"
+joints = ["beam_on_post"]
+sizes = ["4x4", "4x6", "4x8", "4x10", "4x12"]
+on = ["4x6"]
+nails = { "16d" = 18 }
+
+[[part]]
+model = "BC6"
+exposed = "BC6Z"
+name = "post cap"
+joints = ["beam_on_post"]
+sizes = ["6x6", "6x8", "6x10", "6x12"]
+on = ["6x6"]
+nails = { "16d" = 24 }
+
+[[part]]
+model = "BCS2-2/4"
+exposed = "BCS2-2/4Z"
+name = "post cap for a doubled 2x beam"
+joints = ["beam_on_post"]
+sizes = ["2x6", "2x8", "2x10", "2x12"]
+plies = 2
+on = ["4x4"]
+nails = { "10d" = 14 }
+
+[[part]]
+model = "BCS2-3/6"
+exposed = "BCS2-3/6Z"
+name = "post cap for a tripled 2x beam"
+joints = ["beam_on_post"]
+sizes = ["2x6", "2x8", "2x10", "2x12"]
+plies = 3
+on = ["6x6"]
+nails = { "16d" = 18 }
+
+# Posts on concrete. ZMAX only.
+
+[[part]]
+model = "ABU44Z"
+name = "adjustable post base"
+joints = ["post_on_concrete"]
+sizes = ["4x4"]
+nails = { "16d" = 12 }
+note = "each needs a 5/8\" anchor set in the pier"
+
+[[part]]
+model = "ABU46Z"
+name = "adjustable post base"
+joints = ["post_on_concrete"]
+sizes = ["4x6"]
+nails = { "16d" = 12 }
+note = "each needs a 5/8\" anchor set in the pier"
+
+[[part]]
+model = "ABU66Z"
+name = "adjustable post base"
+joints = ["post_on_concrete"]
+sizes = ["6x6"]
+nails = { "16d" = 12 }
+note = "each needs a 5/8\" anchor set in the pier"
+
+# Ledgers screwed to the building, two screws at each stud or joist. DB is
+# the exterior coating.
+
+[[part]]
+model = "SDWS22500DB"
+name = "Strong-Drive SDWS Timber screw, 0.220 x 5\""
+joints = ["ledger_to_frame"]
+each = 2
+
+# The deck tied back to the building.
+
+[[part]]
+model = "DTT2Z"
+name = "deck tension tie"
+joints = ["deck_lateral"]
+note = "comes with its SDS screws; each needs a 1/2\" bolt through the rim"
+
+# Studs tied to the plates for high wind.
+
+[[part]]
+model = "SP4"
+exposed = "SP4Z"
+name = "stud plate tie"
+joints = ["stud_to_plate"]
+sizes = ["2x4"]
+nails = { "10d x 1-1/2" = 6 }
+
+[[part]]
+model = "SP6"
+exposed = "SP6Z"
+name = "stud plate tie"
+joints = ["stud_to_plate"]
+sizes = ["2x6"]
+nails = { "10d x 1-1/2" = 6 }

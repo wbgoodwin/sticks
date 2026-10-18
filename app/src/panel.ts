@@ -494,7 +494,7 @@ function floorSection(project: ProjectJson, events: PanelEvents): HTMLElement | 
   return foldSection(
     "floor",
     "Floor",
-    () => `${floor.joist} joists · ${floor.beams} beams on ${floor.support === "piers" ? "piers" : "grade"}`,
+    () => `${floor.joist} joists · ${floor.beams} beams on ${{ piers: "piers", posts: "posts", skids: "grade" }[floor.support]}`,
     [
       h(
         "div",
@@ -510,6 +510,7 @@ function floorSection(project: ProjectJson, events: PanelEvents): HTMLElement | 
           "Beams sit on",
           [
             ["piers", "Piers"],
+            ["posts", "Posts"],
             ["skids", "Grade"],
           ],
           () => floor.support,
@@ -517,7 +518,15 @@ function floorSection(project: ProjectJson, events: PanelEvents): HTMLElement | 
           events.restructured,
         ),
       ),
-      floor.support === "piers"
+      floor.support === "posts"
+        ? h(
+            "div",
+            { class: "row" },
+            select("Posts", POSTS, () => floor.post ?? "4x4", (v) => (floor.post = v), events),
+            lengthField("Post height", () => floor.post_height ?? '12"', (v) => (floor.post_height = v), events, "Pier top to beam"),
+          )
+        : null,
+      floor.support !== "skids"
         ? lengthField("Most room between piers", () => floor.pier_spacing, (v) => (floor.pier_spacing = v), events)
         : null,
     ],

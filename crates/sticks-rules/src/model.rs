@@ -204,16 +204,24 @@ fn wall_solids(out: &mut Vec<Solid>, wall: &FramedWall, origin: [f64; 3], u: [f6
 }
 
 /// Plan rectangles stood up: joists and rims under the subfloor, beams under
-/// the joists, piers under the beams.
+/// the joists, any posts under the beams, and piers under it all.
 fn floor_solids(out: &mut Vec<Solid>, floor: &FramedFloor, subfloor: f64, joist: f64) {
     let joist_bottom = -subfloor - joist;
-    let mut beam_bottom = joist_bottom;
+    let beam_bottom = floor
+        .members
+        .iter()
+        .filter(|p| matches!(p.member.kind, MemberKind::Beam | MemberKind::Skid))
+        .map(|p| joist_bottom - inches(p.member.size.actual_width()))
+        .fold(joist_bottom, f64::min);
+    let mut pier_top = beam_bottom;
     for p in &floor.members {
-        let height = inches(p.member.size.actual_width());
+        let mut height = inches(p.member.size.actual_width());
         let bottom = match p.member.kind {
-            MemberKind::Beam | MemberKind::Skid => {
-                beam_bottom = beam_bottom.min(joist_bottom - height);
-                joist_bottom - height
+            MemberKind::Beam | MemberKind::Skid => joist_bottom - height,
+            MemberKind::Post => {
+                height = inches(p.member.length);
+                pier_top = pier_top.min(beam_bottom - height);
+                beam_bottom - height
             }
             _ => -subfloor - height,
         };
@@ -237,7 +245,7 @@ fn floor_solids(out: &mut Vec<Solid>, floor: &FramedFloor, subfloor: f64, joist:
             depth: subfloor,
         });
     }
-    pier_solids(out, &floor.piers, beam_bottom, "floor");
+    pier_solids(out, &floor.piers, pier_top, "floor");
 }
 
 const PIER: f64 = 12.0;

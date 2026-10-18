@@ -1,7 +1,7 @@
 # Reference design from the PRD: an 18x14 lean-to shed, 10' tall at the
-# front, on piers, with a covered porch and deck across the front. The roof
-# is 2:12, which brings the back wall to 7' 8-9/16"; the side walls rake
-# between the two.
+# front, its beams on short posts on concrete piers, with a covered porch and
+# deck across the front. The roof is 2:12, which brings the back wall to
+# 7' 8-9/16"; the side walls rake between the two.
 name = "Backyard shed"
 
 [rules]
@@ -19,7 +19,7 @@ height = "10'"         # the front wall; the roof slopes down to the back
 joist = "2x6"
 beam = "4x6"
 beams = 3              # front, middle and back
-support = "piers"
+support = "posts"         # short 4x4 posts on concrete piers
 pier_spacing = "6'"
 
 [roof]

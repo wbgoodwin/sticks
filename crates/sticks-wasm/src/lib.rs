@@ -7,6 +7,7 @@
 use serde::Serialize;
 use sticks_core::{Length, Member, MemberKind, Project};
 use sticks_cutlist::{cut_list_with_sheets, Board, CutList};
+use sticks_hardware::HardwareList;
 use sticks_rules::{
     bounds, frame_project, model, wall_ids, FramedProject, FramedWall, Placed, Section, Solid,
     SolidKind,
@@ -244,6 +245,8 @@ struct CutListView {
     /// list leaves out. Numbered on from `boards`.
     on_hand_boards: Vec<BoardView>,
     on_hand: OnHandView,
+    /// Connectors and fasteners for the stages still to buy.
+    hardware: HardwareList,
 }
 
 #[derive(Serialize)]
@@ -339,6 +342,7 @@ pub fn cut_list_json(project_json: &str) -> Result<String, String> {
         total_cents: k.total_cents,
     };
     view.on_hand_boards = kept.boards.into_iter().map(board_view).collect();
+    view.hardware = sticks_hardware::for_project(&buy.joints, project.hardware.as_ref());
     serde_json::to_string(&view).map_err(|e| e.to_string())
 }
 
@@ -397,6 +401,7 @@ fn cut_list_view(cl: CutList, skipped: Vec<String>) -> CutListView {
             sheets: 0,
             total_cents: Some(0),
         },
+        hardware: HardwareList::default(),
     }
 }
 
@@ -755,7 +760,8 @@ pub fn print_html(project_json: &str) -> Result<String, String> {
         &project.rules,
     )
     .map_err(|e| e.to_string())?;
-    Ok(sticks_export::print_html(&project, &framed, &cl))
+    let hw = sticks_hardware::for_project(&buy.joints, project.hardware.as_ref());
+    Ok(sticks_export::print_html(&project, &framed, &cl, &hw))
 }
 
 fn wall_view(w: FramedWall) -> WallView {
@@ -904,6 +910,17 @@ mod tests {
             boards(&plan, "on_hand_boards")
         );
         assert!(boards(&plan, "boards") < boards(&all, "boards"));
+        // The floor's post caps and bases come off with it.
+        let caps = |v: &serde_json::Value| {
+            v["hardware"]["parts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|l| l["model"] == "BC4Z")
+                .map_or(0, |l| l["count"].as_u64().unwrap())
+        };
+        assert_eq!(caps(&all), 12);
+        assert_eq!(caps(&plan), 0);
         // No subfloor sheets left to buy; the shed's sheathing is a
         // different thickness.
         assert_eq!(

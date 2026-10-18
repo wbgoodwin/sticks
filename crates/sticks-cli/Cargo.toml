@@ -9,6 +9,7 @@ repository.workspace = true
 sticks-core.workspace = true
 sticks-rules.workspace = true
 sticks-cutlist.workspace = true
+sticks-hardware.workspace = true
 sticks-export.workspace = true
 sticks-intent.workspace = true
 serde_json.workspace = true

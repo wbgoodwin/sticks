@@ -498,6 +498,7 @@ dependencies = [
  "sticks-core",
  "sticks-cutlist",
  "sticks-export",
+ "sticks-hardware",
  "sticks-intent",
  "sticks-rules",
 ]
@@ -529,7 +530,18 @@ version = "0.1.0"
 dependencies = [
  "sticks-core",
  "sticks-cutlist",
+ "sticks-hardware",
  "sticks-rules",
+]
+
+[[package]]
+name = "sticks-hardware"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sticks-core",
+ "sticks-rules",
+ "toml",
 ]
 
 [[package]]
@@ -562,6 +574,7 @@ dependencies = [
  "sticks-core",
  "sticks-cutlist",
  "sticks-export",
+ "sticks-hardware",
  "sticks-intent",
  "sticks-rules",
  "wasm-bindgen",

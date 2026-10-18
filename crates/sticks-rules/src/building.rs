@@ -10,7 +10,7 @@
 
 use serde::Serialize;
 use sticks_core::{
-    LayoutStart, Length, Member, MemberKind, Project, RoofKind, SheetPiece, Wall, WallEnd,
+    Joint, LayoutStart, Length, Member, MemberKind, Project, RoofKind, SheetPiece, Wall, WallEnd,
 };
 
 use crate::floor::{frame_floor, FramedFloor};
@@ -49,6 +49,8 @@ pub struct Section {
     pub name: String,
     pub members: Vec<Member>,
     pub sheets: Vec<SheetPiece>,
+    /// Where its members meet and take a connector.
+    pub joints: Vec<Joint>,
 }
 
 impl Section {
@@ -58,7 +60,13 @@ impl Section {
             name: name.to_string(),
             members,
             sheets,
+            joints: Vec::new(),
         }
+    }
+
+    fn with_joints(mut self, joints: Vec<Joint>) -> Section {
+        self.joints = joints;
+        self
     }
 }
 
@@ -74,40 +82,40 @@ impl FramedProject {
             } else {
                 format!("Wall {}", w.id)
             };
-            out.push(Section::new(
-                &format!("wall {}", w.id),
-                &name,
-                lumber(&w.members),
-                Vec::new(),
-            ));
+            out.push(
+                Section::new(
+                    &format!("wall {}", w.id),
+                    &name,
+                    lumber(&w.members),
+                    Vec::new(),
+                )
+                .with_joints(w.joints()),
+            );
         }
         if let Some(Ok(f)) = &self.floor {
-            out.push(Section::new(
-                "floor",
-                "Floor framing",
-                lumber(&f.members),
-                Vec::new(),
-            ));
+            out.push(
+                Section::new("floor", "Floor framing", lumber(&f.members), Vec::new())
+                    .with_joints(f.joints()),
+            );
             let subfloor = f.subfloor.iter().map(|s| s.piece.clone()).collect();
             out.push(Section::new("subfloor", "Subfloor", Vec::new(), subfloor));
         }
         if let Some(Ok(r)) = &self.roof {
-            out.push(Section::new(
-                "roof",
-                "Roof framing",
-                lumber(&r.members),
-                Vec::new(),
-            ));
+            out.push(
+                Section::new("roof", "Roof framing", lumber(&r.members), Vec::new())
+                    .with_joints(r.joints()),
+            );
         }
         if let Some(Ok(p)) = &self.porch {
-            out.push(Section::new(
-                "porch",
-                "Porch framing",
-                lumber(&p.members),
-                Vec::new(),
-            ));
+            out.push(
+                Section::new("porch", "Porch framing", lumber(&p.members), Vec::new())
+                    .with_joints(p.joints()),
+            );
             if let Some(d) = &p.deck {
-                out.push(Section::new("deck", "Deck", lumber(&d.members), Vec::new()));
+                out.push(
+                    Section::new("deck", "Deck", lumber(&d.members), Vec::new())
+                        .with_joints(d.joints()),
+                );
             }
         }
         if let Some(Ok(s)) = &self.sheathing {
@@ -148,8 +156,8 @@ impl FramedProject {
         self.sections().into_iter().flat_map(|s| s.sheets).collect()
     }
 
-    /// The lumber and sheets to buy, leaving out the sections `on_hand`
-    /// names, and the lumber and sheets of the ones it does name.
+    /// The lumber, sheets and joints to buy for, leaving out the sections
+    /// `on_hand` names, and the same for the ones it does name.
     pub fn split(&self, on_hand: &[String]) -> (Section, Section) {
         let mut buy = Section::new("buy", "To buy", Vec::new(), Vec::new());
         let mut have = Section::new("on hand", "On hand", Vec::new(), Vec::new());
@@ -161,6 +169,7 @@ impl FramedProject {
             };
             into.members.extend(s.members);
             into.sheets.extend(s.sheets);
+            into.joints.extend(s.joints);
         }
         (buy, have)
     }

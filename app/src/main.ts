@@ -9,6 +9,7 @@ import {
   projectFromToml,
   projectToToml,
   type FrameView,
+  type HardwareView,
   type MemberView,
   type ProjectJson,
   type OpeningJson,
@@ -32,7 +33,7 @@ app.innerHTML = `
     <input class="project-name" aria-label="Project name" spellcheck="false" autocomplete="off" />
     <div class="stats" aria-live="polite"></div>
     <div class="actions">
-      <button type="button" class="button icon-only" data-action="settings" aria-label="Settings" title="Settings: lumber prices and saw kerf">
+      <button type="button" class="button icon-only" data-action="settings" aria-label="Settings" title="Settings: lumber and hardware prices, and saw kerf">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h7M12 4h2M2 8h2M7 8h7M2 12h9"/><circle cx="10.5" cy="4" r="1.5"/><circle cx="5.5" cy="8" r="1.5"/><circle cx="12.5" cy="12" r="1.5"/></svg>
       </button>
       <details class="menu">
@@ -85,7 +86,7 @@ app.innerHTML = `
     <header>
       <div>
         <h2 id="settings-title">Lumber yard</h2>
-        <p>What the cut list can buy, saved with this project.</p>
+        <p>What the shopping list can buy, and the hardware for it, saved with this project.</p>
       </div>
       <button type="button" class="icon-button" data-action="close-settings" aria-label="Close">×</button>
     </header>
@@ -365,7 +366,9 @@ function renderPlan(): void {
     renderShopping(shopping, plan, toggleOnHand);
     renderCuts(cuts, plan);
     const s = plan.summary;
-    const cost = s.total_cents === null ? "" : ` · ${dollars(s.total_cents)}`;
+    const hw = plan.hardware;
+    const hwCost = hw.parts.length === 0 ? 0 : hw.total_cents;
+    const cost = s.total_cents === null || hwCost === null ? "" : ` · ${dollars(s.total_cents + hwCost)}`;
     const sheets = s.sheets > 0 ? ` · ${s.sheets} sheets` : "";
     const had = plan.sections.filter((p) => p.on_hand).length;
     const kept = had === 0 ? "" : ` · ${had} on hand`;
@@ -377,6 +380,15 @@ function renderPlan(): void {
     shopping.replaceChildren(p);
     cuts.replaceChildren(p.cloneNode(true));
     tabSummary.textContent = "";
+  }
+}
+
+/** The hardware list for Settings, or an empty one when the plan can't be made. */
+function settingsHardware(): HardwareView {
+  try {
+    return cutList(project).hardware;
+  } catch {
+    return { brand: "Simpson Strong-Tie", parts: [], fasteners: [], warnings: [], total_cents: null };
   }
 }
 
@@ -964,7 +976,7 @@ app.addEventListener("click", (e) => {
       preview.hidden = true;
       break;
     case "settings":
-      renderSettings(settingsBody, project, update);
+      renderSettings(settingsBody, project, update, settingsHardware);
       settings.showModal();
       break;
     case "close-settings":

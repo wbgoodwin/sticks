@@ -5,6 +5,7 @@ use std::fmt::Write;
 use sticks_core::RoofKind;
 use sticks_core::{Cut, LayoutStart};
 use sticks_cutlist::CutList;
+use sticks_hardware::HardwareList;
 use sticks_rules::{
     FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark, Placed,
     RafterDetail, Splice,
@@ -281,9 +282,9 @@ pub fn sheathing(s: &FramedSheathing) -> String {
     out
 }
 
-/// The shopping list and cut list. `on_hand` names the sections left off
-/// because the builder already has them.
-pub fn cut_list(cl: &CutList, on_hand: &[String]) -> String {
+/// The shopping list, hardware and cut list. `on_hand` names the sections
+/// left off because the builder already has them.
+pub fn cut_list(cl: &CutList, on_hand: &[String], hardware: &HardwareList) -> String {
     let mut out = String::new();
     let s = cl.summary();
     let _ = writeln!(out, "Shopping list");
@@ -328,6 +329,48 @@ pub fn cut_list(cl: &CutList, on_hand: &[String]) -> String {
         s.boards, s.pieces, s.waste_percent, cl.kerf, cl.end_trim
     );
     let _ = writeln!(out);
+    if !hardware.parts.is_empty() || !hardware.warnings.is_empty() {
+        let _ = writeln!(out, "Hardware ({})", hardware.brand);
+        let _ = writeln!(out);
+        for l in &hardware.parts {
+            let price = match (l.unit_price_cents, l.total_cents) {
+                (Some(each), Some(total)) => {
+                    format!("  @ {} = {}", dollars(each.into()), dollars(total))
+                }
+                _ => String::new(),
+            };
+            let _ = writeln!(
+                out,
+                "  {:>3} x {:<12} {} for {}{price}",
+                l.count,
+                l.model,
+                l.name,
+                l.joints.join(", ")
+            );
+            if let Some(note) = &l.note {
+                let _ = writeln!(out, "        ({note})");
+            }
+        }
+        for l in &hardware.fasteners {
+            let price = match (l.box_price_cents, l.total_cents) {
+                (Some(each), Some(total)) => {
+                    format!("  @ {} = {}", dollars(each.into()), dollars(total))
+                }
+                _ => String::new(),
+            };
+            let _ = writeln!(
+                out,
+                "  {:>3} x {} for {} pieces{price}",
+                l.boxes, l.name, l.count
+            );
+        }
+        if let Some(total) = hardware.total_cents {
+            let _ = writeln!(out, "  total {}", dollars(total));
+        }
+        notes(&mut out, &hardware.warnings);
+        let _ = writeln!(out, "  {}", sticks_hardware::NOTICE);
+        let _ = writeln!(out);
+    }
     let _ = writeln!(out, "Cut list");
     for b in &cl.boards {
         let _ = writeln!(out);
