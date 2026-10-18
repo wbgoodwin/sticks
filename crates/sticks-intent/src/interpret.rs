@@ -1280,6 +1280,12 @@ impl<'a> Clause<'a> {
             return Ok(edits);
         }
 
+        // A distance means nothing without the end it's from, so an unsure
+        // place is asked rather than dropping the distance and centering.
+        let place = match (place, distance) {
+            (None, Some(_)) => Some(self.pick("place")?),
+            (place, _) => place,
+        };
         // Where each opening's left edge should go, and whether it may
         // slide to frame.
         let starts: Vec<(Length, bool)> = match (place.as_deref(), distance) {
