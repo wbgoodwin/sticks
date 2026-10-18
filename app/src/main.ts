@@ -11,13 +11,16 @@ import {
   type FrameView,
   type MemberView,
   type ProjectJson,
+  type OpeningJson,
   type SolidView,
+  type WallJson,
   type WallView,
 } from "./core";
 import { mountCommand } from "./command";
 import { dollars, renderCuts, renderShopping } from "./cutlist";
-import { drawElevation, groupKey, KIND_NAMES } from "./elevation";
-import { openSection, renderPanel, wallName, type PanelContext, type PanelTab } from "./panel";
+import { drawElevation, groupKey, KIND_NAMES, type DragOverlay, type Scale } from "./elevation";
+import { openSection, revealOpening, renderPanel, wallName, type PanelContext, type PanelTab } from "./panel";
+import { bounds, factsAt, movesUpAndDown, snap, type Item, type Spot } from "./snap";
 import { renderSettings } from "./settings";
 import { ensureStock, fromTemplate, load, normalize, save, TEMPLATES } from "./state";
 import { HIDDEN_LAYERS, LAYERS, Viewer } from "./view3d";
@@ -337,10 +340,23 @@ function skippedNotes(parts: string[]): string[] {
   return parts.map((p) => `${capitalize(p)} doesn't frame, so it isn't shown.`);
 }
 
-function drawWall(): void {
+/** How the shown wall was last drawn, to turn the pointer back into lengths. */
+let scale: Scale | null = null;
+
+function drawWall(drag?: DragOverlay): void {
   if (!shownWall || view.kind !== "wall") return;
   const { width, height } = drawingBox.getBoundingClientRect();
-  drawElevation(svg, shownWall, { layoutFrom: project.rules.layout_from }, width, height);
+  const w = shownWall;
+  const items = openingItems(w);
+  const notes = items ? items.map((o, i) => factsAt(items, i, o, w.length_16).map((f) => f.text)) : undefined;
+  scale = drawElevation(svg, w, { layoutFrom: project.rules.layout_from, notes, drag }, width, height);
+}
+
+/** The shown wall's openings with their kinds, or null if the project and the frame disagree. */
+function openingItems(w: WallView): Item[] | null {
+  const json = project.wall.find((v) => v.id === w.id);
+  if (!json || json.opening.length !== w.openings.length) return null;
+  return w.openings.map((o, i) => ({ name: o.name, kind: json.opening[i].kind, x: o.x_16, y: o.y_16, w: o.w_16, h: o.h_16 }));
 }
 
 function renderPlan(): void {
@@ -430,7 +446,7 @@ function showTooltip(html: string, x: number, y: number): void {
   tooltip.innerHTML = html;
   tooltip.hidden = false;
   const box = drawingBox.getBoundingClientRect();
-  const left = Math.min(x + 14, box.width - tooltip.offsetWidth - 8);
+  const left = Math.max(8, Math.min(x + 14, box.width - tooltip.offsetWidth - 8));
   const top = Math.max(8, y - tooltip.offsetHeight - 10);
   tooltip.style.transform = `translate(${left}px, ${top}px)`;
 }
@@ -481,6 +497,20 @@ function esc(text: string): string {
 }
 
 svg.addEventListener("pointermove", (e) => {
+  if (dragging) return;
+  const handle = (e.target as Element).closest<SVGElement>(".opening-handle");
+  if (handle && shownWall) {
+    const o = shownWall.openings[Number(handle.dataset.index)];
+    const box = drawingBox.getBoundingClientRect();
+    const notes = svg.querySelectorAll(".rough-opening")[Number(handle.dataset.index)]?.classList.contains("ideal");
+    showTooltip(
+      `<strong>${esc(o.name)}</strong><span>${formatLength(o.x_16)} from the left end</span>${notes ? idealLines(Number(handle.dataset.index)) : ""}<span class="hint">Drag to move · hold ${ALT} to place freely</span>`,
+      e.clientX - box.left,
+      e.clientY - box.top,
+    );
+    highlight(null);
+    return;
+  }
   const target = (e.target as Element).closest<SVGElement>(".member");
   if (!target || !shownWall) {
     tooltip.hidden = true;
@@ -499,11 +529,224 @@ svg.addEventListener("pointermove", (e) => {
   highlight(groupKey(m));
 });
 svg.addEventListener("pointerleave", () => {
+  if (dragging) return;
   tooltip.hidden = true;
   highlight(null);
 });
 
-new ResizeObserver(drawWall).observe(drawingBox);
+// Dragging an opening along its wall, framed live as it goes.
+const ALT = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌥" : "Alt";
+/** Pixels the pointer must travel before a press becomes a drag. */
+const DRAG_START = 4;
+/** How close, in pixels, a good spot pulls the opening in. */
+const SNAP_REACH = 10;
+/** Pixels up or down before a window's height follows, so sliding it along doesn't nudge its sill. */
+const VERTICAL_START = 12;
+
+interface Drag {
+  index: number;
+  pointer: number;
+  json: WallJson;
+  opening: OpeningJson;
+  /** The opening's place before the drag, to put back on Escape. */
+  before: { offset: string; sill_height: string };
+  start: Spot;
+  startPx: { x: number; y: number };
+  items: Item[];
+  length: number;
+  /** Where the frame last took it. */
+  valid: Spot;
+  moved: boolean;
+  /** Whether it has been pulled far enough up or down to change height. */
+  vertical: boolean;
+  /** The pointer, in the stage's own coordinates. */
+  at: { x: number; y: number };
+  want: Spot | null;
+  problem: string | null;
+  queued: boolean;
+}
+
+let dragging: Drag | null = null;
+
+function idealLines(index: number): string {
+  const w = shownWall;
+  const items = w && openingItems(w);
+  if (!w || !items) return "";
+  return factsAt(items, index, items[index], w.length_16)
+    .map((f) => `<span class="good">✓ ${esc(f.text)}</span>`)
+    .join("");
+}
+
+svg.addEventListener("pointerdown", (e) => {
+  const handle = (e.target as Element).closest<SVGElement>(".opening-handle");
+  if (!handle || !shownWall || e.button !== 0 || view.kind !== "wall") return;
+  const index = Number(handle.dataset.index);
+  const json = project.wall.find((v) => v.id === shownWall!.id);
+  const items = openingItems(shownWall);
+  if (!json || !items) return;
+  const o = items[index];
+  e.preventDefault();
+  svg.setPointerCapture(e.pointerId);
+  dragging = {
+    index,
+    pointer: e.pointerId,
+    json,
+    opening: json.opening[index],
+    before: { offset: json.opening[index].offset, sill_height: json.opening[index].sill_height },
+    start: { x: o.x, y: o.y },
+    startPx: { x: e.clientX, y: e.clientY },
+    items,
+    length: shownWall.length_16,
+    valid: { x: o.x, y: o.y },
+    moved: false,
+    vertical: false,
+    at: { x: 0, y: 0 },
+    want: null,
+    problem: null,
+    queued: false,
+  };
+});
+
+svg.addEventListener("pointermove", (e) => {
+  const d = dragging;
+  if (!d || e.pointerId !== d.pointer || !scale) return;
+  const dx = e.clientX - d.startPx.x;
+  const dy = e.clientY - d.startPx.y;
+  if (!d.moved && Math.hypot(dx, dy) < DRAG_START) return;
+  if (!d.moved) {
+    d.moved = true;
+    svg.classList.add("dragging");
+    highlight(null);
+  }
+  if (Math.abs(dy) >= VERTICAL_START) d.vertical = true;
+  const raw = { x: d.start.x + (dx / scale.s) * 16, y: d.start.y - (dy / scale.s) * 16 };
+  // Alt places it to the sixteenth; otherwise it pulls to good spots and whole inches.
+  const free = e.altKey;
+  const spot = snap(d.items, d.index, raw, d.length, free ? 0 : (SNAP_REACH / scale.s) * 16, free ? 1 : 16);
+  d.want = d.vertical ? spot : { x: spot.x, y: d.start.y };
+  const box = drawingBox.getBoundingClientRect();
+  d.at = { x: e.clientX - box.left, y: e.clientY - box.top };
+  if (!d.queued) {
+    d.queued = true;
+    requestAnimationFrame(reframeDrag);
+  }
+});
+
+/** Frames the project with the opening where the pointer wants it, keeping the last spot that frames. */
+function reframeDrag(): void {
+  const d = dragging;
+  if (!d || !d.want || !d.queued) return;
+  d.queued = false;
+  const want = d.want;
+  place(d, want);
+  let wall: WallView | undefined;
+  let problem: string | null = null;
+  try {
+    const next = frame(project);
+    wall = next.walls.find((w) => w.id === d.json.id);
+    if (wall?.error) problem = wall.error;
+    else if (wall) framed = next;
+  } catch (err) {
+    problem = message(err);
+  }
+  if (wall && !problem) {
+    d.valid = want;
+    d.problem = null;
+    shownWall = wall;
+  } else {
+    place(d, d.valid);
+    d.problem = problem ?? "it doesn't fit there";
+  }
+  d.items[d.index] = { ...d.items[d.index], x: d.valid.x, y: d.valid.y };
+  const me = d.items[d.index];
+  const facts = d.problem ? [] : factsAt(d.items, d.index, d.valid, d.length);
+  const b = bounds(d.items, d.index, d.valid.x, d.length);
+  drawWall({
+    index: d.index,
+    guides: facts.flatMap((f) => f.guides),
+    gaps: [
+      [b.left, me.x],
+      [me.x + me.w, b.right],
+    ],
+    ghost: d.problem ? { x: want.x, y: want.y, w: me.w, h: me.h } : null,
+  });
+  const height = movesUpAndDown(me.kind) ? `<span>Sill at ${formatLength(d.valid.y)}</span>` : "";
+  const lines = d.problem
+    ? `<span class="bad">${esc(capitalize(d.problem))}</span>`
+    : facts.map((f) => `<span class="good">✓ ${esc(f.text)}</span>`).join("");
+  showTooltip(
+    `<strong>${esc(me.name)}</strong><span>${formatLength(d.valid.x)} from the left end</span>${height}${lines}`,
+    d.at.x,
+    d.at.y,
+  );
+}
+
+/** Writes a spot into the project, in the same notation the panel uses. */
+function place(d: Drag, spot: Spot): void {
+  d.opening.offset = formatLength(spot.x);
+  if (movesUpAndDown(d.opening.kind)) d.opening.sill_height = formatLength(spot.y);
+}
+
+function endDrag(e: PointerEvent): void {
+  const d = dragging;
+  if (!d || e.pointerId !== d.pointer) return;
+  // Let go before the next frame: frame the last move first.
+  reframeDrag();
+  dragging = null;
+  svg.classList.remove("dragging");
+  tooltip.hidden = true;
+  if (!d.moved) {
+    // A click: show the opening in the panel.
+    revealInPanel(d.json.id, d.opening);
+    return;
+  }
+  if (d.valid.x === d.start.x && d.valid.y === d.start.y) {
+    Object.assign(d.opening, d.before);
+    drawWall();
+    return;
+  }
+  place(d, d.valid);
+  events.restructured();
+}
+svg.addEventListener("pointerup", endDrag);
+svg.addEventListener("pointercancel", cancelDrag);
+
+/** Escape puts the opening back where it was. */
+function cancelDrag(): void {
+  const d = dragging;
+  if (!d) return;
+  dragging = null;
+  svg.classList.remove("dragging");
+  tooltip.hidden = true;
+  if (svg.hasPointerCapture(d.pointer)) svg.releasePointerCapture(d.pointer);
+  Object.assign(d.opening, d.before);
+  update();
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && dragging) {
+    e.preventDefault();
+    cancelDrag();
+  }
+});
+
+function revealInPanel(wallId: string, opening: OpeningJson): void {
+  if (wall !== wallId || tab !== "walls") {
+    wall = wallId;
+    tab = "walls";
+  }
+  if (collapsed.panel) setCollapsed("panel", false);
+  revealOpening(opening);
+  renderPanel(panel, project, panelContext, events);
+  liveHints();
+  const card = panel.querySelector<HTMLElement>(".card.revealed");
+  if (!card) return;
+  card.scrollIntoView({ block: "center", behavior: "smooth" });
+  card.classList.remove("flash");
+  void card.offsetWidth;
+  card.classList.add("flash");
+}
+
+new ResizeObserver(() => drawWall()).observe(drawingBox);
 
 // Layer toggles over the 3D view.
 layers.append(

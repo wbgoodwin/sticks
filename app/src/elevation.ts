@@ -2,9 +2,31 @@
 // length, the height, and the layout marks you'd snap on the plates.
 
 import { formatLength, type MemberKind, type MemberView, type WallView } from "./core";
+import type { Guide } from "./snap";
 
 export interface DrawOptions {
   layoutFrom: "left" | "right";
+  /** What's good about each opening's spot, such as "Centered on the wall". */
+  notes?: string[][];
+  drag?: DragOverlay;
+}
+
+/** What to show while an opening is dragged. */
+export interface DragOverlay {
+  index: number;
+  guides: Guide[];
+  /** The space to either side, measured while it moves. */
+  gaps: [number, number][];
+  /** Where the pointer is asking for, when the frame won't take it there. */
+  ghost: { x: number; y: number; w: number; h: number } | null;
+}
+
+/** Maps the drawing back to the wall, in sixteenths. */
+export interface Scale {
+  /** Pixels per inch. */
+  s: number;
+  x16(px: number): number;
+  y16(py: number): number;
 }
 
 export const KIND_NAMES: Record<MemberKind, string> = {
@@ -60,7 +82,7 @@ export function drawElevation(
   options: DrawOptions,
   width: number,
   height: number,
-): void {
+): Scale {
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.replaceChildren();
   const L = wall.length_16 / 16;
@@ -74,13 +96,27 @@ export function drawElevation(
   const Y = (y16: number) => yb - (y16 / 16) * s;
 
   // Openings first so framing draws over their outlines.
+  const drag = options.drag;
   const openings = el("g", { class: "openings" });
-  for (const o of wall.openings) {
+  const handles = el("g", { class: "opening-handles" });
+  for (const [i, o] of wall.openings.entries()) {
     const x = X(o.x_16);
     const y = Y(o.y_16 + o.h_16);
     const w = (o.w_16 / 16) * s;
     const hgt = (o.h_16 / 16) * s;
-    openings.append(el("rect", { class: "rough-opening", x, y, width: w, height: hgt }));
+    const notes = options.notes?.[i] ?? [];
+    const dragged = drag?.index === i;
+    openings.append(
+      el("rect", {
+        class: `rough-opening${dragged ? " dragging" : ""}${notes.length > 0 ? " ideal" : ""}`,
+        x,
+        y,
+        width: w,
+        height: hgt,
+      }),
+    );
+    // A clear target over the hole itself, above the framing, to grab it by.
+    handles.append(el("rect", { class: "opening-handle", "data-index": i, x, y, width: w, height: hgt }));
     // Labels only where they fit inside the opening (about 7px a character).
     const size = `${formatLength(o.w_16, true)} × ${formatLength(o.h_16, true)}`;
     const cx = x + w / 2;
@@ -90,6 +126,14 @@ export function drawElevation(
       if (w > size.length * 7 + 12) {
         openings.append(el("text", { class: "opening-size", x: cx, y: cy + 12 }, size));
       }
+    }
+    // The good thing about its spot, or a check mark where the words won't fit.
+    if (notes.length > 0 && !dragged) {
+      const text = shortNote(notes[0]);
+      const fits = hgt > 64 && w > text.length * 6.5 + 16;
+      const mark = el("text", { class: "opening-ideal", x: cx, y: fits ? cy + 30 : y + Math.min(14, hgt / 2 + 4) }, fits ? `✓ ${text}` : "✓");
+      mark.append(el("title", {}, notes.join("\n")));
+      openings.append(mark);
     }
   }
   svg.append(openings);
@@ -126,6 +170,41 @@ export function drawElevation(
     members.append(shape);
   }
   svg.append(members);
+
+  if (drag) {
+    const g = el("g", { class: "drag-overlay" });
+    for (const guide of drag.guides) {
+      g.append(
+        guide.dir === "v"
+          ? el("line", { class: "snap-guide", x1: X(guide.at), y1: Y(wall.height_16) - 14, x2: X(guide.at), y2: Y(0) + 8 })
+          : el("line", { class: "snap-guide", x1: X(0) - 8, y1: Y(guide.at), x2: X(wall.length_16) + 8, y2: Y(guide.at) }),
+      );
+    }
+    const o = wall.openings[drag.index];
+    // Below the opening's name, so the two don't overlap.
+    const gy = Y(o.y_16 + o.h_16 * 0.3);
+    const even = drag.gaps.length === 2 && drag.gaps[0][1] - drag.gaps[0][0] === drag.gaps[1][1] - drag.gaps[1][0];
+    for (const [a, b] of drag.gaps) {
+      if (b - a < 16) continue;
+      const d = dimension(X(a), gy, X(b), gy, formatLength(b - a), "h");
+      d.classList.add("gap", ...(even ? ["even"] : []));
+      g.append(d);
+    }
+    if (drag.ghost) {
+      const r = drag.ghost;
+      g.append(
+        el("rect", {
+          class: "drag-ghost",
+          x: X(r.x),
+          y: Y(r.y + r.h),
+          width: (r.w / 16) * s,
+          height: (r.h / 16) * s,
+        }),
+      );
+    }
+    svg.append(g);
+  }
+  svg.append(handles);
 
   // Plate splices: a red line across each piece that starts at the joint.
   const splices = el("g", { class: "splices" });
@@ -199,6 +278,20 @@ export function drawElevation(
       options.layoutFrom === "left" ? "Layout measured from this end →" : "← Layout measured from this end",
     ),
   );
+
+  return {
+    s,
+    x16: (px) => ((px - x0) / s) * 16,
+    y16: (py) => ((yb - py) / s) * 16,
+  };
+}
+
+/** A few words for a note, to fit inside the opening. */
+function shortNote(note: string): string {
+  if (note.startsWith("Centered between")) return "Centered in its space";
+  if (note.startsWith("Centered")) return "Centered";
+  if (note.startsWith("Spaced evenly")) return "Evenly spaced";
+  return note.replace(/ with .*/, "");
 }
 
 function dimension(
