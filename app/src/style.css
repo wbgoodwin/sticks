@@ -1815,3 +1815,32 @@ tbody tr.highlight {
   margin: 0;
   padding: 0;
 }
+
+/* Asking before New or Open replaces unsaved work */
+dialog.replace {
+  width: min(420px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgb(40 30 10 / 0.18);
+}
+dialog.replace::backdrop {
+  background: rgb(20 18 12 / 0.35);
+}
+dialog.replace h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+dialog.replace p {
+  margin: 6px 0 18px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.replace-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

@@ -4,6 +4,8 @@ import shedToml from "../../examples/shed.toml?raw";
 import { isSide, projectFromToml, type OpeningJson, type OpeningKind, type ProjectJson, type StockJson } from "./core";
 
 const KEY = "sticks.project.v2";
+/** The TOML of the project as last saved to or opened from a file. */
+const FILED_KEY = "sticks.project.filed";
 
 export type Template = "shed" | "wall";
 
@@ -138,5 +140,22 @@ export function save(project: ProjectJson): void {
     localStorage.setItem(KEY, JSON.stringify(project));
   } catch {
     // Saving is a convenience; the project file is the real record.
+  }
+}
+
+/** The project's TOML as a file last held it, or null when none has. */
+export function loadFiled(): string | null {
+  try {
+    return localStorage.getItem(FILED_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveFiled(toml: string): void {
+  try {
+    localStorage.setItem(FILED_KEY, toml);
+  } catch {
+    // Without it, replacing the project just asks to save first.
   }
 }

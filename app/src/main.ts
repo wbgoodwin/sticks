@@ -17,13 +17,14 @@ import {
   type WallJson,
   type WallView,
 } from "./core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { mountCommand } from "./command";
 import { dollars, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES, type DragOverlay, type Scale } from "./elevation";
 import { openSection, revealOpening, renderPanel, wallName, type PanelContext, type PanelTab } from "./panel";
 import { bounds, factsAt, movesUpAndDown, snap, type Item, type Spot } from "./snap";
 import { renderSettings } from "./settings";
-import { ensureStock, fromTemplate, load, normalize, save, TEMPLATES } from "./state";
+import { ensureStock, fromTemplate, load, loadFiled, normalize, save, saveFiled, TEMPLATES } from "./state";
 import { HIDDEN_LAYERS, LAYERS, Viewer } from "./view3d";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -92,6 +93,17 @@ app.innerHTML = `
     </header>
     <div class="settings-body"></div>
   </dialog>
+  <dialog class="replace" aria-labelledby="replace-title">
+    <form method="dialog">
+      <h2 id="replace-title"></h2>
+      <p>Changes since it was last saved to a file will be lost.</p>
+      <div class="replace-actions">
+        <button class="button" value="cancel">Cancel</button>
+        <button class="button" value="replace">Don't save</button>
+        <button class="button primary" value="save" autofocus>Save first…</button>
+      </div>
+    </form>
+  </dialog>
   <div class="print-preview" hidden>
     <div class="print-bar">
       <strong>Build packet</strong>
@@ -127,6 +139,7 @@ const fileInput = $<HTMLInputElement>('input[type="file"]');
 const preview = $<HTMLDivElement>(".print-preview");
 const settings = $<HTMLDialogElement>("dialog.settings");
 const settingsBody = $<HTMLDivElement>(".settings-body");
+const replaceDialog = $<HTMLDialogElement>("dialog.replace");
 const previewFrame = $<HTMLIFrameElement>(".print-preview iframe");
 
 /** What the stage shows: the 3D model, a wall's elevation, or a printed drawing. */
@@ -869,9 +882,12 @@ $<HTMLDivElement>(".menu-items").append(
     b.type = "button";
     b.role = "menuitem";
     b.textContent = text;
-    b.addEventListener("click", () => {
+    b.addEventListener("click", async () => {
       menu.open = false;
-      openProject(fromTemplate(template));
+      if (!(await okToReplace())) return;
+      const next = fromTemplate(template);
+      openProject(next);
+      markFiled(next);
     });
     return b;
   }),
@@ -949,14 +965,10 @@ app.addEventListener("click", (e) => {
   const action = (e.target as Element).closest<HTMLElement>("[data-action]")?.dataset.action;
   switch (action) {
     case "open":
-      fileInput.click();
+      okToReplace().then((ok) => ok && fileInput.click());
       break;
     case "save":
-      try {
-        download(`${fileName(project.name)}.toml`, projectToToml(project), "text/plain");
-      } catch (err) {
-        showProblem(`Couldn't save: ${message(err)}`);
-      }
+      saveProject();
       break;
     case "print":
       try {
@@ -970,7 +982,9 @@ app.addEventListener("click", (e) => {
       previewFrame.contentWindow?.print();
       break;
     case "download-packet":
-      download(`${fileName(project.name)}-build-packet.html`, previewFrame.srcdoc, "text/html");
+      saveFile(`${fileName(project.name)}-build-packet.html`, previewFrame.srcdoc, "Web page", "html").catch((err) =>
+        showProblem(`Couldn't save the build packet: ${message(err)}`),
+      );
       break;
     case "close-preview":
       preview.hidden = true;
@@ -998,19 +1012,74 @@ fileInput.addEventListener("change", async () => {
   fileInput.value = "";
   if (!file) return;
   try {
-    openProject(normalize(projectFromToml(await file.text())));
+    const next = normalize(projectFromToml(await file.text()));
+    openProject(next);
+    markFiled(next);
   } catch (err) {
     showProblem(`${file.name} couldn't be read: ${message(err)}`);
   }
 });
 
-function download(name: string, text: string, type: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type }));
+/**
+ * Saves text to a file the person picks. The desktop window asks where with
+ * the system's save dialog, since a download link does nothing there; the
+ * browser downloads it. False when they cancel.
+ */
+async function saveFile(name: string, text: string, kind: string, extension: string): Promise<boolean> {
+  if (isTauri()) return invoke<boolean>("save_file", { name, contents: text, kind, extension });
+  const url = URL.createObjectURL(new Blob([text], { type: extension === "html" ? "text/html" : "text/plain" }));
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+
+/** Saves the project as a TOML file. False when it wasn't saved. */
+async function saveProject(): Promise<boolean> {
+  try {
+    const text = projectToToml(project);
+    if (!(await saveFile(`${fileName(project.name)}.toml`, text, "Sticks project", "toml"))) return false;
+    saveFiled(text);
+    return true;
+  } catch (err) {
+    showProblem(`Couldn't save: ${message(err)}`);
+    return false;
+  }
+}
+
+/** Notes that `p` matches a file, or a fresh template, so replacing it loses nothing. */
+function markFiled(p: ProjectJson): void {
+  try {
+    saveFiled(projectToToml(p));
+  } catch {
+    // A project the core can't write out simply counts as unsaved.
+  }
+}
+
+/** Whether the project has changes no file holds. */
+function unfiled(): boolean {
+  try {
+    return projectToToml(project) !== loadFiled();
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Before New or Open replaces the project, offers to save changes no file
+ * holds. True when it's fine to go ahead.
+ */
+async function okToReplace(): Promise<boolean> {
+  if (!unfiled()) return true;
+  $<HTMLHeadingElement>("#replace-title").textContent = `Save “${project.name.trim() || "this project"}” first?`;
+  replaceDialog.returnValue = "cancel";
+  replaceDialog.showModal();
+  await new Promise((done) => replaceDialog.addEventListener("close", done, { once: true }));
+  if (replaceDialog.returnValue === "replace") return true;
+  if (replaceDialog.returnValue === "save") return saveProject();
+  return false;
 }
 
 function fileName(name: string): string {
@@ -1018,5 +1087,9 @@ function fileName(name: string): string {
 }
 
 loadCore().then(() => {
-  openProject(load() ?? fromTemplate("shed"));
+  const saved = load();
+  if (saved) return openProject(saved);
+  const fresh = fromTemplate("shed");
+  openProject(fresh);
+  markFiled(fresh);
 });
