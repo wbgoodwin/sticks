@@ -302,5 +302,8 @@ export class Viewer {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    // Resizing clears the canvas, and this runs after the frame's render but
+    // before it is painted; without drawing again the view blinks blank.
+    this.renderer.render(this.scene, this.camera);
   }
 }
