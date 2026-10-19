@@ -48,6 +48,7 @@ app.innerHTML = `
     </div>
   </header>
   <aside class="panel" id="design-panel" aria-label="Design"></aside>
+  <div class="resizer" data-pane="panel" role="separator" aria-orientation="vertical" aria-controls="design-panel" aria-label="Resize design panel" tabindex="0"></div>
   <main class="stage">
     <div class="command"></div>
     <div class="viewbar">
@@ -63,6 +64,7 @@ app.innerHTML = `
       <div class="banner" hidden></div>
       <div class="tooltip" hidden></div>
     </div>
+    <div class="resizer" data-pane="schedule" role="separator" aria-orientation="horizontal" aria-controls="schedule" aria-label="Resize lists" tabindex="0"></div>
     <section class="schedule" id="schedule">
       <div class="tabs" role="tablist" aria-label="Lists">
         <button type="button" role="tab" id="tab-members" aria-controls="members" aria-selected="true">Members</button>
@@ -866,6 +868,97 @@ document.addEventListener("keydown", (e) => {
   if (!pane) return;
   e.preventDefault();
   setCollapsed(pane, !collapsed[pane]);
+});
+
+// Dragging a pane's inner edge sizes it; double-click puts it back. Sizes are
+// a preference of this computer, not part of the project.
+const SIZES_KEY = "sticks.sizes";
+const SIZE_LIMITS: Record<Pane, { min: number; max: () => number; step: number }> = {
+  panel: { min: 260, max: () => Math.max(260, Math.min(720, window.innerWidth * 0.6)), step: 20 },
+  schedule: { min: 120, max: () => Math.max(120, window.innerHeight * 0.75), step: 20 },
+};
+const sizes: Partial<Record<Pane, number>> = {};
+try {
+  Object.assign(sizes, JSON.parse(localStorage.getItem(SIZES_KEY) ?? "{}"));
+} catch {
+  // Nothing remembered; both start at their usual size.
+}
+const resizers = [...app.querySelectorAll<HTMLElement>(".resizer")];
+const paneBox = (pane: Pane) => (pane === "panel" ? panel : $<HTMLElement>(".schedule"));
+function setSize(pane: Pane, px: number | undefined, remember = true): void {
+  const limits = SIZE_LIMITS[pane];
+  if (px === undefined) delete sizes[pane];
+  else sizes[pane] = Math.round(Math.min(limits.max(), Math.max(limits.min, px)));
+  const value = sizes[pane];
+  const prop = pane === "panel" ? "--panel-width" : "--schedule-height";
+  if (value === undefined) app.style.removeProperty(prop);
+  else app.style.setProperty(prop, `${value}px`);
+  app.classList.toggle(`${pane}-sized`, value !== undefined);
+  for (const r of resizers) {
+    if (r.dataset.pane !== pane) continue;
+    r.setAttribute("aria-valuemin", String(limits.min));
+    r.setAttribute("aria-valuemax", String(Math.round(limits.max())));
+    r.setAttribute("aria-valuenow", String(Math.round(value ?? paneSize(pane))));
+  }
+  if (!remember) return;
+  try {
+    localStorage.setItem(SIZES_KEY, JSON.stringify(sizes));
+  } catch {
+    // Not remembered this time; the new size still holds.
+  }
+}
+function paneSize(pane: Pane): number {
+  const r = paneBox(pane).getBoundingClientRect();
+  return pane === "panel" ? r.width : r.height;
+}
+for (const r of resizers) {
+  const pane = r.dataset.pane as Pane;
+  r.title = "Drag to resize, double-click to reset";
+  r.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    r.setPointerCapture(e.pointerId);
+    const start = pane === "panel" ? e.clientX : e.clientY;
+    const from = paneSize(pane);
+    document.body.classList.add(pane === "panel" ? "resizing-x" : "resizing-y");
+    r.classList.add("dragging");
+    const move = (m: PointerEvent) => {
+      // The panel grows rightward; the lists grow upward.
+      const delta = pane === "panel" ? m.clientX - start : start - m.clientY;
+      setSize(pane, from + delta, false);
+    };
+    const end = () => {
+      r.removeEventListener("pointermove", move);
+      r.removeEventListener("pointerup", end);
+      r.removeEventListener("pointercancel", end);
+      document.body.classList.remove("resizing-x", "resizing-y");
+      r.classList.remove("dragging");
+      setSize(pane, sizes[pane]);
+    };
+    r.addEventListener("pointermove", move);
+    r.addEventListener("pointerup", end);
+    r.addEventListener("pointercancel", end);
+  });
+  r.addEventListener("dblclick", () => setSize(pane, undefined));
+  r.addEventListener("keydown", (e) => {
+    const grow: Record<string, number> = pane === "panel" ? { ArrowRight: 1, ArrowLeft: -1 } : { ArrowUp: 1, ArrowDown: -1 };
+    const dir = grow[e.key];
+    if (dir) {
+      e.preventDefault();
+      setSize(pane, paneSize(pane) + dir * SIZE_LIMITS[pane].step * (e.shiftKey ? 3 : 1));
+    } else if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      setSize(pane, e.key === "Home" ? SIZE_LIMITS[pane].min : SIZE_LIMITS[pane].max());
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      setSize(pane, undefined);
+    }
+  });
+  setSize(pane, sizes[pane], false);
+}
+// A smaller window can leave a remembered size too big; keep it in bounds.
+window.addEventListener("resize", () => {
+  for (const pane of Object.keys(sizes) as Pane[]) setSize(pane, sizes[pane], false);
 });
 
 // Project name, templates, files and printing.
