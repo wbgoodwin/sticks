@@ -72,8 +72,9 @@ body {
 }
 
 #app {
+  position: relative;
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: var(--panel-width, 340px) 1fr;
   grid-template-rows: 52px 1fr;
   grid-template-areas:
     "top top"
@@ -83,8 +84,79 @@ body {
 #app.panel-collapsed {
   grid-template-columns: 0 1fr;
 }
-#app.panel-collapsed .panel {
+#app.panel-collapsed .panel,
+#app.panel-collapsed .resizer[data-pane="panel"],
+#app.schedule-collapsed .resizer[data-pane="schedule"] {
   display: none;
+}
+
+/* Drag handles on the panes' inner edges. */
+.resizer {
+  z-index: 5;
+  touch-action: none;
+}
+.resizer::after {
+  content: "";
+  position: absolute;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.resizer:hover::after,
+.resizer:focus-visible::after,
+.resizer.dragging::after {
+  opacity: 0.6;
+  transition-delay: 0.1s;
+}
+.resizer:focus-visible {
+  outline: none;
+}
+.resizer[data-pane="panel"] {
+  position: absolute;
+  top: 52px;
+  bottom: 0;
+  left: calc(var(--panel-width, 340px) - 4px);
+  width: 8px;
+  cursor: col-resize;
+}
+.resizer[data-pane="panel"]::after {
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+}
+.resizer[data-pane="schedule"] {
+  position: relative;
+  height: 0;
+  cursor: row-resize;
+}
+.resizer[data-pane="schedule"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -4px;
+  height: 8px;
+}
+.resizer[data-pane="schedule"]::after {
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 2px;
+}
+body.resizing-x,
+body.resizing-x * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+body.resizing-y,
+body.resizing-y * {
+  cursor: row-resize !important;
+  user-select: none;
+}
+body.resizing-x iframe,
+body.resizing-y iframe {
+  pointer-events: none;
 }
 
 /* Top bar */
@@ -708,7 +780,7 @@ dialog.settings header p {
 .stage {
   grid-area: stage;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto 1fr auto auto;
   min-height: 0;
   min-width: 0;
 }
@@ -1261,7 +1333,12 @@ dialog.settings header p {
 .tab-panel[hidden] {
   display: none;
 }
+#app.schedule-sized .schedule {
+  height: var(--schedule-height);
+  max-height: none;
+}
 #app.schedule-collapsed .schedule {
+  height: auto;
   padding-bottom: 0;
   overflow: hidden;
 }
