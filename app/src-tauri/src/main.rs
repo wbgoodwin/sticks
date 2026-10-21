@@ -41,7 +41,9 @@ fn open_in_browser(app: tauri::AppHandle, url: String) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("Sticks only opens https pages.".into());
     }
-    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Signs in to a Sticks account: opens the sign-in page `url` in the
@@ -49,23 +51,36 @@ fn open_in_browser(app: tauri::AppHandle, url: String) -> Result<(), String> {
 /// /auth/callback, and returns that address's query (the code and state).
 /// The page itself finishes the sign-in.
 #[tauri::command]
-async fn sign_in_in_browser(app: tauri::AppHandle, url: String, port: u16) -> Result<String, String> {
+async fn sign_in_in_browser(
+    app: tauri::AppHandle,
+    url: String,
+    port: u16,
+) -> Result<String, String> {
     // Listen before opening the browser, so the answer can't arrive first.
     // "localhost" can mean either address, so both are tried.
-    let listeners: Vec<TcpListener> = [SocketAddr::from(([127, 0, 0, 1], port)), SocketAddr::from(([0u16, 0, 0, 0, 0, 0, 0, 1], port))]
-        .into_iter()
-        .filter_map(|addr| TcpListener::bind(addr).ok())
-        .collect();
+    let listeners: Vec<TcpListener> = [
+        SocketAddr::from(([127, 0, 0, 1], port)),
+        SocketAddr::from(([0u16, 0, 0, 0, 0, 0, 0, 1], port)),
+    ]
+    .into_iter()
+    .filter_map(|addr| TcpListener::bind(addr).ok())
+    .collect();
     if listeners.is_empty() {
-        return Err(format!("Couldn't listen on port {port} for the sign-in. Is another Sticks window signing in?"));
+        return Err(format!(
+            "Couldn't listen on port {port} for the sign-in. Is another Sticks window signing in?"
+        ));
     }
     for l in &listeners {
         l.set_nonblocking(true).map_err(|e| e.to_string())?;
     }
-    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || wait_for_callback(&listeners, Duration::from_secs(600)))
-        .await
-        .map_err(|e| e.to_string())?
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        wait_for_callback(&listeners, Duration::from_secs(600))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn wait_for_callback(listeners: &[TcpListener], timeout: Duration) -> Result<String, String> {
@@ -91,7 +106,9 @@ fn answer(mut stream: TcpStream) -> Option<String> {
     let mut line = String::new();
     BufReader::new(&stream).read_line(&mut line).ok()?;
     let target = line.split_whitespace().nth(1)?;
-    let query = target.strip_prefix("/auth/callback").and_then(|rest| rest.strip_prefix('?').or(Some(rest)));
+    let query = target
+        .strip_prefix("/auth/callback")
+        .and_then(|rest| rest.strip_prefix('?').or(Some(rest)));
     let (status, body) = match query {
         Some(_) => ("200 OK", SIGNED_IN_PAGE),
         None => ("404 Not Found", ""),
@@ -113,7 +130,11 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![save_file, open_in_browser, sign_in_in_browser])
+        .invoke_handler(tauri::generate_handler![
+            save_file,
+            open_in_browser,
+            sign_in_in_browser
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Sticks");
 }
