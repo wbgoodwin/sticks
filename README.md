@@ -72,7 +72,9 @@ press Make, and Undo puts it back. The app asks
 [Jev](https://docs.typesafe.ai/introduction/quickstart) through the dev
 server, which adds your key so the page never holds it. Start it with the key
 set: `TYPESAFE_API_KEY=... npm run tauri dev` (or `npm run dev`), or put the
-key in `app/.env.local`. A bundled build can't reach Jev yet.
+key in `app/.env.local`. Signed in to a Sticks account on the paid plan, the
+app asks Jev through the account server instead, which holds the key (see
+below), so a bundled build works too.
 
 `app/scripts/jev-probe.ts` runs sample requests through Jev from the command
 line: `TYPESAFE_API_KEY=... npm run probe:jev` in `app/`, which builds
@@ -187,6 +189,32 @@ npm run tauri dev    # as a desktop app
 The desktop build also needs Tauri's system prerequisites for your OS (on
 Linux, the WebKitGTK development packages); see
 https://v2.tauri.app/start/prerequisites/.
+
+### Sticks account
+
+Without an account everything stays on this Mac. Signing in (the person
+button in the top bar) and taking the paid plan ($5 a month) syncs designs
+between Macs and turns on changes in plain English, which come with a
+monthly allowance and then a small charge each, up to a limit you set. The
+Account dialog shows the plan, this month's use, that limit, the day the plan
+ends if you picked one, Stripe's billing page, and your synced designs.
+
+The open project saves to the account two seconds after each change. If
+another Mac saved the same design in between, this Mac's version is saved as
+a copy next to it, so nothing is overwritten.
+
+Accounts live in the private `sticks-yard` repo. Point the app at a deploy of
+it in `app/.env.local`, using the deploy's outputs; without these the app has
+no account features:
+
+```sh
+VITE_YARD_URL=https://....on.aws                                         # ApiUrl
+VITE_YARD_SIGN_IN=https://sticks-yard.auth.us-east-1.amazoncognito.com   # SignInDomain
+VITE_YARD_CLIENT_ID=...                                                  # ClientId
+```
+
+Sign-in opens in your browser. The desktop window waits for it on
+`localhost:47615`; the browser build comes back to `/auth/callback`.
 
 ## Framing conventions
 

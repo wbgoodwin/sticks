@@ -25,10 +25,12 @@ const ROUNDS = 3;
 /** Asks Jev until Rust has nothing more for it, adding to `answers`. */
 async function settle(base: ProjectJson, request: string, answers: Record<string, EditAnswer>): Promise<void> {
   const design = describeDesign(base);
+  // Every round of one request is one change, for counting against the plan.
+  const change = crypto.randomUUID();
   for (let round = 0; round < ROUNDS; round++) {
     const asks = editQuestions(base, request, answers);
     if (asks.length === 0) return;
-    Object.assign(answers, await askJev(request, design, asks));
+    Object.assign(answers, await askJev(request, design, asks, change));
   }
 }
 
