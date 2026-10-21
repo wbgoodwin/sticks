@@ -192,8 +192,8 @@ https://v2.tauri.app/start/prerequisites/.
 
 ### Sticks account
 
-Without an account everything stays on this Mac. Signing in (the person
-button in the top bar) and taking the paid plan ($5 a month) syncs designs
+Without an account everything stays on this Mac. Signing in (Sign in, in the
+top bar) and taking the paid plan ($5 a month) syncs designs
 between Macs and turns on changes in plain English, which come with a
 monthly allowance and then a small charge each, up to a limit you set. The
 Account dialog shows the plan, this month's use, that limit, the day the plan
