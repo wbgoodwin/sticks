@@ -1062,6 +1062,37 @@ dialog.settings header p {
 .banner[hidden] {
   display: none;
 }
+.update {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  max-width: min(380px, calc(100% - 32px));
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 10px;
+}
+.update[hidden] {
+  display: none;
+}
+.update p {
+  margin: 4px 0 0;
+  color: var(--text-2);
+}
+.update code {
+  font-size: 0.92em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--surface-2);
+}
+.update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .tooltip span {
   opacity: 0.8;
 }
@@ -1579,6 +1610,11 @@ tbody tr.highlight {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+}
+/* Off (see VITE_JEV), it keeps its grid row but takes no room. */
+.command:empty {
+  padding: 0;
+  border: 0;
 }
 .command-bar {
   display: flex;
