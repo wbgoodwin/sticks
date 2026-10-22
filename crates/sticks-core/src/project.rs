@@ -374,6 +374,9 @@ pub struct Deck {
     pub decking_material: DeckingMaterial,
     /// Space between decking boards. Default 1/8".
     pub gap: Length,
+    /// Which deck rules the sizes are checked against. Default the plain
+    /// 2021 IRC.
+    pub code: DeckCode,
     /// Wood species group for the span tables. Default southern pine.
     pub species: Species,
     /// Soil bearing pressure for footing sizes, pounds per square foot.
@@ -410,6 +413,7 @@ impl Default for Deck {
             decking: "5/4x6".parse().expect("5/4x6 is a lumber size"),
             decking_material: DeckingMaterial::Wood,
             gap: Length::from_sixteenths(2),
+            code: DeckCode::Irc2021,
             species: Species::SouthernPine,
             soil_psf: 1500,
             live_psf: 40,
@@ -451,6 +455,28 @@ pub enum DeckingMaterial {
     /// Plastic or wood-plastic composite boards, which span what their
     /// maker's listing says.
     Composite,
+}
+
+/// A set of deck rules to check a deck against.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeckCode {
+    /// The International Residential Code's prescriptive deck tables
+    /// (R507), with no local changes.
+    #[default]
+    Irc2021,
+    /// Fairfax County, Virginia's Typical Deck Details (2021 Virginia
+    /// Residential Code), which permit drawings there may follow.
+    Fairfax2021,
+}
+
+impl DeckCode {
+    pub fn name(self) -> &'static str {
+        match self {
+            DeckCode::Irc2021 => "2021 IRC, section R507",
+            DeckCode::Fairfax2021 => "Fairfax County Typical Deck Details (2021 VRC)",
+        }
+    }
 }
 
 /// Wood species groups in the code's deck span tables.

@@ -2,6 +2,8 @@
 //! sheathing.
 
 pub mod building;
+pub mod code;
+pub mod deck;
 pub mod floor;
 pub mod joints;
 pub mod layout;
@@ -13,6 +15,8 @@ pub mod sheathing;
 pub mod wall;
 
 pub use building::{frame_project, side_plan_y, FramedProject, Section, SIDES};
+pub use code::{CodeCheck, Footing};
+pub use deck::{frame_deck, DeckHeights, FramedDeck};
 pub use floor::{frame_floor, Bay, FramedFloor, Pier, PlacedSheet};
 pub use layout::{LayoutMark, Placed, Rect, Splice};
 pub use model::{bounds, model, wall_ids, OtherKind, Solid, SolidKind};

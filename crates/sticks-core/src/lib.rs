@@ -12,8 +12,9 @@ pub use lumber::{
     DEFAULT_STOCK_FEET,
 };
 pub use project::{
-    BeamStyle, Building, CornerStyle, Deck, DeckSupport, DeckingMaterial, Fastening, Floor,
-    FloorSupport, Hardware, LayoutStart, Opening, OpeningKind, Pitch, Porch, PorchDeck, Project,
-    ProjectError, Roof, RoofKind, Rules, Sheathing, SheetStock, Species, Stock, Wall, WallEnd,
+    BeamStyle, Building, CornerStyle, Deck, DeckCode, DeckSupport, DeckingMaterial, Fastening,
+    Floor, FloorSupport, Hardware, LayoutStart, Opening, OpeningKind, Pitch, Porch, PorchDeck,
+    Project, ProjectError, Roof, RoofKind, Rules, Sheathing, SheetStock, Species, Stock, Wall,
+    WallEnd,
 };
 pub use units::{Length, ParseLengthError};
