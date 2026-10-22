@@ -8,7 +8,7 @@
 // revoked or 90 days pass.
 //
 // Set these in app/.env.local from the sticks-yard deploy's outputs:
-//   VITE_YARD_URL=https://....on.aws           (ApiUrl)
+//   VITE_YARD_URL=https://api.sticksyard.app   (ApiUrl)
 //   VITE_YARD_SIGN_IN=https://sticks-yard.auth.us-east-1.amazoncognito.com  (SignInDomain)
 //   VITE_YARD_CLIENT_ID=...                      (ClientId)
 // Without them the app has no account features and works as before.
