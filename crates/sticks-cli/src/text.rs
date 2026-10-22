@@ -7,8 +7,8 @@ use sticks_core::{Cut, LayoutStart};
 use sticks_cutlist::CutList;
 use sticks_hardware::HardwareList;
 use sticks_rules::{
-    FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark, Placed,
-    RafterDetail, Splice,
+    FramedDeck, FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark,
+    Placed, RafterDetail, Splice,
 };
 
 fn members(out: &mut String, members: &[Placed]) {
@@ -121,6 +121,47 @@ pub fn floor(f: &FramedFloor, from: LayoutStart) -> String {
     }
     splices(&mut out, &f.splices);
     notes(&mut out, &f.warnings);
+    out
+}
+
+pub fn deck(d: &FramedDeck, from: LayoutStart) -> String {
+    let mut out = String::new();
+    let h = &d.heights;
+    let _ = writeln!(out, "Deck: {} wide, {} deep", d.width, d.depth);
+    let _ = writeln!(
+        out,
+        "  Decking top {} above grade; joists {} to {}; beams {} to {}; pier tops {}",
+        h.top, h.joist_bottom, h.joist_top, h.beam_bottom, h.beam_top, h.pier_top
+    );
+    let _ = writeln!(out);
+    members(&mut out, &d.members);
+    marks(&mut out, &d.marks, from, "Joist marks on the rims");
+    for (pier, f) in d.piers.iter().zip(&d.footings) {
+        let _ = writeln!(
+            out,
+            "  pier: {:>10} from the left, {:#} from the front; footing {:#} round, {:#} thick, bottom {:#} down",
+            format!("{:#}", pier.x),
+            pier.y,
+            f.diameter,
+            f.thickness,
+            f.depth
+        );
+    }
+    splices(&mut out, &d.splices);
+    let _ = writeln!(out);
+    let _ = writeln!(out, "  Code checks:");
+    for c in &d.checks {
+        let _ = writeln!(
+            out,
+            "  {} {}: {} (allowed: {}) [{}]",
+            if c.ok { "ok  " } else { "FAIL" },
+            c.item,
+            c.actual,
+            c.allowed,
+            c.source
+        );
+    }
+    notes(&mut out, &d.warnings);
     out
 }
 

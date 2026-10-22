@@ -342,7 +342,10 @@ pub fn cut_list_json(project_json: &str) -> Result<String, String> {
         total_cents: k.total_cents,
     };
     view.on_hand_boards = kept.boards.into_iter().map(board_view).collect();
-    view.hardware = sticks_hardware::for_project(&buy.joints, project.hardware.as_ref());
+    view.hardware = sticks_hardware::for_project(
+        &buy.joints,
+        sticks_rules::hardware_settings(&project).as_ref(),
+    );
     serde_json::to_string(&view).map_err(|e| e.to_string())
 }
 
@@ -760,7 +763,10 @@ pub fn print_html(project_json: &str) -> Result<String, String> {
         &project.rules,
     )
     .map_err(|e| e.to_string())?;
-    let hw = sticks_hardware::for_project(&buy.joints, project.hardware.as_ref());
+    let hw = sticks_hardware::for_project(
+        &buy.joints,
+        sticks_rules::hardware_settings(&project).as_ref(),
+    );
     Ok(sticks_export::print_html(&project, &framed, &cl, &hw))
 }
 

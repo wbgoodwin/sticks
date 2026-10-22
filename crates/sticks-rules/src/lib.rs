@@ -14,7 +14,7 @@ pub mod roof;
 pub mod sheathing;
 pub mod wall;
 
-pub use building::{frame_project, side_plan_y, FramedProject, Section, SIDES};
+pub use building::{frame_project, hardware_settings, side_plan_y, FramedProject, Section, SIDES};
 pub use code::{CodeCheck, Footing};
 pub use deck::{frame_deck, DeckHeights, FramedDeck};
 pub use floor::{frame_floor, Bay, FramedFloor, Pier, PlacedSheet};

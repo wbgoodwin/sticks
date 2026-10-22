@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn fairfax_checks_its_own_tables() {
-        let d = deck("code = \"fairfax2021\"\nheight = \"24\"").unwrap();
+        let d = deck("code = \"fairfax2021\"\nheight = \"28\"\nsupport = \"posts\"").unwrap();
         assert!(d.passes(), "{:?}", failing(&d));
         let footing = d.checks.iter().find(|c| c.item == "Footing depth").unwrap();
         assert!(footing.actual.contains("24"), "{footing:?}");

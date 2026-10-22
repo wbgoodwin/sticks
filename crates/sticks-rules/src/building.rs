@@ -10,9 +10,11 @@
 
 use serde::Serialize;
 use sticks_core::{
-    Joint, LayoutStart, Length, Member, MemberKind, Project, RoofKind, SheetPiece, Wall, WallEnd,
+    BeamStyle, DeckCode, Hardware, Joint, JointKind, LayoutStart, Length, Member, MemberKind,
+    Project, RoofKind, SheetPiece, Wall, WallEnd,
 };
 
+use crate::deck::{frame_deck, FramedDeck};
 use crate::floor::{frame_floor, FramedFloor};
 use crate::layout::{LayoutMark, Placed};
 use crate::porch::{frame_porch, FramedPorch};
@@ -35,6 +37,7 @@ pub struct FramedProject {
     pub roof: Option<Result<FramedRoof, FramingError>>,
     pub porch: Option<Result<FramedPorch, FramingError>>,
     pub sheathing: Option<Result<FramedSheathing, FramingError>>,
+    pub deck: Option<Result<FramedDeck, FramingError>>,
 }
 
 /// One stage of the build that can come off the shopping list on its own,
@@ -118,6 +121,18 @@ impl FramedProject {
                 );
             }
         }
+        if let Some(Ok(d)) = &self.deck {
+            let (decking, framing): (Vec<Member>, Vec<Member>) = d
+                .members
+                .iter()
+                .map(|p| p.member.clone())
+                .partition(|m| m.kind == MemberKind::Decking);
+            out.push(
+                Section::new("deck framing", "Deck framing", framing, Vec::new())
+                    .with_joints(d.joints()),
+            );
+            out.push(Section::new("decking", "Decking", decking, Vec::new()));
+        }
         if let Some(Ok(s)) = &self.sheathing {
             let panels = |faces: &[SheathedFace]| {
                 faces
@@ -190,11 +205,13 @@ impl FramedProject {
         let roof = self.roof.iter().filter_map(|r| r.as_ref().err());
         let porch = self.porch.iter().filter_map(|p| p.as_ref().err());
         let sheathing = self.sheathing.iter().filter_map(|s| s.as_ref().err());
+        let deck = self.deck.iter().filter_map(|d| d.as_ref().err());
         walls
             .chain(floor)
             .chain(roof)
             .chain(porch)
             .chain(sheathing)
+            .chain(deck)
             .collect()
     }
 }
@@ -204,6 +221,7 @@ impl FramedProject {
 pub fn frame_project(project: &Project) -> Result<FramedProject, FramingError> {
     let rules = &project.rules;
     let stock = &project.stock;
+    let deck = project.deck.as_ref().map(|d| frame_deck(d, rules, stock));
     let Some(building) = &project.building else {
         for (part, given) in [
             ("floor", project.floor.is_some()),
@@ -229,6 +247,7 @@ pub fn frame_project(project: &Project) -> Result<FramedProject, FramingError> {
             roof: None,
             porch: None,
             sheathing: None,
+            deck,
         });
     };
 
@@ -441,6 +460,7 @@ pub fn frame_project(project: &Project) -> Result<FramedProject, FramingError> {
         roof,
         porch,
         sheathing,
+        deck,
     })
 }
 
@@ -709,4 +729,21 @@ mod tests {
         assert_eq!(f.walls.len(), 1);
         assert!(f.floor.is_none());
     }
+}
+
+/// The project's connector settings with what its deck rules require
+/// added: Fairfax County wants a tie at every joist on a beam.
+pub fn hardware_settings(project: &Project) -> Option<Hardware> {
+    let fairfax = project
+        .deck
+        .as_ref()
+        .is_some_and(|d| d.code == DeckCode::Fairfax2021 && d.beam_style == BeamStyle::Under);
+    if !fairfax {
+        return project.hardware.clone();
+    }
+    let mut hw = project.hardware.clone().unwrap_or_default();
+    if !hw.add.contains(&JointKind::JoistOnBeam) {
+        hw.add.push(JointKind::JoistOnBeam);
+    }
+    Some(hw)
 }

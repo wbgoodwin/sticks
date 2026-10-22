@@ -34,7 +34,7 @@ enum Command {
     /// Frame the walls, floor and roof and print their members and layout marks.
     Frame {
         project: PathBuf,
-        /// Only this part: a wall's id, `floor`, `roof`, `porch` or `sheathing`.
+        /// Only this part: a wall's id, `floor`, `roof`, `porch`, `sheathing` or `deck`.
         #[arg(long)]
         part: Option<String>,
     },
@@ -154,9 +154,13 @@ fn frame(project: &Project, only: Option<&str>) -> Result<(), String> {
         print!("{}", text::sheathing(s));
         shown = true;
     }
+    if let Some(Ok(d)) = f.deck.as_ref().filter(|_| want("deck")) {
+        print!("{}", text::deck(d, from));
+        shown = true;
+    }
     match (only, shown) {
         (Some(part), false) => Err(format!(
-            "no wall, floor, roof, porch or sheathing called {part:?}"
+            "no wall, floor, roof, porch, sheathing or deck called {part:?}"
         )),
         _ => Ok(()),
     }
@@ -182,7 +186,10 @@ fn plan_framed(project: &Project, f: &FramedProject) -> Result<CutList, String> 
 /// Connectors for every section but the ones the project has on hand.
 fn hardware(project: &Project, f: &FramedProject) -> HardwareList {
     let (buy, _) = f.split(&project.on_hand);
-    sticks_hardware::for_project(&buy.joints, project.hardware.as_ref())
+    sticks_hardware::for_project(
+        &buy.joints,
+        sticks_rules::hardware_settings(project).as_ref(),
+    )
 }
 
 fn build(project: &Project, out: &Path) -> Result<(), String> {

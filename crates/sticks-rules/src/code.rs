@@ -1155,6 +1155,15 @@ pub fn check_deck(deck: &Deck, layout: &DeckLayout) -> Vec<CodeCheck> {
             }
         }
     }
+    if fairfax && deck.support == DeckSupport::Piers {
+        out.push(check(
+            "Beam support",
+            "beams straight on concrete piers".to_string(),
+            "posts on footings, with post bases and post caps".to_string(),
+            false,
+            "Fairfax Section 5 (ask the county before setting beams on piers)".to_string(),
+        ));
+    }
     match deck.support {
         DeckSupport::Blocks => out.push(check(
             "Footings",
