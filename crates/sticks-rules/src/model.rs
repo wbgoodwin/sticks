@@ -43,7 +43,8 @@ pub enum OtherKind {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Solid {
     pub label: String,
-    /// The part it belongs to: a wall id, `floor`, `roof` or `porch`.
+    /// The part it belongs to: a wall id, `floor`, `roof`, `porch`,
+    /// `porch-deck` or `deck`.
     pub part: String,
     pub kind: SolidKind,
     /// The member it shows, for framing members.
@@ -315,7 +316,7 @@ fn pier_solids(out: &mut Vec<Solid>, piers: &[Pier], top: f64, part: &str) {
     for (i, pier) in piers.iter().enumerate() {
         let (x, y) = (inches(pier.x) - PIER / 2.0, inches(pier.y) - PIER / 2.0);
         out.push(Solid {
-            label: format!("{part} pier {}", i + 1),
+            label: format!("{} pier {}", part.replace('-', " "), i + 1),
             part: part.to_string(),
             kind: SolidKind::Other(OtherKind::Pier),
             member: None,
@@ -511,9 +512,9 @@ fn porch_solids(out: &mut Vec<Solid>, porch: &FramedPorch) {
                 MemberKind::Beam => (bb, jb),
                 _ => (jb, jt),
             };
-            out.push(plan_solid(p, "deck", lo, hi));
+            out.push(plan_solid(p, "porch-deck", lo, hi));
         }
-        pier_solids(out, &deck.piers, bb, "deck");
+        pier_solids(out, &deck.piers, bb, "porch-deck");
     }
 }
 
@@ -712,7 +713,7 @@ mod tests {
         assert!(hi[1] <= 0.01 && lo[1] < -72.0, "{lo:?} {hi:?}");
         assert!(hi[2] <= 117.01, "{hi:?}");
         // The deck sits a step below the floor.
-        let [_, hi] = bounds(&part("deck")).unwrap();
+        let [_, hi] = bounds(&part("porch-deck")).unwrap();
         assert!(close(hi[2], -1.0), "{hi:?}");
         // Wall sheathing hangs off the outside faces.
         let sheathing: Vec<Solid> = m

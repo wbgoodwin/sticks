@@ -70,6 +70,17 @@ pub fn describe(project: &Project) -> String {
         let deck = if p.deck.is_some() { " with a deck" } else { "" };
         out += &format!("  porch: {} deep on {} posts{deck}\n", p.depth, p.post);
     }
+    if let Some(d) = &project.deck {
+        out += &format!(
+            "  deck: {} wide, {} deep, {:#} high, {} joists on {} beams, checked against {}\n",
+            d.width,
+            d.depth,
+            d.height,
+            d.joist,
+            d.beams,
+            d.code.name()
+        );
+    }
     if let Some(s) = &project.sheathing {
         let t = |l: Option<Length>| l.map_or("none".to_string(), |l| format!("{l:#}"));
         out += &format!("  sheathing: walls {}, roof {}\n", t(s.wall), t(s.roof));

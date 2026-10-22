@@ -121,11 +121,14 @@ td.num, th.num {{ text-align: right; }}
     );
     if let Some(deck) = &project.deck {
         let notice = deck_notice(deck);
+        // The second line opens with the heading, so it's bolded rather than repeated.
+        let (head, rest) = notice[1].split_once(": ").unwrap_or(("", &notice[1]));
         let _ = writeln!(
             out,
-            "<p class=\"owner\"><strong>You are responsible for these plans.</strong> {} {}</p>",
-            esc(&notice[0]),
-            esc(&notice[1])
+            "<p class=\"owner\"><strong>{}:</strong> {} {}</p>",
+            esc(head),
+            esc(rest),
+            esc(&notice[0])
         );
     }
 

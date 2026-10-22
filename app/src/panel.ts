@@ -8,6 +8,7 @@ import {
   isSide,
   parseLength,
   type BuildingJson,
+  type DeckJson,
   type OpeningJson,
   type OpeningKind,
   type PorchJson,
@@ -48,6 +49,8 @@ export function lengthField(
   set: (v: string) => void,
   events: PanelEvents,
   hint?: string,
+  /** Called instead of `set` when the field is emptied, for a length that can be left out. */
+  clear?: () => void,
 ): HTMLElement {
   const message = h("div", { class: "field-error", role: "alert" });
   const input = h("input", {
@@ -57,6 +60,13 @@ export function lengthField(
     autocomplete: "off",
     "aria-label": label,
     oninput: () => {
+      if (clear && input.value.trim() === "") {
+        input.classList.remove("invalid");
+        message.textContent = "";
+        clear();
+        events.changed();
+        return;
+      }
       const result = parseLength(input.value);
       if ("error" in result) {
         input.classList.add("invalid");
@@ -177,6 +187,12 @@ export function renderPanel(
   events: PanelEvents,
 ): void {
   const building = project.building;
+  const deck = project.deck;
+  // A deck on its own has no walls to edit, only the deck.
+  if (!building && deck && project.wall.length === 0) {
+    root.replaceChildren(deckNotice(deck), ...deckSections(deck, events));
+    return;
+  }
   if (!building) {
     root.replaceChildren(wallsSection(project, ctx, events));
     return;
@@ -205,6 +221,7 @@ export function renderPanel(
           floorSection(project, events),
           porchSection(project, events),
           sheathingSection(project, events),
+          ...(deck ? deckSections(deck, events, () => delete project.deck) : []),
           addParts(project, events),
         ].filter((s) => s !== null)),
   );
@@ -333,6 +350,11 @@ function addParts(project: ProjectJson, events: PanelEvents): HTMLElement | null
           // A deck hangs from the floor's rim, so it needs a floor.
           if (project.floor) p.deck = { beam: "4x6", decking: "5/4x6", step_down: '1"' };
           project.porch = p;
+        }),
+    project.deck
+      ? null
+      : add("deck", "+ Deck", "A low deck on its own footings, beside the shed", () => {
+          project.deck = { width: "12'", depth: "10'", height: '24"', code: "irc2021" };
         }),
     project.sheathing
       ? null
@@ -597,6 +619,186 @@ function porchSection(project: ProjectJson, events: PanelEvents): HTMLElement | 
       },
     ],
   );
+}
+
+const CODES: [NonNullable<DeckJson["code"]>, string][] = [
+  ["irc2021", "2021 IRC"],
+  ["fairfax2021", "Fairfax County"],
+];
+const CODE_NAMES: Record<NonNullable<DeckJson["code"]>, string> = {
+  irc2021: "the 2021 IRC deck tables (R507)",
+  fairfax2021: "Fairfax County's Typical Deck Details (2021 VRC)",
+};
+const SPECIES: [NonNullable<DeckJson["species"]>, string][] = [
+  ["southern_pine", "Southern pine"],
+  ["douglas_fir", "Douglas fir"],
+  ["redwood", "Redwood"],
+];
+const DECK_BEAMS = ["2x6", "2x8", "2x10", "2x12"];
+const SOILS = ["1500", "2000", "2500", "3000"];
+
+/** Who owns a deck's plans, at the top of its panel and on every sheet. */
+function deckNotice(deck: DeckJson): HTMLElement {
+  return h(
+    "section",
+    { class: "panel-section deck-notice", role: "note" },
+    h("strong", {}, "You're responsible for these plans."),
+    h(
+      "p",
+      {},
+      `Sticks checks spans, beams, posts and footings against ${CODE_NAMES[deck.code ?? "irc2021"]}, but it isn't an engineer or a building official. Confirm every size, footing and connector with your building department before you build.`,
+    ),
+  );
+}
+
+/** A deck on its own footings: its size, framing, supports, decking and code. */
+function deckSections(deck: DeckJson, events: PanelEvents, remove?: () => void): HTMLElement[] {
+  const flush = () => (deck.beam_style ?? "under") === "flush";
+  const support = () => deck.support ?? "piers";
+  const plies = () => deck.beam_plies ?? 2;
+  return [
+    foldSection(
+      "deck",
+      "Deck",
+      () => `${deck.width ?? "12'"} × ${deck.depth ?? "12'"} · ${deck.height ?? '18"'} high`,
+      [
+        h(
+          "div",
+          { class: "row" },
+          lengthField("Width", () => deck.width ?? "12'", (v) => (deck.width = v), events, "Along the beams"),
+          lengthField("Depth", () => deck.depth ?? "12'", (v) => (deck.depth = v), events, "Along the joists"),
+        ),
+        lengthField("Height", () => deck.height ?? '18"', (v) => (deck.height = v), events, "Ground to the top of the decking. Over 30\" needs guards."),
+      ],
+      remove
+        ? [
+            "Remove deck",
+            () => {
+              remove();
+              events.restructured();
+            },
+          ]
+        : undefined,
+    ),
+    foldSection(
+      "deck-framing",
+      "Deck framing",
+      () => `${deck.joist ?? "2x8"} joists · ${deck.beams ?? 2} beams of (${plies()}) ${deck.beam ?? "2x8"}${flush() ? " · flush" : ""}`,
+      [
+        h(
+          "div",
+          { class: "row" },
+          select("Joists", JOISTS, () => deck.joist ?? "2x8", (v) => (deck.joist = v), events),
+          select("On center", ['12"', '16"', '24"'], () => deck.on_center ?? '16"', (v) => (deck.on_center = v), events),
+        ),
+        h(
+          "div",
+          { class: "row" },
+          select("Beams", DECK_BEAMS, () => deck.beam ?? "2x8", (v) => (deck.beam = v), events),
+          stepper("Plies", plies, (v) => (deck.beam_plies = v), 1, 3, events),
+        ),
+        h(
+          "div",
+          { class: "row" },
+          stepper("Beam lines", () => deck.beams ?? 2, (v) => (deck.beams = v), 2, 4, events),
+          lengthField("Joist overhang", () => deck.overhang ?? "0", (v) => (deck.overhang = v), events, "Past each outer beam"),
+        ),
+        segmented(
+          "Joists sit",
+          [
+            ["under", "On the beams"],
+            ["flush", "Hung level with them"],
+          ],
+          () => deck.beam_style ?? "under",
+          (v) => (deck.beam_style = v),
+          events.changed,
+        ),
+      ],
+    ),
+    foldSection(
+      "deck-supports",
+      "Deck supports",
+      () => `${support() === "posts" ? `${deck.post ?? "4x4"} posts` : support() === "blocks" ? "deck blocks" : "beams on piers"}${deck.post_spacing ? ` · ${deck.post_spacing} apart` : ""}`,
+      [
+        segmented(
+          "Beams sit on",
+          [
+            ["posts", "Posts on footings"],
+            ["piers", "Piers"],
+            ["blocks", "Deck blocks"],
+          ],
+          support,
+          (v) => (deck.support = v),
+          events.restructured,
+        ),
+        support() === "posts" ? select("Posts", POSTS, () => deck.post ?? "4x4", (v) => (deck.post = v), events) : null,
+        h(
+          "div",
+          { class: "row" },
+          lengthField(
+            "Most room between supports",
+            () => deck.post_spacing ?? "",
+            (v) => (deck.post_spacing = v),
+            events,
+            "Blank: as far as the beam can span",
+            () => delete deck.post_spacing,
+          ),
+          lengthField("End inset", () => deck.post_inset ?? '12"', (v) => (deck.post_inset = v), events, "From each end of the beam"),
+        ),
+      ],
+    ),
+    foldSection(
+      "deck-decking",
+      "Decking",
+      () => `${deck.decking ?? "5/4x6"} ${deck.decking_material ?? "wood"}`,
+      [
+        h(
+          "div",
+          { class: "row" },
+          select("Boards", DECKING, () => deck.decking ?? "5/4x6", (v) => (deck.decking = v), events),
+          lengthField("Gap", () => deck.gap ?? '1/8"', (v) => (deck.gap = v), events),
+        ),
+        segmented(
+          "Material",
+          [
+            ["wood", "Wood"],
+            ["composite", "Composite"],
+          ],
+          () => deck.decking_material ?? "wood",
+          (v) => (deck.decking_material = v),
+          events.changed,
+        ),
+      ],
+    ),
+    foldSection(
+      "deck-code",
+      "Deck code",
+      () => `${CODES.find(([c]) => c === (deck.code ?? "irc2021"))![1]} · ${SPECIES.find(([c]) => c === (deck.species ?? "southern_pine"))![1].toLowerCase()}`,
+      [
+        segmented("Check against", CODES, () => deck.code ?? "irc2021", (v) => (deck.code = v), events.restructured),
+        h(
+          "div",
+          { class: "row" },
+          select(
+            "Lumber",
+            SPECIES.map(([, name]) => name),
+            () => SPECIES.find(([c]) => c === (deck.species ?? "southern_pine"))![1],
+            (v) => (deck.species = SPECIES.find(([, name]) => name === v)![0]),
+            events,
+          ),
+          select("Soil, psf", SOILS, () => String(deck.soil_psf ?? 1500), (v) => (deck.soil_psf = Number(v)), events),
+        ),
+        lengthField(
+          "Frost depth",
+          () => deck.frost_depth ?? "",
+          (v) => (deck.frost_depth = v),
+          events,
+          "Blank: 24\" in Fairfax, 12\" under the IRC",
+          () => delete deck.frost_depth,
+        ),
+      ],
+    ),
+  ];
 }
 
 function sheathingSection(project: ProjectJson, events: PanelEvents): HTMLElement | null {

@@ -638,13 +638,13 @@ fn drawing_list(framed: &FramedProject) -> Vec<DrawingView> {
         add("porch", "Porch", "porch");
         add("porch-rafter", "Porch rafter", "porch");
         if matches!(porch, Ok(p) if p.deck.is_some()) {
-            add("deck", "Deck", "porch");
+            add("deck", "Porch deck", "porch");
         }
     }
     if framed.deck.is_some() {
         add("deck-checks", "Code checks", "deck");
         add("deck-plan", "Deck plan", "deck");
-        add("deck-section", "Section", "deck");
+        add("deck-section", "Deck section", "deck");
         add("decking", "Decking", "deck");
     }
     if let Some(s) = &framed.sheathing {
@@ -1061,7 +1061,7 @@ mod tests {
         assert!(out["porch"]["error"].is_null());
         assert!(out["sheathing"]["pieces"].as_u64().unwrap() > 20);
         assert!(solids.iter().any(|s| s["kind"] == "sheathing"));
-        assert!(solids.iter().any(|s| s["part"] == "deck"));
+        assert!(solids.iter().any(|s| s["part"] == "porch-deck"));
         for which in ["front", "left"].iter().chain(&drawings) {
             assert!(
                 drawing_svg(&json, which).unwrap().starts_with("<svg"),
