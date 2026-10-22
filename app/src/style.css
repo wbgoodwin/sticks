@@ -1921,3 +1921,122 @@ dialog.replace p {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* The Sticks account */
+.account-button {
+  max-width: 200px;
+  gap: 7px;
+}
+.account-button::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.account-button[data-sync="saved"]::before {
+  background: var(--accent);
+}
+.account-button[data-sync="saving"]::before {
+  background: var(--accent);
+  opacity: 0.5;
+}
+.account-button[data-sync="offline"]::before,
+.account-button[data-sync="copied"]::before,
+.account-button[data-sync="error"]::before {
+  background: var(--danger);
+}
+.account-button {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+dialog.settings.account {
+  height: fit-content;
+  max-height: min(680px, calc(100vh - 64px));
+  width: min(520px, calc(100vw - 32px));
+}
+.account-body {
+  overflow-y: auto;
+  padding: 16px 20px 20px;
+  font-size: 13px;
+}
+.account-lead {
+  margin: 0 0 14px;
+  color: var(--text-2);
+}
+.account-who {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.account-who strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-plan {
+  padding: 14px 0 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+}
+.account-plan h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.account-plan p,
+.account-plan ul {
+  margin: 0 0 10px;
+}
+.account-plan ul {
+  padding-left: 18px;
+  color: var(--text-2);
+}
+.account-plan meter {
+  width: 100%;
+  height: 8px;
+  margin-bottom: 6px;
+}
+.account-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.account-row input[type="number"] {
+  width: 70px;
+}
+.account-row input[type="date"],
+.check-field input[type="date"] {
+  width: auto;
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.account-plan .synced-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.synced-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.synced-list li:last-child {
+  border-bottom: none;
+}
+.synced-list em {
+  font-style: normal;
+  color: var(--text-3);
+}
