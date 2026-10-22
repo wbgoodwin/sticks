@@ -34,7 +34,7 @@ enum Command {
     /// Frame the walls, floor and roof and print their members and layout marks.
     Frame {
         project: PathBuf,
-        /// Only this part: a wall's id, `floor`, `roof`, `porch` or `sheathing`.
+        /// Only this part: a wall's id, `floor`, `roof`, `porch`, `sheathing` or `deck`.
         #[arg(long)]
         part: Option<String>,
     },
@@ -154,9 +154,13 @@ fn frame(project: &Project, only: Option<&str>) -> Result<(), String> {
         print!("{}", text::sheathing(s));
         shown = true;
     }
+    if let Some(Ok(d)) = f.deck.as_ref().filter(|_| want("deck")) {
+        print!("{}", text::deck(d, from));
+        shown = true;
+    }
     match (only, shown) {
         (Some(part), false) => Err(format!(
-            "no wall, floor, roof, porch or sheathing called {part:?}"
+            "no wall, floor, roof, porch, sheathing or deck called {part:?}"
         )),
         _ => Ok(()),
     }
@@ -182,7 +186,10 @@ fn plan_framed(project: &Project, f: &FramedProject) -> Result<CutList, String> 
 /// Connectors for every section but the ones the project has on hand.
 fn hardware(project: &Project, f: &FramedProject) -> HardwareList {
     let (buy, _) = f.split(&project.on_hand);
-    sticks_hardware::for_project(&buy.joints, project.hardware.as_ref())
+    sticks_hardware::for_project(
+        &buy.joints,
+        sticks_rules::hardware_settings(project).as_ref(),
+    )
 }
 
 fn build(project: &Project, out: &Path) -> Result<(), String> {
@@ -235,7 +242,7 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             "porch-rafter.svg".to_string(),
             sticks_export::rafter_svg(name, &porch.rafter),
         ));
-        if let Some(svg) = sticks_export::deck_svg(name, porch, from) {
+        if let Some(svg) = sticks_export::porch_deck_svg(name, porch, from) {
             files.push(("deck.svg".to_string(), svg));
         }
     }
@@ -245,6 +252,24 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
                 files.push((file.to_string(), svg));
             }
         }
+    }
+    if let (Some(Ok(d)), Some(deck)) = (&f.deck, &project.deck) {
+        files.push((
+            "deck-checks.svg".to_string(),
+            sticks_export::deck_checks_svg(name, deck, d),
+        ));
+        files.push((
+            "deck-plan.svg".to_string(),
+            sticks_export::deck_plan_svg(name, deck, d, from),
+        ));
+        files.push((
+            "deck-section.svg".to_string(),
+            sticks_export::deck_section_svg(name, deck, d),
+        ));
+        files.push((
+            "decking.svg".to_string(),
+            sticks_export::decking_svg(name, deck, d),
+        ));
     }
     files.push((
         "print.html".to_string(),
@@ -267,7 +292,14 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             p.size
         );
     }
-    eprintln!("note: {}", sticks_export::NOTICE);
+    match &project.deck {
+        Some(deck) => {
+            for line in sticks_export::deck_notice(deck) {
+                eprintln!("note: {line}");
+            }
+        }
+        None => eprintln!("note: {}", sticks_export::NOTICE),
+    }
     Ok(())
 }
 

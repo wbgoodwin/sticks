@@ -7,13 +7,13 @@
 
 use serde::Serialize;
 use sticks_core::{
-    longest_board, Building, Floor, FloorSupport, LayoutStart, Length, MemberKind, Rules,
-    SheetPiece, SheetStock, SheetUse, Stock,
+    Building, Floor, FloorSupport, Length, MemberKind, Rules, SheetPiece, SheetStock, SheetUse,
+    Stock,
 };
 
-use crate::layout::{
-    half, on_center, pieces, placed, ply_joints, sheet_rows, split_run, LayoutMark, Placed, Rect,
-    Splice,
+use crate::layout::{half, placed, sheet_rows, LayoutMark, Placed, Rect, Splice};
+use crate::platform::{
+    beam_joints, beam_line, joints_over_joists, joist_layout, joist_marks, run_pieces, support_line,
 };
 use crate::FramingError;
 
@@ -115,43 +115,30 @@ pub fn frame_floor(
     let mut warnings = Vec::new();
 
     // Joists: one flush with each end, the rest on layout.
-    let mut joist_x = vec![Length::ZERO];
-    joist_x.extend(on_center(width, oc, t, rules.layout_from));
-    joist_x.push(width - t);
-    let centers: Vec<Length> = joist_x.iter().map(|&x| x + half(t)).collect();
+    let (joist_x, centers) = joist_layout(width, oc, t, rules.layout_from);
 
     // Rims along the front and back, spliced over a joist when too long.
-    let longest = longest_board(stock, joist, rules.end_trim);
-    let rim_joints = split_run(
-        Length::ZERO,
-        width,
-        |s| s <= longest,
-        &centers[1..centers.len() - 1],
-        &[],
-        Length::ZERO,
-    )
-    .ok_or_else(|| {
-        fail(format!(
-            "the rim joists are longer than the longest {joist} stock ({longest}) and no joist lands where they could be spliced; add longer stock"
-        ))
-    })?;
+    let rim_joints = joints_over_joists("rim joists", joist, width, &centers, stock, rules)
+        .map_err(|r| {
+            fail(
+                r.replace("the rim joists is longer", "the rim joists are longer")
+                    .replace("where it could", "where they could"),
+            )
+        })?;
     let mut rim_count = 0;
     for y in [Length::ZERO, depth - t] {
-        for (a, b) in pieces(Length::ZERO, width, &rim_joints) {
-            rim_count += 1;
-            members.push(placed(
-                format!("floor-RJ{rim_count}"),
-                MemberKind::RimJoist,
-                joist,
-                Rect {
-                    x: a,
-                    y,
-                    w: b - a,
-                    h: t,
-                },
-                false,
-            ));
-        }
+        let rims = run_pieces(
+            "floor-RJ",
+            rim_count + 1,
+            MemberKind::RimJoist,
+            joist,
+            width,
+            y,
+            t,
+            &rim_joints,
+        );
+        rim_count += rims.len();
+        members.extend(rims);
         splices.extend(rim_joints.iter().map(|&at| Splice {
             kind: MemberKind::RimJoist,
             at,
@@ -209,13 +196,7 @@ pub fn frame_floor(
 
     // Piers along each beam, evenly spaced from one inset end to the other.
     let pier_x: Vec<Length> = if piers_used {
-        let span = width - floor.pier_inset * 2;
-        let gaps = (span.sixteenths() + floor.pier_spacing.sixteenths() - 1)
-            / floor.pier_spacing.sixteenths();
-        let gaps = gaps.max(1);
-        (0..=gaps)
-            .map(|k| floor.pier_inset + span.mul_div(k, gaps))
-            .collect()
+        support_line(width, floor.pier_inset, floor.pier_spacing)
     } else {
         Vec::new()
     };
@@ -240,50 +221,34 @@ pub fn frame_floor(
     } else {
         centers.clone()
     };
-    let beam_longest = longest_board(stock, floor.beam, rules.end_trim);
-    let (ply_joints, shared) = ply_joints(width, floor.beam_plies, &supports, beam_longest)
-        .ok_or_else(|| {
-            let over = if piers_used { "pier" } else { "joist" };
-            fail(format!(
-                "the {} is longer than the longest {} stock ({beam_longest}) and no {over} lands where it could be spliced; add {over}s or longer stock",
-                kind.name(),
-                floor.beam
-            ))
-        })?;
+    let over = if piers_used { "pier" } else { "joist" };
+    let (ply_joints, shared) = beam_joints(
+        floor.beam,
+        floor.beam_plies,
+        width,
+        &supports,
+        over,
+        stock,
+        rules,
+    )
+    .map_err(|r| fail(r.replacen("the beam", &format!("the {}", kind.name()), 1)))?;
     if shared {
         warnings.push(format!(
-            "the {} plies are spliced over the same {}; more piers would let the joints stagger",
+            "the {} plies are spliced over the same {over}; more piers would let the joints stagger",
             kind.name(),
-            if piers_used { "pier" } else { "joist" }
         ));
     }
     for (i, &y) in beam_y.iter().enumerate() {
-        for (p, joints) in ply_joints.iter().enumerate() {
-            let runs = pieces(Length::ZERO, width, joints);
-            let many = runs.len() > 1;
-            for (k, (a, b)) in runs.into_iter().enumerate() {
-                let mut label = format!("floor-{prefix}{}", i + 1);
-                if floor.beam_plies > 1 {
-                    label.push((b'a' + p as u8) as char);
-                }
-                if many {
-                    label.push_str(&format!("-{}", k + 1));
-                }
-                members.push(placed(
-                    label,
-                    kind,
-                    floor.beam,
-                    Rect {
-                        x: a,
-                        y: y + ply * p as i64,
-                        w: b - a,
-                        h: ply,
-                    },
-                    false,
-                ));
-            }
-            splices.extend(joints.iter().map(|&at| Splice { kind, at }));
-        }
+        let (beam, beam_splices) = beam_line(
+            &format!("floor-{prefix}{}", i + 1),
+            kind,
+            floor.beam,
+            width,
+            y,
+            &ply_joints,
+        );
+        members.extend(beam);
+        splices.extend(beam_splices);
     }
     splices.sort_by_key(|s| s.at);
     splices.dedup();
@@ -348,19 +313,7 @@ pub fn frame_floor(
         ));
     }
 
-    let mut marks: Vec<LayoutMark> = members
-        .iter()
-        .filter(|p| p.member.kind == MemberKind::Joist)
-        .map(|p| LayoutMark {
-            label: p.member.label.clone(),
-            kind: MemberKind::Joist,
-            at: match rules.layout_from {
-                LayoutStart::Left => p.rect.x,
-                LayoutStart::Right => width - p.rect.right(),
-            },
-        })
-        .collect();
-    marks.sort_by_key(|m| m.at);
+    let marks = joist_marks("floor-J", &joist_x, t, width, rules.layout_from);
 
     Ok(FramedFloor {
         width,

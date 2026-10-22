@@ -8,6 +8,7 @@ import {
   printPacket,
   projectFromToml,
   projectToToml,
+  type DeckView,
   type FrameView,
   type HardwareView,
   type MemberView,
@@ -25,7 +26,7 @@ import { openSection, revealOpening, renderPanel, wallName, type PanelContext, t
 import { bounds, factsAt, movesUpAndDown, snap, type Item, type Spot } from "./snap";
 import { renderSettings } from "./settings";
 import { ensureStock, fromTemplate, load, loadFiled, normalize, save, saveFiled, TEMPLATES } from "./state";
-import { HIDDEN_LAYERS, LAYERS, Viewer } from "./view3d";
+import { HIDDEN_LAYERS, LAYERS, layerOf, Viewer, type Layer } from "./view3d";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -110,6 +111,10 @@ app.innerHTML = `
     <div class="print-bar">
       <strong>Build packet</strong>
       <span>Shopping list, every drawing and the cut list, on letter paper in landscape.</span>
+      <label class="owner-check" hidden>
+        <input type="checkbox" />
+        These are my plans. I'll confirm every size, footing and connector with my building department.
+      </label>
       <button type="button" class="button" data-action="download-packet">Download</button>
       <button type="button" class="button primary" data-action="print-now">Print</button>
       <button type="button" class="button" data-action="close-preview">Close</button>
@@ -143,6 +148,15 @@ const settings = $<HTMLDialogElement>("dialog.settings");
 const settingsBody = $<HTMLDivElement>(".settings-body");
 const replaceDialog = $<HTMLDialogElement>("dialog.replace");
 const previewFrame = $<HTMLIFrameElement>(".print-preview iframe");
+const ownerCheck = $<HTMLLabelElement>(".owner-check");
+const ownerBox = $<HTMLInputElement>(".owner-check input");
+const packetButtons = [...app.querySelectorAll<HTMLButtonElement>('[data-action="print-now"], [data-action="download-packet"]')];
+/** A deck's packet is permit drawings: printing it waits on the builder taking them as their own. */
+function gatePacket(): void {
+  const gated = !ownerCheck.hidden && !ownerBox.checked;
+  for (const b of packetButtons) b.disabled = gated;
+}
+ownerBox.addEventListener("change", gatePacket);
 
 /** What the stage shows: the 3D model, a wall's elevation, or a printed drawing. */
 type View = { kind: "3d" } | { kind: "wall"; id: string } | { kind: "sheet"; id: string };
@@ -305,6 +319,11 @@ function renderStage(): void {
   if (view.kind === "3d") {
     const m = model(project);
     viewer.setModel(m);
+    // Only the layers this project has get a toggle.
+    const present = new Set(m.solids.map(layerOf));
+    for (const label of layers.querySelectorAll<HTMLElement>("[data-layer]")) {
+      label.hidden = !present.has(label.dataset.layer as Layer);
+    }
     renderSchedule(allMembers(framed), [...framed.walls.flatMap((w) => w.warnings), ...planWarnings(framed)], skippedNotes(m.skipped));
     stats.textContent = `${m.solids.filter((s) => s.size).length} pieces`;
   } else if (view.kind === "wall") {
@@ -323,19 +342,20 @@ function renderStage(): void {
     const id = view.id;
     const d = framed.drawings.find((v) => v.id === id);
     if (!d) return;
-    const part = d.part === "sheathing" ? framed.sheathing : framed[d.part];
+    const part = framed[d.part];
     if (part?.error) {
       showProblem(`${partName(d.part)}: ${part.error}`);
       return;
     }
     try {
-      sheet.innerHTML = drawing(project, id);
+      // The checks read better as a table than as a shrunken sheet; the sheet prints.
+      sheet.innerHTML = id === "deck-checks" && framed.deck ? checksTable(framed.deck) : drawing(project, id);
     } catch (e) {
       showProblem(message(e));
       return;
     }
     if (part && "members" in part) {
-      renderSchedule(part.members, part.warnings, []);
+      renderSchedule(part.members, [...part.warnings, ...(d.part === "deck" ? failedChecks(framed) : [])], []);
       stats.textContent = `${part.members.length} pieces`;
     } else {
       renderSchedule([], part?.warnings ?? [], []);
@@ -345,11 +365,33 @@ function renderStage(): void {
 }
 
 function allMembers(f: FrameView): MemberView[] {
-  return [...f.walls.flatMap((w) => w.members), ...[f.floor, f.roof, f.porch].flatMap((p) => p?.members ?? [])];
+  return [...f.walls.flatMap((w) => w.members), ...[f.floor, f.roof, f.porch, f.deck].flatMap((p) => p?.members ?? [])];
 }
 
 function planWarnings(f: FrameView): string[] {
-  return [f.floor, f.roof, f.porch, f.sheathing].flatMap((p) => p?.warnings ?? []);
+  return [...[f.floor, f.roof, f.porch, f.sheathing, f.deck].flatMap((p) => p?.warnings ?? []), ...failedChecks(f)];
+}
+
+/** The deck's code checks, for reading on screen. */
+function checksTable(d: DeckView): string {
+  const failed = d.checks.filter((c) => !c.ok).length;
+  const rows = d.checks
+    .map(
+      (c) =>
+        `<tr class="${c.ok ? "" : "failed"}"><td class="mark">${c.ok ? "OK" : "Fails"}</td><th scope="row">${esc(c.item)}</th><td>${esc(c.actual)}</td><td>${esc(c.allowed)}</td><td class="source">${esc(c.source)}</td></tr>`,
+    )
+    .join("");
+  const status = failed ? `${failed} of ${d.checks.length} checks fail` : `All ${d.checks.length} checks pass`;
+  return `<div class="checks">
+    <p class="checks-status ${failed ? "failed" : ""}"><strong>${status}</strong> against ${esc(d.code)}.</p>
+    <table><thead><tr><th></th><th>Check</th><th>This deck</th><th>Allowed or required</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="checks-notice">${d.notice.map(esc).join(" ")}</p>
+  </div>`;
+}
+
+/** The deck's sizes its code doesn't allow, as notes. */
+function failedChecks(f: FrameView): string[] {
+  return (f.deck?.checks ?? []).filter((c) => !c.ok).map((c) => `Code check failed, ${c.item.toLowerCase()}: ${c.actual}; ${c.allowed} (${c.source})`);
 }
 
 function skippedNotes(parts: string[]): string[] {
@@ -500,7 +542,8 @@ function partName(part: string): string {
   if (part === "floor") return "Floor";
   if (part === "roof") return "Roof";
   if (part === "porch") return "Porch";
-  if (part === "deck") return "Porch deck";
+  if (part === "porch-deck") return "Porch deck";
+  if (part === "deck") return "Deck";
   if (part === "sheathing") return "Sheathing";
   return `${wallName(part)} wall`;
 }
@@ -794,6 +837,7 @@ layers.append(
     box.type = "checkbox";
     box.checked = !HIDDEN_LAYERS.includes(layer);
     box.addEventListener("change", () => viewer.setLayer(layer, box.checked));
+    label.dataset.layer = layer;
     label.append(box, text);
     return label;
   }),
@@ -1066,6 +1110,9 @@ app.addEventListener("click", (e) => {
     case "print":
       try {
         previewFrame.srcdoc = printPacket(project);
+        ownerCheck.hidden = !project.deck;
+        ownerBox.checked = false;
+        gatePacket();
         preview.hidden = false;
       } catch (err) {
         showProblem(`Couldn't make the build packet: ${message(err)}`);

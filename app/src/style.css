@@ -1921,3 +1921,97 @@ dialog.replace p {
   justify-content: flex-end;
   gap: 8px;
 }
+.panel-section.deck-notice {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+.deck-notice p {
+  margin: 4px 0 0;
+  color: var(--text-2);
+}
+.print-bar .owner-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 360px;
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+.print-bar .owner-check[hidden] {
+  display: none;
+}
+.layers label[hidden] {
+  display: none;
+}
+.sheet .checks {
+  align-self: stretch;
+  width: 100%;
+  max-width: 1000px;
+  overflow: auto;
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+}
+.checks-status {
+  margin: 0 0 10px;
+  color: var(--text-2);
+}
+.checks-status strong {
+  color: var(--accent);
+}
+.checks-status.failed strong,
+.checks tr.failed .mark {
+  color: var(--danger);
+}
+.checks table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.checks th,
+.checks td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.checks thead th {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.checks tbody th {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.checks .mark {
+  color: var(--accent);
+  font-weight: 600;
+}
+.checks tr.failed {
+  background: var(--danger-soft);
+}
+.checks .source {
+  color: var(--text-2);
+}
+.checks-notice {
+  margin: 12px 0 0;
+  color: var(--text-2);
+}
+.print-bar .owner-check input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.print-bar .button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
