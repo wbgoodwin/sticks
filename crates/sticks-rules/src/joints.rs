@@ -6,7 +6,7 @@ use sticks_core::{Cut, Joint, JointKind, Length, MemberKind, Nominal};
 
 use crate::floor::{FramedFloor, Pier};
 use crate::layout::{Placed, Rect};
-use crate::porch::{FramedDeck, FramedPorch};
+use crate::porch::{FramedPorch, FramedPorchDeck};
 use crate::roof::FramedRoof;
 use crate::wall::FramedWall;
 
@@ -210,7 +210,7 @@ impl FramedPorch {
     }
 }
 
-impl FramedDeck {
+impl FramedPorchDeck {
     /// Each joist hung on the ledger and crossing the beam, the ledger
     /// fastened at each joist, the beam on its piers, and two lateral ties
     /// back to the building.

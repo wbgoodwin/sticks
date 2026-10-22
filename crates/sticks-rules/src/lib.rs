@@ -6,6 +6,7 @@ pub mod floor;
 pub mod joints;
 pub mod layout;
 pub mod model;
+pub mod platform;
 pub mod porch;
 pub mod roof;
 pub mod sheathing;
@@ -15,7 +16,7 @@ pub use building::{frame_project, side_plan_y, FramedProject, Section, SIDES};
 pub use floor::{frame_floor, Bay, FramedFloor, Pier, PlacedSheet};
 pub use layout::{LayoutMark, Placed, Rect, Splice};
 pub use model::{bounds, model, wall_ids, OtherKind, Solid, SolidKind};
-pub use porch::{frame_porch, DeckHeights, FramedDeck, FramedPorch, PorchHeights};
+pub use porch::{frame_porch, FramedPorch, FramedPorchDeck, PorchDeckHeights, PorchHeights};
 pub use roof::{
     frame_roof, gable_studs, wall_heights, FramedRoof, RafterDetail, RafterTop, Ridge, RoofPlane,
     WallHeights,
