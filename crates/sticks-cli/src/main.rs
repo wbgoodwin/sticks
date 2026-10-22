@@ -242,7 +242,7 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             "porch-rafter.svg".to_string(),
             sticks_export::rafter_svg(name, &porch.rafter),
         ));
-        if let Some(svg) = sticks_export::deck_svg(name, porch, from) {
+        if let Some(svg) = sticks_export::porch_deck_svg(name, porch, from) {
             files.push(("deck.svg".to_string(), svg));
         }
     }
@@ -252,6 +252,24 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
                 files.push((file.to_string(), svg));
             }
         }
+    }
+    if let (Some(Ok(d)), Some(deck)) = (&f.deck, &project.deck) {
+        files.push((
+            "deck-checks.svg".to_string(),
+            sticks_export::deck_checks_svg(name, deck, d),
+        ));
+        files.push((
+            "deck-plan.svg".to_string(),
+            sticks_export::deck_plan_svg(name, deck, d, from),
+        ));
+        files.push((
+            "deck-section.svg".to_string(),
+            sticks_export::deck_section_svg(name, deck, d),
+        ));
+        files.push((
+            "decking.svg".to_string(),
+            sticks_export::decking_svg(name, deck, d),
+        ));
     }
     files.push((
         "print.html".to_string(),
@@ -274,7 +292,14 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             p.size
         );
     }
-    eprintln!("note: {}", sticks_export::NOTICE);
+    match &project.deck {
+        Some(deck) => {
+            for line in sticks_export::deck_notice(deck) {
+                eprintln!("note: {line}");
+            }
+        }
+        None => eprintln!("note: {}", sticks_export::NOTICE),
+    }
     Ok(())
 }
 

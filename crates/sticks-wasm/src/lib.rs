@@ -729,7 +729,7 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
             match which {
                 "porch" => Ok(sticks_export::porch_svg(name, &porch, from)),
                 "porch-rafter" => Ok(sticks_export::rafter_svg(name, &porch.rafter)),
-                _ => sticks_export::deck_svg(name, &porch, from)
+                _ => sticks_export::porch_deck_svg(name, &porch, from)
                     .ok_or_else(|| "this porch has no deck".to_string()),
             }
         }

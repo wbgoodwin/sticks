@@ -547,6 +547,23 @@ fn wall_face<'a>(
     }
 }
 
+/// The project's connector settings with what its deck rules require
+/// added: Fairfax County wants a tie at every joist on a beam.
+pub fn hardware_settings(project: &Project) -> Option<Hardware> {
+    let fairfax = project
+        .deck
+        .as_ref()
+        .is_some_and(|d| d.code == DeckCode::Fairfax2021 && d.beam_style == BeamStyle::Under);
+    if !fairfax {
+        return project.hardware.clone();
+    }
+    let mut hw = project.hardware.clone().unwrap_or_default();
+    if !hw.add.contains(&JointKind::JoistOnBeam) {
+        hw.add.push(JointKind::JoistOnBeam);
+    }
+    Some(hw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -729,21 +746,4 @@ mod tests {
         assert_eq!(f.walls.len(), 1);
         assert!(f.floor.is_none());
     }
-}
-
-/// The project's connector settings with what its deck rules require
-/// added: Fairfax County wants a tie at every joist on a beam.
-pub fn hardware_settings(project: &Project) -> Option<Hardware> {
-    let fairfax = project
-        .deck
-        .as_ref()
-        .is_some_and(|d| d.code == DeckCode::Fairfax2021 && d.beam_style == BeamStyle::Under);
-    if !fairfax {
-        return project.hardware.clone();
-    }
-    let mut hw = project.hardware.clone().unwrap_or_default();
-    if !hw.add.contains(&JointKind::JoistOnBeam) {
-        hw.add.push(JointKind::JoistOnBeam);
-    }
-    Some(hw)
 }
