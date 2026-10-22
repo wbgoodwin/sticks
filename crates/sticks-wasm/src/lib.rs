@@ -9,8 +9,8 @@ use sticks_core::{Length, Member, MemberKind, Project};
 use sticks_cutlist::{cut_list_with_sheets, Board, CutList};
 use sticks_hardware::HardwareList;
 use sticks_rules::{
-    bounds, frame_project, model, wall_ids, FramedProject, FramedWall, Placed, Section, Solid,
-    SolidKind,
+    bounds, frame_project, model, wall_ids, CodeCheck, FramedProject, FramedWall, Placed, Section,
+    Solid, SolidKind,
 };
 use wasm_bindgen::prelude::*;
 
@@ -120,6 +120,7 @@ struct FrameView {
     roof: Option<PlanView>,
     porch: Option<PlanView>,
     sheathing: Option<SheathingView>,
+    deck: Option<DeckView>,
     /// Printable drawings besides the walls, in order.
     drawings: Vec<DrawingView>,
 }
@@ -132,6 +133,18 @@ struct DrawingView {
     /// The part it shows, for its members and warnings: `floor`, `roof`,
     /// `porch` or `sheathing`.
     part: String,
+}
+
+/// A deck on its own: its plan, and its sizes checked against its rules.
+#[derive(Serialize)]
+struct DeckView {
+    #[serde(flatten)]
+    plan: PlanView,
+    checks: Vec<CodeCheck>,
+    /// The rules it was checked against, as printed on its sheets.
+    code: String,
+    /// What every deck sheet says about who owns the plans.
+    notice: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -559,12 +572,39 @@ pub fn frame_json(project_json: &str) -> Result<String, String> {
             error: Some(e.reason),
         },
     });
+    let deck = framed.deck.map(|r| {
+        let (code, notice) = project
+            .deck
+            .as_ref()
+            .map(|d| {
+                (
+                    d.code.name().to_string(),
+                    sticks_export::deck_notice(d).to_vec(),
+                )
+            })
+            .unwrap_or_default();
+        match r {
+            Ok(d) => DeckView {
+                plan: plan_view(d.width, d.depth, &d.members, d.warnings.clone()),
+                checks: d.checks,
+                code,
+                notice,
+            },
+            Err(e) => DeckView {
+                plan: plan_error(e.reason),
+                checks: Vec::new(),
+                code,
+                notice,
+            },
+        }
+    });
     serde_json::to_string(&FrameView {
         walls,
         floor,
         roof,
         porch,
         sheathing,
+        deck,
         drawings,
     })
     .map_err(|e| e.to_string())
@@ -600,6 +640,12 @@ fn drawing_list(framed: &FramedProject) -> Vec<DrawingView> {
         if matches!(porch, Ok(p) if p.deck.is_some()) {
             add("deck", "Deck", "porch");
         }
+    }
+    if framed.deck.is_some() {
+        add("deck-checks", "Code checks", "deck");
+        add("deck-plan", "Deck plan", "deck");
+        add("deck-section", "Section", "deck");
+        add("decking", "Decking", "deck");
     }
     if let Some(s) = &framed.sheathing {
         let (walls, roofs) = match s {
@@ -732,6 +778,19 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
                 _ => sticks_export::porch_deck_svg(name, &porch, from)
                     .ok_or_else(|| "this porch has no deck".to_string()),
             }
+        }
+        "deck-checks" | "deck-plan" | "deck-section" | "decking" => {
+            let d = framed
+                .deck
+                .ok_or("this project has no deck")?
+                .map_err(|e| e.reason)?;
+            let deck = project.deck.as_ref().ok_or("this project has no deck")?;
+            Ok(match which {
+                "deck-checks" => sticks_export::deck_checks_svg(name, deck, &d),
+                "deck-plan" => sticks_export::deck_plan_svg(name, deck, &d, from),
+                "deck-section" => sticks_export::deck_section_svg(name, deck, &d),
+                _ => sticks_export::decking_svg(name, deck, &d),
+            })
         }
         "wall-sheathing" | "roof-sheathing" => {
             let s = framed
