@@ -20,7 +20,7 @@ import {
 } from "./core";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { mountCommand } from "./command";
-import { dollars, renderCuts, renderShopping } from "./cutlist";
+import { dollars, findInCuts, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES, type DragOverlay, type Scale } from "./elevation";
 import { openSection, revealOpening, renderPanel, wallName, type PanelContext, type PanelTab } from "./panel";
 import { bounds, factsAt, movesUpAndDown, snap, type Item, type Spot } from "./snap";
@@ -178,9 +178,14 @@ const viewer = new Viewer(drawingBox, {
       tooltip.hidden = true;
       return;
     }
-    showTooltip(solidTitle(solid), x, y);
+    showTooltip(`${solidTitle(solid)}${solid.size && solid.length ? FIND_HINT : ""}`, x, y);
   },
   pick: showInfo,
+});
+/** The solid last clicked in 3D, so a double-click can find it in the cut list. */
+let picked: SolidView | null = null;
+drawingBox.addEventListener("dblclick", (e) => {
+  if (view.kind === "3d" && picked && (e.target as Element).closest("canvas")) findInCutList([picked.label]);
 });
 
 const panelContext: PanelContext = {
@@ -522,6 +527,16 @@ function highlight(group: string | null): void {
   }
 }
 
+const FIND_HINT = `<span class="hint">Double-click to find it in the cut list</span>`;
+
+/** Opens the cut list on the boards these pieces come from. */
+function findInCutList(labels: string[]): void {
+  tooltip.hidden = true;
+  if (collapsed.schedule) setCollapsed("schedule", false);
+  selectTab($<HTMLButtonElement>("#tab-cuts"));
+  findInCuts(cuts, labels);
+}
+
 function showTooltip(html: string, x: number, y: number): void {
   tooltip.innerHTML = html;
   tooltip.hidden = false;
@@ -554,6 +569,7 @@ function solidTitle(s: SolidView): string {
 }
 
 function showInfo(s: SolidView | null): void {
+  picked = s;
   if (!s) {
     info.hidden = true;
     return;
@@ -565,7 +581,9 @@ function showInfo(s: SolidView | null): void {
   info.innerHTML = `
     <header><strong>${esc(s.label)}</strong><button type="button" class="icon-button" aria-label="Close">×</button></header>
     <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    ${s.size && s.length ? `<button type="button" class="button find-in-cuts">Find in cut list</button>` : ""}
   `;
+  info.querySelector(".find-in-cuts")?.addEventListener("click", () => findInCutList([s.label]));
   info.querySelector("button")!.addEventListener("click", () => {
     info.hidden = true;
     viewer.clearSelection();
@@ -603,11 +621,20 @@ svg.addEventListener("pointermove", (e) => {
   const plies = Number(target.dataset.plies ?? 1);
   const box = drawingBox.getBoundingClientRect();
   showTooltip(
-    `<strong>${esc(m.label)}</strong><span>${KIND_NAMES[m.kind]}${plies > 1 ? `, ${plies} plies` : ""}</span><span>${m.size} × ${m.length}</span>`,
+    `<strong>${esc(m.label)}</strong><span>${KIND_NAMES[m.kind]}${plies > 1 ? `, ${plies} plies` : ""}</span><span>${m.size} × ${m.length}</span>${FIND_HINT}`,
     e.clientX - box.left,
     e.clientY - box.top,
   );
   highlight(groupKey(m));
+});
+// Double-clicking a board finds it, every ply of it, in the cut list.
+svg.addEventListener("dblclick", (e) => {
+  const target = (e.target as Element).closest<SVGElement>(".member");
+  if (!target || !shownWall) return;
+  const m = shownWall.members.find((v) => v.label === target.dataset.label);
+  if (!m) return;
+  const plies = shownWall.members.filter((v) => v.x_16 === m.x_16 && v.y_16 === m.y_16 && v.w_16 === m.w_16 && v.h_16 === m.h_16);
+  findInCutList(plies.map((v) => v.label));
 });
 svg.addEventListener("pointerleave", () => {
   if (dragging) return;
