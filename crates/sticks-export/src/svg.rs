@@ -20,9 +20,8 @@ pub const NOTICE: &str =
 const PAGE_W: f64 = 792.0;
 const PAGE_H: f64 = 612.0;
 const MARGIN: f64 = 36.0;
-/// Room under a drawing for rows of layout marks.
+/// Room under a drawing for a row of layout marks.
 const MARK_ROW: f64 = 40.0;
-const MARK_ROWS: usize = 3;
 /// Rotated mark text needs about this much room across.
 const MARK_GAP: f64 = 10.0;
 /// Height of a leader's jog over to a mark nudged clear of its neighbor.
@@ -125,6 +124,8 @@ impl Doc {
 .dim {{ stroke: #444; stroke-width: 0.5; fill: none; }}
 .dim-text {{ font-size: 8px; fill: #222; }}
 .mark {{ stroke: #777; stroke-width: 0.4; fill: none; }}
+.ro {{ stroke: #2b7a3d; stroke-width: 0.75; }}
+.ro-name {{ font-size: 7px; fill: #2b7a3d; }}
 .mark-text {{ font-size: 8px; font-weight: bold; fill: #111; paint-order: stroke; stroke: #fff; stroke-width: 1.5px; stroke-linejoin: round; }}
 .label {{ font-size: 4.5px; fill: #555; }}
 .title {{ font-size: 14px; font-weight: bold; fill: #111; }}
@@ -329,10 +330,10 @@ fn half(l: Length) -> Length {
     Length::from_sixteenths(l.sixteenths() / 2)
 }
 
-/// Layout marks in rows under `base_y`: each mark's measurement, rotated,
-/// at the member's near edge. Crowded marks drop to the next row, and marks
-/// still too close are nudged apart with a jog in their leader, so every
-/// mark is printed and none overlap.
+/// Layout marks in a row under `base_y`: each mark's measurement, rotated,
+/// at the member's near edge. Kings and jacks are left off, since they go
+/// just outside the rough opening brackets; the odd run of marks too close
+/// together, like a corner, is nudged apart with a jog in its leaders.
 fn marks(
     doc: &mut Doc,
     f: &Frame,
@@ -343,6 +344,7 @@ fn marks(
 ) {
     let mut placed: Vec<(f64, &LayoutMark)> = marks
         .iter()
+        .filter(|m| !matches!(m.kind, MemberKind::KingStud | MemberKind::JackStud))
         .map(|m| {
             let edge = match from {
                 LayoutStart::Left => m.at,
@@ -352,36 +354,41 @@ fn marks(
         })
         .collect();
     placed.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut rows: Vec<Vec<(f64, &LayoutMark)>> = Vec::new();
-    for (x, m) in placed {
-        let open = rows
-            .iter()
-            .position(|r| r.last().is_some_and(|&(end, _)| x - end >= MARK_GAP));
-        let row = match open {
-            Some(row) => row,
-            None if rows.len() < MARK_ROWS => {
-                rows.push(Vec::new());
-                rows.len() - 1
-            }
-            // Out of rows: share the one whose last mark is farthest away.
-            None => (0..rows.len())
-                .max_by(|&a, &b| {
-                    let end = |r: usize| rows[r].last().map_or(f64::MIN, |p| p.0);
-                    (x - end(a)).total_cmp(&(x - end(b)))
-                })
-                .unwrap_or(0),
-        };
-        rows[row].push((x, m));
+    let xs: Vec<f64> = placed.iter().map(|p| p.0).collect();
+    let at = spread(&xs, MARK_GAP);
+    // Text hangs down from the end of its leader.
+    let ty = base_y + 2.0 + MARK_JOG;
+    for (&(x, m), &lx) in placed.iter().zip(&at) {
+        doc.line(x, base_y + 2.0, x, ty - MARK_JOG, "mark");
+        doc.line(x, ty - MARK_JOG, lx, ty - 1.5, "mark");
+        doc.vtext(lx + 2.8, ty, "mark-text", "end", &format!("{:#}", m.at));
     }
-    for (row, list) in rows.iter().enumerate() {
-        let xs: Vec<f64> = list.iter().map(|p| p.0).collect();
-        let at = spread(&xs, MARK_GAP);
-        // Text hangs down from the top of its row; the leader reaches it.
-        let ty = base_y + 2.0 + MARK_JOG + MARK_ROW * row as f64;
-        for (&(x, m), &lx) in list.iter().zip(&at) {
-            doc.line(x, base_y + 2.0, x, ty - MARK_JOG, "mark");
-            doc.line(x, ty - MARK_JOG, lx, ty - 1.5, "mark");
-            doc.vtext(lx + 2.8, ty, "mark-text", "end", &format!("{:#}", m.at));
+}
+
+/// A bracket under each opening at `y` spanning its rough opening, with each
+/// edge measured from the layout end like the marks above it.
+fn rough_openings(doc: &mut Doc, f: &Frame, wall: &FramedWall, from: LayoutStart, y: f64) {
+    for o in &wall.openings {
+        let r = o.rect;
+        let (a, b) = (f.x(r.x), f.x(r.right()));
+        doc.line(a, y, b, y, "ro");
+        doc.line(a, y - 4.0, a, y + 4.0, "ro");
+        doc.line(b, y - 4.0, b, y + 4.0, "ro");
+        for edge in [r.x, r.right()] {
+            let at = match from {
+                LayoutStart::Left => edge,
+                LayoutStart::Right => wall.length - edge,
+            };
+            doc.vtext(
+                f.x(edge) + 2.8,
+                y + 7.0,
+                "mark-text",
+                "end",
+                &format!("{at:#}"),
+            );
+        }
+        if b - a >= o.name.len() as f64 * 4.0 + 4.0 {
+            doc.text((a + b) / 2.0, y - 4.0, "ro-name", "middle", &o.name);
         }
     }
 }
@@ -459,7 +466,7 @@ pub fn wall_svg(project: &str, wall: &FramedWall, from: LayoutStart) -> String {
         MARGIN + 40.0,
         MARGIN + 70.0,
         PAGE_W - MARGIN - 40.0,
-        PAGE_H - MARGIN - MARK_ROW * MARK_ROWS as f64 - 24.0,
+        PAGE_H - MARGIN - MARK_ROW * 2.0 - 30.0,
     );
     let f = Frame::fit(
         0.0,
@@ -472,6 +479,12 @@ pub fn wall_svg(project: &str, wall: &FramedWall, from: LayoutStart) -> String {
         format!("{} long, {heights}, seen from outside", wall.length),
         format!("{}. {}", origin_note(from, "Layout marks"), f.note()),
     ];
+    if !wall.openings.is_empty() {
+        sub.push(
+            "Green brackets are rough openings; the jack and king studs go just outside each edge."
+                .to_string(),
+        );
+    }
     if !wall.splices.is_empty() {
         sub.push("Red lines are plate splices, each centered on a stud.".to_string());
     }
@@ -537,6 +550,13 @@ pub fn wall_svg(project: &str, wall: &FramedWall, from: LayoutStart) -> String {
         from,
         wall.length,
         f.y(Length::ZERO),
+    );
+    rough_openings(
+        &mut doc,
+        &f,
+        wall,
+        from,
+        f.y(Length::ZERO) + MARK_ROW + 12.0,
     );
     doc.finish()
 }
@@ -1903,8 +1923,14 @@ mod tests {
         assert!(svg.trim_end().ends_with("</svg>"));
         assert!(svg.contains("Backyard shed: front wall"));
         assert!(svg.contains(NOTICE));
-        // Every stud position is printed.
-        for m in &front.marks {
+        // Every stud position is printed, and each opening's rough opening
+        // edges stand in for its kings and jacks.
+        let studs: Vec<_> = front
+            .marks
+            .iter()
+            .filter(|m| !matches!(m.kind, MemberKind::KingStud | MemberKind::JackStud))
+            .collect();
+        for m in &studs {
             assert!(
                 svg.contains(&format!(">{}</text>", esc(&format!("{:#}", m.at)))),
                 "{}",
@@ -1913,7 +1939,11 @@ mod tests {
         }
         assert_eq!(
             svg.matches("class=\"mark-text\"").count(),
-            front.marks.len()
+            studs.len() + 2 * front.openings.len()
+        );
+        assert_eq!(
+            svg.matches("class=\"ro\"").count(),
+            3 * front.openings.len()
         );
         assert_eq!(svg.matches("class=\"splice\"").count(), front.splices.len());
 
