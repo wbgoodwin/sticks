@@ -1419,6 +1419,56 @@ tr.total td {
   color: var(--text-3);
   font-size: 12.5px;
 }
+.find-cut {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 10px;
+}
+.find-cut input {
+  max-width: 340px;
+}
+.find-count {
+  color: var(--text-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.find-none {
+  margin: 0 0 12px;
+  color: var(--text-2);
+}
+.boards[hidden],
+.board[hidden],
+.find-none[hidden],
+.on-hand-heading[hidden],
+.cuts-hint[hidden] {
+  display: none;
+}
+.board.flash {
+  animation: flash 1.2s ease-out;
+}
+@keyframes flash {
+  from {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+}
+.board li.match {
+  margin: 0 -6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+.board li.match .labels {
+  white-space: normal;
+}
+.board .piece-label.match {
+  color: var(--accent);
+  font-weight: 600;
+}
+.board-bar .cut.match {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
 .boards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
