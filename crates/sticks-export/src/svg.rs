@@ -24,7 +24,9 @@ const MARGIN: f64 = 36.0;
 const MARK_ROW: f64 = 40.0;
 const MARK_ROWS: usize = 3;
 /// Rotated mark text needs about this much room across.
-const MARK_GAP: f64 = 8.0;
+const MARK_GAP: f64 = 10.0;
+/// Height of a leader's jog over to a mark nudged clear of its neighbor.
+const MARK_JOG: f64 = 6.0;
 
 /// Maps a drawing's inches onto the page, `y` up.
 struct Frame {
@@ -122,8 +124,8 @@ impl Doc {
 .splice-text {{ fill: #c0392b; font-size: 6px; }}
 .dim {{ stroke: #444; stroke-width: 0.5; fill: none; }}
 .dim-text {{ font-size: 8px; fill: #222; }}
-.mark {{ stroke: #888; stroke-width: 0.4; }}
-.mark-text {{ font-size: 6.5px; fill: #222; }}
+.mark {{ stroke: #777; stroke-width: 0.4; fill: none; }}
+.mark-text {{ font-size: 8px; font-weight: bold; fill: #111; paint-order: stroke; stroke: #fff; stroke-width: 1.5px; stroke-linejoin: round; }}
 .label {{ font-size: 4.5px; fill: #555; }}
 .title {{ font-size: 14px; font-weight: bold; fill: #111; }}
 .sub {{ font-size: 8px; fill: #444; }}
@@ -328,7 +330,9 @@ fn half(l: Length) -> Length {
 }
 
 /// Layout marks in rows under `base_y`: each mark's measurement, rotated,
-/// at the member's near edge. Crowded marks drop to the next row.
+/// at the member's near edge. Crowded marks drop to the next row, and marks
+/// still too close are nudged apart with a jog in their leader, so every
+/// mark is printed and none overlap.
 fn marks(
     doc: &mut Doc,
     f: &Frame,
@@ -337,35 +341,74 @@ fn marks(
     run: Length,
     base_y: f64,
 ) {
-    let mut ends: Vec<f64> = Vec::new();
-    for m in marks {
-        let edge = match from {
-            LayoutStart::Left => m.at,
-            LayoutStart::Right => run - m.at,
-        };
-        let x = f.x(edge);
-        let row = ends
+    let mut placed: Vec<(f64, &LayoutMark)> = marks
+        .iter()
+        .map(|m| {
+            let edge = match from {
+                LayoutStart::Left => m.at,
+                LayoutStart::Right => run - m.at,
+            };
+            (f.x(edge), m)
+        })
+        .collect();
+    placed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut rows: Vec<Vec<(f64, &LayoutMark)>> = Vec::new();
+    for (x, m) in placed {
+        let open = rows
             .iter()
-            .position(|&end| (x - end).abs() >= MARK_GAP)
-            .unwrap_or(ends.len());
-        let row = if row >= MARK_ROWS {
-            // Out of rows: reuse the one whose last mark is farthest away.
-            (0..ends.len())
-                .max_by(|&a, &b| (x - ends[a]).abs().total_cmp(&(x - ends[b]).abs()))
-                .unwrap_or(0)
-        } else {
-            row
+            .position(|r| r.last().is_some_and(|&(end, _)| x - end >= MARK_GAP));
+        let row = match open {
+            Some(row) => row,
+            None if rows.len() < MARK_ROWS => {
+                rows.push(Vec::new());
+                rows.len() - 1
+            }
+            // Out of rows: share the one whose last mark is farthest away.
+            None => (0..rows.len())
+                .max_by(|&a, &b| {
+                    let end = |r: usize| rows[r].last().map_or(f64::MIN, |p| p.0);
+                    (x - end(a)).total_cmp(&(x - end(b)))
+                })
+                .unwrap_or(0),
         };
-        if row == ends.len() {
-            ends.push(x);
-        } else {
-            ends[row] = x;
-        }
-        // Text reads upward from the bottom of its row; the tick reaches it.
-        let ty = base_y + MARK_ROW * (row as f64 + 1.0);
-        doc.line(x, base_y + 2.0, x, ty - MARK_ROW + 6.0, "mark");
-        doc.vtext(x + 2.2, ty, "mark-text", "start", &format!("{:#}", m.at));
+        rows[row].push((x, m));
     }
+    for (row, list) in rows.iter().enumerate() {
+        let xs: Vec<f64> = list.iter().map(|p| p.0).collect();
+        let at = spread(&xs, MARK_GAP);
+        // Text hangs down from the top of its row; the leader reaches it.
+        let ty = base_y + 2.0 + MARK_JOG + MARK_ROW * row as f64;
+        for (&(x, m), &lx) in list.iter().zip(&at) {
+            doc.line(x, base_y + 2.0, x, ty - MARK_JOG, "mark");
+            doc.line(x, ty - MARK_JOG, lx, ty - 1.5, "mark");
+            doc.vtext(lx + 2.8, ty, "mark-text", "end", &format!("{:#}", m.at));
+        }
+    }
+}
+
+/// Where to put labels for marks at `xs` (in order across) so they're at
+/// least `gap` apart: runs of marks too close spread out, centered on where
+/// they are.
+fn spread(xs: &[f64], gap: f64) -> Vec<f64> {
+    // Each run is its marks and where its first label goes.
+    let mut runs: Vec<(Vec<f64>, f64)> = Vec::new();
+    for &x in xs {
+        let mut run = (vec![x], x);
+        while let Some(prev) = runs.last() {
+            if prev.1 + prev.0.len() as f64 * gap <= run.1 {
+                break;
+            }
+            let (mut all, _) = runs.pop().unwrap();
+            all.extend(run.0);
+            let mid = all.iter().sum::<f64>() / all.len() as f64;
+            let start = mid - (all.len() - 1) as f64 * gap / 2.0;
+            run = (all, start);
+        }
+        runs.push(run);
+    }
+    runs.iter()
+        .flat_map(|(r, start)| (0..r.len()).map(move |i| start + i as f64 * gap))
+        .collect()
 }
 
 fn origin_note(from: LayoutStart, what: &str) -> String {
@@ -1834,6 +1877,23 @@ mod tests {
     use sticks_rules::frame_project;
 
     #[test]
+    fn crowded_marks_spread_apart_around_where_they_are() {
+        // A king and jack 1-1/2" apart at a small scale, then one in the clear.
+        let at = spread(&[100.0, 103.0, 104.0, 200.0], 10.0);
+        assert_eq!(
+            at,
+            vec![
+                92.33333333333333,
+                102.33333333333333,
+                112.33333333333333,
+                200.0
+            ]
+        );
+        let at = spread(&[0.0, 20.0, 40.0], 10.0);
+        assert_eq!(at, vec![0.0, 20.0, 40.0]);
+    }
+
+    #[test]
     fn draws_every_part_of_the_shed() {
         let p = Project::from_toml(include_str!("../../../examples/shed.toml")).unwrap();
         let framed = frame_project(&p).unwrap();
@@ -1851,6 +1911,10 @@ mod tests {
                 m.at
             );
         }
+        assert_eq!(
+            svg.matches("class=\"mark-text\"").count(),
+            front.marks.len()
+        );
         assert_eq!(svg.matches("class=\"splice\"").count(), front.splices.len());
 
         let left = framed.walls[2].as_ref().unwrap();

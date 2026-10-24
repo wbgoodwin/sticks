@@ -1265,21 +1265,20 @@ dialog.settings header p {
   text-anchor: middle;
 }
 .tick {
-  stroke: var(--text-3);
+  fill: none;
+  stroke: var(--text-2);
   stroke-width: 1;
 }
+/* Stud positions, read at the bench: big, solid, and haloed against the grid. */
 .mark-text {
-  fill: var(--ink);
-  font-size: 11px;
-  text-anchor: end;
-  dominant-baseline: central;
-}
-.mark-text.kind-king_stud,
-.mark-text.kind-jack_stud {
+  fill: var(--text);
+  font-size: 13px;
   font-weight: 600;
-}
-.mark-text.kind-cripple {
-  fill: var(--text-2);
+  text-anchor: end;
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 .layout-origin {
   fill: var(--text-3);

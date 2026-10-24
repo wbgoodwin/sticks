@@ -71,10 +71,58 @@ export function groupKey(m: MemberView): string {
   return `${m.kind}|${m.size}|${m.length_16}`;
 }
 
-const MARK_ROW = 54;
+// Layout marks under the bottom plate: rotated labels in rows, each row
+// tall enough for the longest label, and each label one line across.
+const MARK_ROW = 76;
+const MARK_GAP = 16;
 const MARK_ROWS = 2;
-const MARK_GAP = 13;
-const PAD = { left: 72, right: 64, top: 64, bottom: 16 + MARK_ROW * MARK_ROWS + 28 };
+/** Height of the leader's jog over to a label nudged clear of its neighbor. */
+const MARK_JOG = 14;
+const PAD = { left: 72, right: 64, top: 64 };
+/** Room under the wall for `rows` rows of marks and the layout note. */
+const padBottom = (rows: number) => 16 + MARK_JOG + MARK_ROW * rows + 16;
+
+/**
+ * The row for each mark, at `xs` in order across: the first row with room,
+ * or once all `rowCount` are taken, the one whose last mark is farthest away.
+ */
+function markRows(xs: number[], rowCount: number): number[] {
+  const rowEnds: number[] = [];
+  return xs.map((x) => {
+    let row = rowEnds.findIndex((end) => Math.abs(x - end) >= MARK_GAP);
+    if (row === -1 && rowEnds.length < rowCount) row = rowEnds.length;
+    if (row === -1) {
+      row = 0;
+      rowEnds.forEach((end, i) => {
+        if (Math.abs(x - end) > Math.abs(x - rowEnds[row])) row = i;
+      });
+    }
+    rowEnds[row] = x;
+    return row;
+  });
+}
+
+/**
+ * Where to put labels for marks at `xs` (in order across) so none overlap:
+ * runs of marks too close together spread out, centered on where they are.
+ */
+function spreadLabels(xs: number[]): number[] {
+  const runs: { xs: number[]; start: number }[] = [];
+  for (const x of xs) {
+    let run = { xs: [x], start: x };
+    // Merge back into the run before while the two would overlap.
+    for (;;) {
+      const prev = runs[runs.length - 1];
+      if (!prev || prev.start + (prev.xs.length - 1) * MARK_GAP + MARK_GAP <= run.start) break;
+      runs.pop();
+      const all = [...prev.xs, ...run.xs];
+      const mid = all.reduce((sum, v) => sum + v, 0) / all.length;
+      run = { xs: all, start: mid - ((all.length - 1) * MARK_GAP) / 2 };
+    }
+    runs.push(run);
+  }
+  return runs.flatMap((run) => run.xs.map((_, i) => run.start + i * MARK_GAP));
+}
 
 export function drawElevation(
   svg: SVGSVGElement,
@@ -88,8 +136,30 @@ export function drawElevation(
   const L = wall.length_16 / 16;
   const H = wall.height_16 / 16;
   const availW = width - PAD.left - PAD.right;
-  const availH = height - PAD.top - PAD.bottom;
-  const s = Math.max(0.1, Math.min(availW / L, availH / H));
+
+  // Where each layout mark goes across depends on the scale, and the scale
+  // on how many rows of marks need room, so settle the two together.
+  const marked = [...wall.marks]
+    .sort((a, b) => a.at_16 - b.at_16)
+    .flatMap((m) => {
+      const member = wall.members.find((v) => v.label === m.label);
+      if (!member) return [];
+      return [{ mark: m, edge16: options.layoutFrom === "left" ? member.x_16 : member.x_16 + member.w_16 }];
+    });
+  // Use the fewest rows that give every mark room, since each row costs the
+  // wall some height. Marks still too close get nudged apart below.
+  const fit = (rowCount: number) => {
+    const availH = height - PAD.top - padBottom(rowCount);
+    const s = Math.max(0.1, Math.min(availW / L, availH / H));
+    const xs = marked.map((m) => (m.edge16 / 16) * s);
+    const rows = markRows(xs, rowCount);
+    const crowded = rows.some((r, i) => rows.slice(0, i).some((q, j) => q === r && xs[i] - xs[j] < MARK_GAP));
+    return { rowCount, s, rows, crowded };
+  };
+  let layout = fit(1);
+  while (layout.crowded && layout.rowCount < MARK_ROWS) layout = fit(layout.rowCount + 1);
+  const { rowCount, s, rows } = layout;
+  const availH = height - PAD.top - padBottom(rowCount);
   const x0 = PAD.left + (availW - L * s) / 2;
   const yb = PAD.top + (availH - H * s) / 2 + H * s;
   const X = (x16: number) => x0 + (x16 / 16) * s;
@@ -234,34 +304,38 @@ export function drawElevation(
     svg.append(dimension(right, Y(0), right, Y(wall.right_height_16), formatLength(wall.right_height_16), "v"));
   }
 
-  // Layout marks along the bottom plate. Close marks drop to a second row.
+  // Layout marks along the bottom plate, crowded marks dropping to the next
+  // row and nudged clear of each other with a jog in their leader. Every
+  // label gets the same weight and a halo so it reads over the grid.
   const marks = el("g", { class: "marks" });
-  const rowEnds: number[] = [];
-  for (const m of [...wall.marks].sort((a, b) => a.at_16 - b.at_16)) {
-    const member = wall.members.find((v) => v.label === m.label);
-    if (!member) continue;
-    const edge16 = options.layoutFrom === "left" ? member.x_16 : member.x_16 + member.w_16;
-    const x = X(edge16);
-    // Rotated labels need about one line height of horizontal room.
-    let row = rowEnds.findIndex((end) => Math.abs(x - end) >= MARK_GAP);
-    if (row === -1) row = rowEnds.length;
-    if (row >= MARK_ROWS) continue;
-    rowEnds[row] = x;
-    const ty = yb + 16 + row * MARK_ROW;
-    marks.append(
-      el("line", { class: `tick kind-${m.kind}`, x1: x, y1: yb + 3, x2: x, y2: ty - 3 }),
-      el(
-        "text",
-        {
-          class: `mark-text kind-${m.kind}`,
-          x,
-          y: ty,
-          transform: `rotate(-90 ${x} ${ty})`,
-          "data-label": m.label,
-        },
-        m.at,
-      ),
-    );
+  for (let row = 0; row < rowCount; row++) {
+    const inRow = marked.filter((_, i) => rows[i] === row);
+    const xs = inRow.map((m) => X(m.edge16));
+    const at = spreadLabels(xs);
+    const ty = yb + 16 + MARK_JOG + row * MARK_ROW;
+    inRow.forEach(({ mark: m }, i) => {
+      const x = xs[i];
+      const lx = at[i];
+      marks.append(
+        el("polyline", {
+          class: "tick",
+          points: `${x},${yb + 3} ${x},${ty - MARK_JOG} ${lx},${ty - 4}`,
+        }),
+        el(
+          "text",
+          {
+            class: "mark-text",
+            x: lx,
+            y: ty,
+            dy: "0.35em",
+            transform: `rotate(-90 ${lx} ${ty})`,
+            "data-label": m.label,
+            "data-kind": m.kind,
+          },
+          m.at,
+        ),
+      );
+    });
   }
   svg.append(marks);
 
