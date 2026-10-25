@@ -27,6 +27,9 @@ import { openSection, revealOpening, renderPanel, wallName, type PanelContext, t
 import { packetZoom } from "./packet-zoom";
 import { bounds, factsAt, movesUpAndDown, snap, type Item, type Spot } from "./snap";
 import { renderSettings } from "./settings";
+import { accountsEnabled, email, finishSignIn, me, onAccountChange, signedIn, type Me } from "./account";
+import { renderAccount, statusText } from "./account-ui";
+import { onSyncStatus, scheduleSync, setSyncEnabled, syncStatus, unlink } from "./sync";
 import { ensureStock, fromTemplate, load, loadFiled, normalize, save, saveFiled, TEMPLATES } from "./state";
 import { HIDDEN_LAYERS, LAYERS, layerOf, Viewer, type Layer } from "./view3d";
 
@@ -37,6 +40,7 @@ app.innerHTML = `
     <input class="project-name" aria-label="Project name" spellcheck="false" autocomplete="off" />
     <div class="stats" aria-live="polite"></div>
     <div class="actions">
+      <button type="button" class="button account-button" data-action="account" hidden></button>
       <button type="button" class="button icon-only" data-action="settings" aria-label="Settings" title="Settings: lumber and hardware prices, and saw kerf">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h7M12 4h2M2 8h2M7 8h7M2 12h9"/><circle cx="10.5" cy="4" r="1.5"/><circle cx="5.5" cy="8" r="1.5"/><circle cx="12.5" cy="12" r="1.5"/></svg>
       </button>
@@ -98,6 +102,16 @@ app.innerHTML = `
       <button type="button" class="icon-button" data-action="close-settings" aria-label="Close">×</button>
     </header>
     <div class="settings-body"></div>
+  </dialog>
+  <dialog class="settings account" aria-labelledby="account-title">
+    <header>
+      <div>
+        <h2 id="account-title">Sticks account</h2>
+        <p>Sync between your Macs, and plain-English changes.</p>
+      </div>
+      <button type="button" class="icon-button" data-action="close-account" aria-label="Close">×</button>
+    </header>
+    <div class="account-body"></div>
   </dialog>
   <dialog class="replace" aria-labelledby="replace-title">
     <form method="dialog">
@@ -161,6 +175,9 @@ const preview = $<HTMLDivElement>(".print-preview");
 const settings = $<HTMLDialogElement>("dialog.settings");
 const settingsBody = $<HTMLDivElement>(".settings-body");
 const replaceDialog = $<HTMLDialogElement>("dialog.replace");
+const accountDialog = $<HTMLDialogElement>("dialog.account");
+const accountBody = $<HTMLDivElement>(".account-body");
+const accountButton = $<HTMLButtonElement>(".account-button");
 const previewFrame = $<HTMLIFrameElement>(".print-preview iframe");
 const zoom = packetZoom(previewFrame, $<HTMLButtonElement>(".zoom-level"), () => !preview.hidden);
 const ownerCheck = $<HTMLLabelElement>(".owner-check");
@@ -250,6 +267,7 @@ function update(): void {
   const sizes = next ? allMembers(next).map((m) => m.size) : [];
   if (ensureStock(project, sizes)) renderPanel(panel, project, panelContext, events);
   save(project);
+  scheduleSync(project);
   nameInput.value = project.name;
   if (next) {
     framed = next;
@@ -1057,6 +1075,7 @@ window.addEventListener("resize", () => {
 nameInput.addEventListener("input", () => {
   project.name = nameInput.value;
   save(project);
+  scheduleSync(project);
 });
 nameInput.addEventListener("change", update);
 
@@ -1071,6 +1090,7 @@ $<HTMLDivElement>(".menu-items").append(
       menu.open = false;
       if (!(await okToReplace())) return;
       const next = fromTemplate(template);
+      unlink();
       openProject(next);
       markFiled(next);
     });
@@ -1081,9 +1101,10 @@ document.addEventListener("click", (e) => {
   if (!menu.contains(e.target as Node)) menu.open = false;
 });
 
-// Plain-English changes ask Jev, which needs a key only the dev server has,
-// so the bar is off unless VITE_JEV=on.
-if (import.meta.env.VITE_JEV === "on") mountCommand($<HTMLDivElement>(".command"), {
+// Plain-English changes ask Jev, which needs a key only the dev server or the
+// account server has, so the bar is off unless VITE_JEV=on or the build is set
+// up for accounts.
+if (import.meta.env.VITE_JEV === "on" || accountsEnabled) mountCommand($<HTMLDivElement>(".command"), {
   get project() {
     return project;
   },
@@ -1195,6 +1216,13 @@ app.addEventListener("click", (e) => {
     case "close-settings":
       settings.close();
       break;
+    case "account":
+      void renderAccount(accountBody, accountContext);
+      accountDialog.showModal();
+      break;
+    case "close-account":
+      accountDialog.close();
+      break;
   }
 });
 document.addEventListener("keydown", (e) => {
@@ -1205,6 +1233,9 @@ document.addEventListener("keydown", (e) => {
 settings.addEventListener("click", (e) => {
   if (e.target === settings) settings.close();
 });
+accountDialog.addEventListener("click", (e) => {
+  if (e.target === accountDialog) accountDialog.close();
+});
 
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
@@ -1212,6 +1243,7 @@ fileInput.addEventListener("change", async () => {
   if (!file) return;
   try {
     const next = normalize(projectFromToml(await file.text()));
+    unlink();
     openProject(next);
     markFiled(next);
   } catch (err) {
@@ -1285,12 +1317,71 @@ function fileName(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "project";
 }
 
-loadCore().then(() => {
+// The Sticks account: signing in, the paid plan, and cloud sync.
+let account: Me | null = null;
+
+const accountContext = {
+  async open(loadDesign: () => Promise<ProjectJson>) {
+    // A project already syncing is safe in the account; anything else may need saving first.
+    if (syncStatus().state !== "saved" && !(await okToReplace())) return;
+    openProject(await loadDesign());
+    markFiled(project);
+    accountDialog.close();
+  },
+  refresh: refreshAccount,
+};
+
+/** Fetches the plan and turns sync on or off to match. */
+async function refreshAccount(): Promise<Me | null> {
+  account = signedIn() ? await me() : null;
+  setSyncEnabled(Boolean(account?.paid), project);
+  showAccount();
+  return account;
+}
+
+function showAccount(): void {
+  accountButton.hidden = !accountsEnabled;
+  if (!accountsEnabled) return;
+  const sync = syncStatus();
+  accountButton.textContent = signedIn() ? (email() ?? "Account") : "Sign in";
+  accountButton.dataset.sync = sync.state;
+  accountButton.title = signedIn() ? statusText(sync) : "Sign in to sync designs and make changes in plain English";
+}
+
+onAccountChange(() => {
+  refreshAccount().catch((e) => showProblem(message(e)));
+  if (accountDialog.open) void renderAccount(accountBody, accountContext, false);
+});
+onSyncStatus((s) => {
+  showAccount();
+  const line = accountBody.querySelector<HTMLElement>("[data-sync-status]");
+  if (line) line.textContent = statusText(s);
+  // A first save adds the design to the dialog's list.
+  if (accountDialog.open && (s.state === "saved" || s.state === "copied") && !accountBody.querySelector(".synced-list")) {
+    void renderAccount(accountBody, accountContext);
+  }
+  if (s.state === "copied") showProblem(statusText(s));
+});
+// Back from the browser after paying: check the plan again.
+window.addEventListener("focus", () => {
+  if (signedIn() && !account?.paid) refreshAccount().catch(() => {});
+});
+
+loadCore().then(async () => {
   const saved = load();
-  if (saved) return openProject(saved);
-  const fresh = fromTemplate("shed");
-  openProject(fresh);
-  markFiled(fresh);
+  if (saved) openProject(saved);
+  else {
+    const fresh = fromTemplate("shed");
+    openProject(fresh);
+    markFiled(fresh);
+  }
+  showAccount();
+  try {
+    await finishSignIn();
+    if (signedIn()) await refreshAccount();
+  } catch (e) {
+    showProblem(message(e));
+  }
 });
 
 // The dev server is always the newest code, so only built apps check.

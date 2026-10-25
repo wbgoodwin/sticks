@@ -2,13 +2,14 @@
 // on this machine. Both pick from the same listed options with a confidence,
 // so the rest of the command bar doesn't know which answered.
 //
-// By default Jev answers under the dev server and the local model stands in
-// when Jev can't be reached (no key, no network) or there's no dev server, as
-// in a bundled desktop build. VITE_STICKS_ANSWERER=jev or =local in
-// app/.env.local forces one.
+// By default Jev answers under the dev server or when signed in to a Sticks
+// account, and the local model stands in when Jev can't be reached (no key,
+// no network) or there's neither, as in a bundled desktop build signed out.
+// VITE_STICKS_ANSWERER=jev or =local in app/.env.local forces one.
 
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { EditAnswer, EditAsk, Json } from "./core";
+import { signedIn } from "./account";
 import { askJev } from "./jev";
 
 type Answers = Record<string, EditAnswer>;
@@ -30,12 +31,13 @@ async function askLocal(request: string, design: Design, asks: EditAsk[]): Promi
 }
 
 /** Each question's pick, with how sure it was. */
-export async function ask(request: string, design: Design, asks: EditAsk[]): Promise<Answers> {
+export async function ask(request: string, design: Design, asks: EditAsk[], change?: string): Promise<Answers> {
   if (forced === "local") return askLocal(request, design, asks);
-  if (forced === "jev" || (import.meta.env.DEV && !jevDown && !isTauri())) return askJev(request, design, asks);
-  if (import.meta.env.DEV && !jevDown) {
+  const useJev = (import.meta.env.DEV || signedIn()) && !jevDown;
+  if (forced === "jev" || (useJev && !isTauri())) return askJev(request, design, asks, change);
+  if (useJev) {
     try {
-      return await askJev(request, design, asks);
+      return await askJev(request, design, asks, change);
     } catch (jev) {
       try {
         const answers = await askLocal(request, design, asks);
