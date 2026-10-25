@@ -207,11 +207,11 @@ export async function upgrade(endsOn?: string): Promise<void> {
 }
 
 /**
- * After checkout: has the server ask Stripe for the plan, in case Stripe's
- * own notice is late. Only while a checkout this session started is open.
+ * Has the server ask Stripe for the plan, in case Stripe's own notice is
+ * late or lost: after a checkout this session started, or when `always`.
  */
-export async function checkPayment(): Promise<void> {
-  if (!checkoutOpen) return;
+export async function checkPayment(always = false): Promise<void> {
+  if (!checkoutOpen && !always) return;
   const { paid } = await yard<{ paid: boolean }>("POST", "/billing/refresh");
   if (paid) checkoutOpen = false;
 }

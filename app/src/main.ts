@@ -1328,12 +1328,13 @@ const accountContext = {
     markFiled(project);
     accountDialog.close();
   },
-  refresh: refreshAccount,
+  // Opening the dialog unpaid also checks Stripe, so a payment is never missed.
+  refresh: () => refreshAccount(true),
 };
 
 /** Fetches the plan and turns sync on or off to match. */
-async function refreshAccount(): Promise<Me | null> {
-  if (signedIn()) await checkPayment().catch(() => {});
+async function refreshAccount(checkStripe = false): Promise<Me | null> {
+  if (signedIn() && !account?.paid) await checkPayment(checkStripe).catch(() => {});
   account = signedIn() ? await me() : null;
   setSyncEnabled(Boolean(account?.paid), project);
   showAccount();
