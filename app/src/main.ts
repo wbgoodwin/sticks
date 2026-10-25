@@ -8,6 +8,7 @@ import {
   printPacket,
   projectFromToml,
   projectToToml,
+  type DeckView,
   type FrameView,
   type HardwareView,
   type MemberView,
@@ -20,13 +21,14 @@ import {
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { mountCommand } from "./command";
 import { checkForUpdates, VERSION } from "./updates";
-import { dollars, renderCuts, renderShopping } from "./cutlist";
+import { dollars, findInCuts, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES, type DragOverlay, type Scale } from "./elevation";
 import { openSection, revealOpening, renderPanel, wallName, type PanelContext, type PanelTab } from "./panel";
+import { packetZoom } from "./packet-zoom";
 import { bounds, factsAt, movesUpAndDown, snap, type Item, type Spot } from "./snap";
 import { renderSettings } from "./settings";
 import { ensureStock, fromTemplate, load, loadFiled, normalize, save, saveFiled, TEMPLATES } from "./state";
-import { HIDDEN_LAYERS, LAYERS, Viewer } from "./view3d";
+import { HIDDEN_LAYERS, LAYERS, layerOf, Viewer, type Layer } from "./view3d";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -112,6 +114,15 @@ app.innerHTML = `
     <div class="print-bar">
       <strong>Build packet</strong>
       <span>Shopping list, every drawing and the cut list, on letter paper in landscape.</span>
+      <label class="owner-check" hidden>
+        <input type="checkbox" />
+        These are my plans. I'll confirm every size, footing and connector with my building department.
+      </label>
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button type="button" class="button" data-action="zoom-out" title="Zoom out (⌘−)" aria-label="Zoom out">−</button>
+        <button type="button" class="button zoom-level" data-action="zoom-reset" title="Actual size (⌘0)">100%</button>
+        <button type="button" class="button" data-action="zoom-in" title="Zoom in (⌘+)" aria-label="Zoom in">+</button>
+      </div>
       <button type="button" class="button" data-action="download-packet">Download</button>
       <button type="button" class="button primary" data-action="print-now">Print</button>
       <button type="button" class="button" data-action="close-preview">Close</button>
@@ -124,6 +135,12 @@ const $ = <T extends Element>(selector: string) => app.querySelector<T>(selector
 const panel = $<HTMLElement>(".panel");
 const views = $<HTMLElement>(".views");
 const drawingBox = $<HTMLDivElement>(".drawing");
+/**
+ * The shortest a flat drawing gets. Below it the drawing scrolls instead of
+ * shrinking, so pulling the lists up doesn't change how the wall looks.
+ */
+const MIN_DRAWING_HEIGHT = 560;
+
 const svg = $<SVGSVGElement>(".elevation");
 const sheet = $<HTMLDivElement>(".sheet");
 const layers = $<HTMLDivElement>(".layers");
@@ -145,6 +162,16 @@ const settings = $<HTMLDialogElement>("dialog.settings");
 const settingsBody = $<HTMLDivElement>(".settings-body");
 const replaceDialog = $<HTMLDialogElement>("dialog.replace");
 const previewFrame = $<HTMLIFrameElement>(".print-preview iframe");
+const zoom = packetZoom(previewFrame, $<HTMLButtonElement>(".zoom-level"), () => !preview.hidden);
+const ownerCheck = $<HTMLLabelElement>(".owner-check");
+const ownerBox = $<HTMLInputElement>(".owner-check input");
+const packetButtons = [...app.querySelectorAll<HTMLButtonElement>('[data-action="print-now"], [data-action="download-packet"]')];
+/** A deck's packet is permit drawings: printing it waits on the builder taking them as their own. */
+function gatePacket(): void {
+  const gated = !ownerCheck.hidden && !ownerBox.checked;
+  for (const b of packetButtons) b.disabled = gated;
+}
+ownerBox.addEventListener("change", gatePacket);
 
 /** What the stage shows: the 3D model, a wall's elevation, or a printed drawing. */
 type View = { kind: "3d" } | { kind: "wall"; id: string } | { kind: "sheet"; id: string };
@@ -166,9 +193,14 @@ const viewer = new Viewer(drawingBox, {
       tooltip.hidden = true;
       return;
     }
-    showTooltip(solidTitle(solid), x, y);
+    showTooltip(`${solidTitle(solid)}${solid.size && solid.length ? FIND_HINT : ""}`, x, y);
   },
   pick: showInfo,
+});
+/** The solid last clicked in 3D, so a double-click can find it in the cut list. */
+let picked: SolidView | null = null;
+drawingBox.addEventListener("dblclick", (e) => {
+  if (view.kind === "3d" && picked && (e.target as Element).closest("canvas")) findInCutList([picked.label]);
 });
 
 const panelContext: PanelContext = {
@@ -302,11 +334,19 @@ function renderStage(): void {
   layers.hidden = !is3d;
   resetView.hidden = !is3d;
   drawingBox.classList.toggle("plain", view.kind !== "wall");
+  // Flat drawings keep their size when the lists are pulled up, and scroll.
+  drawingBox.classList.toggle("flat", !is3d);
+  if (is3d) drawingBox.scrollTop = 0;
   if (!is3d) info.hidden = true;
 
   if (view.kind === "3d") {
     const m = model(project);
     viewer.setModel(m);
+    // Only the layers this project has get a toggle.
+    const present = new Set(m.solids.map(layerOf));
+    for (const label of layers.querySelectorAll<HTMLElement>("[data-layer]")) {
+      label.hidden = !present.has(label.dataset.layer as Layer);
+    }
     renderSchedule(allMembers(framed), [...framed.walls.flatMap((w) => w.warnings), ...planWarnings(framed)], skippedNotes(m.skipped));
     stats.textContent = `${m.solids.filter((s) => s.size).length} pieces`;
   } else if (view.kind === "wall") {
@@ -325,19 +365,20 @@ function renderStage(): void {
     const id = view.id;
     const d = framed.drawings.find((v) => v.id === id);
     if (!d) return;
-    const part = d.part === "sheathing" ? framed.sheathing : framed[d.part];
+    const part = framed[d.part];
     if (part?.error) {
       showProblem(`${partName(d.part)}: ${part.error}`);
       return;
     }
     try {
-      sheet.innerHTML = drawing(project, id);
+      // The checks read better as a table than as a shrunken sheet; the sheet prints.
+      sheet.innerHTML = id === "deck-checks" && framed.deck ? checksTable(framed.deck) : drawing(project, id);
     } catch (e) {
       showProblem(message(e));
       return;
     }
     if (part && "members" in part) {
-      renderSchedule(part.members, part.warnings, []);
+      renderSchedule(part.members, [...part.warnings, ...(d.part === "deck" ? failedChecks(framed) : [])], []);
       stats.textContent = `${part.members.length} pieces`;
     } else {
       renderSchedule([], part?.warnings ?? [], []);
@@ -347,11 +388,33 @@ function renderStage(): void {
 }
 
 function allMembers(f: FrameView): MemberView[] {
-  return [...f.walls.flatMap((w) => w.members), ...[f.floor, f.roof, f.porch].flatMap((p) => p?.members ?? [])];
+  return [...f.walls.flatMap((w) => w.members), ...[f.floor, f.roof, f.porch, f.deck].flatMap((p) => p?.members ?? [])];
 }
 
 function planWarnings(f: FrameView): string[] {
-  return [f.floor, f.roof, f.porch, f.sheathing].flatMap((p) => p?.warnings ?? []);
+  return [...[f.floor, f.roof, f.porch, f.sheathing, f.deck].flatMap((p) => p?.warnings ?? []), ...failedChecks(f)];
+}
+
+/** The deck's code checks, for reading on screen. */
+function checksTable(d: DeckView): string {
+  const failed = d.checks.filter((c) => !c.ok).length;
+  const rows = d.checks
+    .map(
+      (c) =>
+        `<tr class="${c.ok ? "" : "failed"}"><td class="mark">${c.ok ? "OK" : "Fails"}</td><th scope="row">${esc(c.item)}</th><td>${esc(c.actual)}</td><td>${esc(c.allowed)}</td><td class="source">${esc(c.source)}</td></tr>`,
+    )
+    .join("");
+  const status = failed ? `${failed} of ${d.checks.length} checks fail` : `All ${d.checks.length} checks pass`;
+  return `<div class="checks">
+    <p class="checks-status ${failed ? "failed" : ""}"><strong>${status}</strong> against ${esc(d.code)}.</p>
+    <table><thead><tr><th></th><th>Check</th><th>This deck</th><th>Allowed or required</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="checks-notice">${d.notice.map(esc).join(" ")}</p>
+  </div>`;
+}
+
+/** The deck's sizes its code doesn't allow, as notes. */
+function failedChecks(f: FrameView): string[] {
+  return (f.deck?.checks ?? []).filter((c) => !c.ok).map((c) => `Code check failed, ${c.item.toLowerCase()}: ${c.actual}; ${c.allowed} (${c.source})`);
 }
 
 function skippedNotes(parts: string[]): string[] {
@@ -363,7 +426,9 @@ let scale: Scale | null = null;
 
 function drawWall(drag?: DragOverlay): void {
   if (!shownWall || view.kind !== "wall") return;
-  const { width, height } = drawingBox.getBoundingClientRect();
+  const width = drawingBox.clientWidth;
+  const height = Math.max(drawingBox.clientHeight, MIN_DRAWING_HEIGHT);
+  svg.style.height = `${height}px`;
   const w = shownWall;
   const items = openingItems(w);
   const notes = items ? items.map((o, i) => factsAt(items, i, o, w.length_16).map((f) => f.text)) : undefined;
@@ -482,12 +547,23 @@ function highlight(group: string | null): void {
   }
 }
 
+const FIND_HINT = `<span class="hint">Double-click to find it in the cut list</span>`;
+
+/** Opens the cut list on the boards these pieces come from. */
+function findInCutList(labels: string[]): void {
+  tooltip.hidden = true;
+  if (collapsed.schedule) setCollapsed("schedule", false);
+  selectTab($<HTMLButtonElement>("#tab-cuts"));
+  findInCuts(cuts, labels);
+}
+
 function showTooltip(html: string, x: number, y: number): void {
   tooltip.innerHTML = html;
   tooltip.hidden = false;
   const box = drawingBox.getBoundingClientRect();
   const left = Math.max(8, Math.min(x + 14, box.width - tooltip.offsetWidth - 8));
-  const top = Math.max(8, y - tooltip.offsetHeight - 10);
+  // The tooltip scrolls with a flat drawing, so it's placed in scrolled terms.
+  const top = Math.max(8, y - tooltip.offsetHeight - 10) + drawingBox.scrollTop;
   tooltip.style.transform = `translate(${left}px, ${top}px)`;
 }
 
@@ -502,7 +578,8 @@ function partName(part: string): string {
   if (part === "floor") return "Floor";
   if (part === "roof") return "Roof";
   if (part === "porch") return "Porch";
-  if (part === "deck") return "Porch deck";
+  if (part === "porch-deck") return "Porch deck";
+  if (part === "deck") return "Deck";
   if (part === "sheathing") return "Sheathing";
   return `${wallName(part)} wall`;
 }
@@ -513,6 +590,7 @@ function solidTitle(s: SolidView): string {
 }
 
 function showInfo(s: SolidView | null): void {
+  picked = s;
   if (!s) {
     info.hidden = true;
     return;
@@ -524,7 +602,9 @@ function showInfo(s: SolidView | null): void {
   info.innerHTML = `
     <header><strong>${esc(s.label)}</strong><button type="button" class="icon-button" aria-label="Close">×</button></header>
     <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    ${s.size && s.length ? `<button type="button" class="button find-in-cuts">Find in cut list</button>` : ""}
   `;
+  info.querySelector(".find-in-cuts")?.addEventListener("click", () => findInCutList([s.label]));
   info.querySelector("button")!.addEventListener("click", () => {
     info.hidden = true;
     viewer.clearSelection();
@@ -562,11 +642,20 @@ svg.addEventListener("pointermove", (e) => {
   const plies = Number(target.dataset.plies ?? 1);
   const box = drawingBox.getBoundingClientRect();
   showTooltip(
-    `<strong>${esc(m.label)}</strong><span>${KIND_NAMES[m.kind]}${plies > 1 ? `, ${plies} plies` : ""}</span><span>${m.size} × ${m.length}</span>`,
+    `<strong>${esc(m.label)}</strong><span>${KIND_NAMES[m.kind]}${plies > 1 ? `, ${plies} plies` : ""}</span><span>${m.size} × ${m.length}</span>${FIND_HINT}`,
     e.clientX - box.left,
     e.clientY - box.top,
   );
   highlight(groupKey(m));
+});
+// Double-clicking a board finds it, every ply of it, in the cut list.
+svg.addEventListener("dblclick", (e) => {
+  const target = (e.target as Element).closest<SVGElement>(".member");
+  if (!target || !shownWall) return;
+  const m = shownWall.members.find((v) => v.label === target.dataset.label);
+  if (!m) return;
+  const plies = shownWall.members.filter((v) => v.x_16 === m.x_16 && v.y_16 === m.y_16 && v.w_16 === m.w_16 && v.h_16 === m.h_16);
+  findInCutList(plies.map((v) => v.label));
 });
 svg.addEventListener("pointerleave", () => {
   if (dragging) return;
@@ -796,6 +885,7 @@ layers.append(
     box.type = "checkbox";
     box.checked = !HIDDEN_LAYERS.includes(layer);
     box.addEventListener("change", () => viewer.setLayer(layer, box.checked));
+    label.dataset.layer = layer;
     label.append(box, text);
     return label;
   }),
@@ -1070,6 +1160,9 @@ app.addEventListener("click", (e) => {
     case "print":
       try {
         previewFrame.srcdoc = printPacket(project);
+        ownerCheck.hidden = !project.deck;
+        ownerBox.checked = false;
+        gatePacket();
         preview.hidden = false;
       } catch (err) {
         showProblem(`Couldn't make the build packet: ${message(err)}`);
@@ -1082,6 +1175,15 @@ app.addEventListener("click", (e) => {
       saveFile(`${fileName(project.name)}-build-packet.html`, previewFrame.srcdoc, "Web page", "html").catch((err) =>
         showProblem(`Couldn't save the build packet: ${message(err)}`),
       );
+      break;
+    case "zoom-in":
+      zoom.step(1);
+      break;
+    case "zoom-out":
+      zoom.step(-1);
+      break;
+    case "zoom-reset":
+      zoom.set(1);
       break;
     case "close-preview":
       preview.hidden = true;

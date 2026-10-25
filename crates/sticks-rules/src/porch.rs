@@ -11,13 +11,16 @@
 
 use serde::Serialize;
 use sticks_core::{
-    longest_board, Building, Cut, Deck, Floor, LayoutStart, Length, MemberKind, Nominal, Pitch,
-    Porch, Roof, Rules, Stock,
+    longest_board, Building, Cut, Floor, LayoutStart, Length, MemberKind, Nominal, Pitch, Porch,
+    PorchDeck, Roof, Rules, Stock,
 };
 
 use crate::floor::Pier;
 use crate::layout::{
     half, on_center, pieces, placed, ply_joints, split_run, LayoutMark, Placed, Rect, Splice,
+};
+use crate::platform::{
+    beam_joints, beam_line, joints_over_joists, joist_layout, joist_marks, run_pieces, Decking,
 };
 use crate::roof::{two_up, RafterDetail, RafterTop, RoofPlane};
 use crate::FramingError;
@@ -38,7 +41,7 @@ pub struct PorchHeights {
 
 /// Heights through the deck, from the top of the subfloor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct DeckHeights {
+pub struct PorchDeckHeights {
     /// Top of the decking.
     pub top: Length,
     pub joist_top: Length,
@@ -49,8 +52,8 @@ pub struct DeckHeights {
 
 /// Everything generated for the porch deck.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct FramedDeck {
-    pub heights: DeckHeights,
+pub struct FramedPorchDeck {
+    pub heights: PorchDeckHeights,
     /// Ledger, joists, rim, beam and decking, in plan.
     pub members: Vec<Placed>,
     /// A pier under the beam at each post.
@@ -79,7 +82,7 @@ pub struct FramedPorch {
     pub marks: Vec<LayoutMark>,
     pub splices: Vec<Splice>,
     pub plane: RoofPlane,
-    pub deck: Option<FramedDeck>,
+    pub deck: Option<FramedPorchDeck>,
     pub warnings: Vec<String>,
 }
 
@@ -422,13 +425,13 @@ fn post_centers(width: Length, post: Nominal, spacing: Length) -> Vec<Length> {
 /// along the front, a full board at the outer edge and any rip against the
 /// shed, end joints on joists and staggered row to row.
 fn frame_deck(
-    deck: &Deck,
+    deck: &PorchDeck,
     porch: &Porch,
     building: &Building,
     floor: &Floor,
     rules: &Rules,
     stock: &[Stock],
-) -> Result<FramedDeck, FramingError> {
+) -> Result<FramedPorchDeck, FramingError> {
     let fail = |reason: String| FramingError {
         part: "porch deck".to_string(),
         reason,
@@ -439,7 +442,6 @@ fn frame_deck(
     let depth = porch.depth;
     let oc = floor.on_center.unwrap_or(rules.on_center);
     let bw = deck.beam.actual_thickness();
-    let board_w = deck.decking.actual_width();
     if deck.step_down < Length::ZERO || deck.gap < Length::ZERO {
         return Err(fail("the step down and gap can't be negative".to_string()));
     }
@@ -462,38 +464,15 @@ fn frame_deck(
 
     let mut members = Vec::new();
     let mut splices = Vec::new();
-    let mut joist_x = vec![Length::ZERO];
-    joist_x.extend(on_center(width, oc, t, rules.layout_from));
-    joist_x.push(width - t);
-    let centers: Vec<Length> = joist_x.iter().map(|&x| x + half(t)).collect();
-    let inner = &centers[1..centers.len() - 1];
+    let (joist_x, centers) = joist_layout(width, oc, t, rules.layout_from);
 
     // Ledger and outer rim along the front, spliced over a joist.
-    let longest = longest_board(stock, joist, rules.end_trim);
-    let joints = split_run(Length::ZERO, width, |s| s <= longest, inner, &[], Length::ZERO)
-        .ok_or_else(|| {
-            fail(format!(
-                "the rim is longer than the longest {joist} stock ({longest}) and no joist lands where it could be spliced; add longer stock"
-            ))
-        })?;
+    let joints = joints_over_joists("rim", joist, width, &centers, stock, rules).map_err(fail)?;
     for (prefix, kind, y) in [
-        ("DL", MemberKind::Ledger, -t),
-        ("DR", MemberKind::RimJoist, -depth),
+        ("porch-DL", MemberKind::Ledger, -t),
+        ("porch-DR", MemberKind::RimJoist, -depth),
     ] {
-        for (n, (a, b)) in pieces(Length::ZERO, width, &joints).into_iter().enumerate() {
-            members.push(placed(
-                format!("porch-{prefix}{}", n + 1),
-                kind,
-                joist,
-                Rect {
-                    x: a,
-                    y,
-                    w: b - a,
-                    h: t,
-                },
-                false,
-            ));
-        }
+        members.extend(run_pieces(prefix, 1, kind, joist, width, y, t, &joints));
         splices.extend(joints.iter().map(|&at| Splice { kind, at }));
     }
     for (i, &x) in joist_x.iter().enumerate() {
@@ -513,37 +492,18 @@ fn frame_deck(
 
     // The beam under the outer rim, on a pier under each post.
     let pier_x = post_centers(width, porch.post, porch.post_spacing);
-    let beam_longest = longest_board(stock, deck.beam, rules.end_trim);
-    let (beam_joints, _) = ply_joints(width, 1, &pier_x, beam_longest).ok_or_else(|| {
-        fail(format!(
-            "the beam is longer than the longest {} stock ({beam_longest}) and no pier lands where it could be spliced; add posts or longer stock",
-            deck.beam
-        ))
-    })?;
-    let runs = pieces(Length::ZERO, width, &beam_joints[0]);
-    let many = runs.len() > 1;
-    for (k, (a, b)) in runs.into_iter().enumerate() {
-        members.push(placed(
-            if many {
-                format!("porch-DB-{}", k + 1)
-            } else {
-                "porch-DB".to_string()
-            },
-            MemberKind::Beam,
-            deck.beam,
-            Rect {
-                x: a,
-                y: -depth,
-                w: b - a,
-                h: bw,
-            },
-            false,
-        ));
-    }
-    splices.extend(beam_joints[0].iter().map(|&at| Splice {
-        kind: MemberKind::Beam,
-        at,
-    }));
+    let (beam_joints, _) = beam_joints(deck.beam, 1, width, &pier_x, "pier", stock, rules)
+        .map_err(|r| fail(r.replace("add piers", "add posts")))?;
+    let (beam, beam_splices) = beam_line(
+        "porch-DB",
+        MemberKind::Beam,
+        deck.beam,
+        width,
+        -depth,
+        &beam_joints,
+    );
+    members.extend(beam);
+    splices.extend(beam_splices);
     let piers = pier_x
         .iter()
         .map(|&x| Pier {
@@ -553,74 +513,28 @@ fn frame_deck(
         .collect();
 
     // Decking rows from the outer edge in, joints on joists, staggered.
-    let board_longest = longest_board(stock, deck.decking, rules.end_trim);
-    let mut y = -depth;
-    let mut rows = 0;
-    let mut last: Vec<Length> = Vec::new();
-    while y < Length::ZERO {
-        let w = board_w.min(-y);
-        let joints = split_run(
-            Length::ZERO,
-            width,
-            |s| s <= board_longest,
-            inner,
-            &last,
-            oc,
-        )
-        .or_else(|| split_run(Length::ZERO, width, |s| s <= board_longest, inner, &[], Length::ZERO))
-        .ok_or_else(|| {
-            fail(format!(
-                "decking is longer than the longest {} stock ({board_longest}) and no joist lands where it could be spliced; add longer stock",
-                deck.decking
-            ))
-        })?;
-        rows += 1;
-        let runs = pieces(Length::ZERO, width, &joints);
-        let many = runs.len() > 1;
-        for (k, (a, b)) in runs.into_iter().enumerate() {
-            let mut label = format!("porch-DK{rows:02}");
-            if many {
-                label.push((b'a' + k as u8) as char);
-            }
-            members.push(placed(
-                label,
-                MemberKind::Decking,
-                deck.decking,
-                Rect {
-                    x: a,
-                    y,
-                    w: b - a,
-                    h: w,
-                },
-                false,
-            ));
-        }
-        if w < board_w {
-            warnings.push(format!(
-                "the last row of decking, against the shed, is ripped to {w:#}"
-            ));
-        }
-        last = joints;
-        y += w + deck.gap;
+    let laid = Decking {
+        prefix: "porch-DK",
+        width,
+        y0: -depth,
+        y1: Length::ZERO,
+        centers: &centers,
+        board: deck.decking,
+        gap: deck.gap,
+        oc,
+        rip_at: "against the shed",
     }
+    .lay(stock, rules)
+    .map_err(fail)?;
+    members.extend(laid.members);
+    warnings.extend(laid.warnings);
+    let rows = laid.rows;
 
-    let mut marks: Vec<LayoutMark> = joist_x
-        .iter()
-        .enumerate()
-        .map(|(i, &x)| LayoutMark {
-            label: format!("porch-DJ{:02}", i + 1),
-            kind: MemberKind::Joist,
-            at: match rules.layout_from {
-                LayoutStart::Left => x,
-                LayoutStart::Right => width - x - t,
-            },
-        })
-        .collect();
-    marks.sort_by_key(|m| m.at);
+    let marks = joist_marks("porch-DJ", &joist_x, t, width, rules.layout_from);
     splices.sort_by_key(|s| s.at);
 
-    Ok(FramedDeck {
-        heights: DeckHeights {
+    Ok(FramedPorchDeck {
+        heights: PorchDeckHeights {
             top,
             joist_top,
             joist_bottom,

@@ -2,11 +2,12 @@
 //! members the framers placed: what kind each one is and the sizes on both
 //! sides. Nothing here names a brand; the hardware crate picks the parts.
 
-use sticks_core::{Cut, Joint, JointKind, Length, MemberKind, Nominal};
+use sticks_core::{BeamStyle, Cut, Joint, JointKind, Length, MemberKind, Nominal};
 
+use crate::deck::FramedDeck;
 use crate::floor::{FramedFloor, Pier};
 use crate::layout::{Placed, Rect};
-use crate::porch::{FramedDeck, FramedPorch};
+use crate::porch::{FramedPorch, FramedPorchDeck};
 use crate::roof::FramedRoof;
 use crate::wall::FramedWall;
 
@@ -210,7 +211,7 @@ impl FramedPorch {
     }
 }
 
-impl FramedDeck {
+impl FramedPorchDeck {
     /// Each joist hung on the ledger and crossing the beam, the ledger
     /// fastened at each joist, the beam on its piers, and two lateral ties
     /// back to the building.
@@ -270,6 +271,84 @@ impl FramedDeck {
                     true,
                     &[&l.member.label],
                 ));
+            }
+        }
+        out
+    }
+}
+
+impl FramedDeck {
+    /// Each joist on every beam it crosses, or hung at both ends between
+    /// flush beams, and each beam on its posts or piers.
+    pub fn joints(&self) -> Vec<Joint> {
+        let mut out = Vec::new();
+        let flush = self.beam_style == BeamStyle::Flush;
+        let lines = self.beam_y.len();
+        for j in self
+            .members
+            .iter()
+            .filter(|p| p.member.kind == MemberKind::Joist)
+        {
+            if flush {
+                for _ in 0..2 {
+                    out.push(
+                        Joint::new(
+                            JointKind::JoistOnLedger,
+                            j.member.size,
+                            true,
+                            &[&j.member.label],
+                        )
+                        .on(self.beam),
+                    );
+                }
+            } else {
+                for _ in 0..lines {
+                    out.push(Joint::new(
+                        JointKind::JoistOnBeam,
+                        j.member.size,
+                        true,
+                        &[&j.member.label],
+                    ));
+                }
+            }
+        }
+        let beams: Vec<&Placed> = self
+            .members
+            .iter()
+            .filter(|p| p.member.kind == MemberKind::Beam)
+            .collect();
+        let posts: Vec<&Placed> = self
+            .members
+            .iter()
+            .filter(|p| p.member.kind == MemberKind::Post)
+            .collect();
+        for (i, pier) in self.piers.iter().enumerate() {
+            let label = beam_over(&beams, pier)
+                .map(|(_, _, l)| l)
+                .unwrap_or_default();
+            match posts.get(i) {
+                Some(post) => {
+                    out.push(
+                        Joint::new(
+                            JointKind::BeamOnPost,
+                            self.beam,
+                            true,
+                            &[&label, &post.member.label],
+                        )
+                        .plies(self.beam_plies)
+                        .on(post.member.size),
+                    );
+                    out.push(Joint::new(
+                        JointKind::PostOnConcrete,
+                        post.member.size,
+                        true,
+                        &[&post.member.label],
+                    ));
+                }
+                None => out.push(
+                    Joint::new(JointKind::BeamOnConcrete, self.beam, true, &[&label])
+                        .plies(self.beam_plies),
+                ),
             }
         }
         out

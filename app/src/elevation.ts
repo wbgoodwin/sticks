@@ -71,10 +71,48 @@ export function groupKey(m: MemberView): string {
   return `${m.kind}|${m.size}|${m.length_16}`;
 }
 
-const MARK_ROW = 54;
-const MARK_ROWS = 2;
-const MARK_GAP = 13;
-const PAD = { left: 72, right: 64, top: 64, bottom: 16 + MARK_ROW * MARK_ROWS + 28 };
+// Under the bottom plate: one row of stud positions, and below it a bracket
+// for each opening's rough opening. Kings and jacks aren't numbered: they go
+// just outside each rough opening edge. Labels are rotated so studs on
+// layout never crowd, each reading up from the end of its tick.
+const MARK_GAP = 16;
+const LABEL_LONG = 64;
+const STUD_ROW = 14 + LABEL_LONG + 14;
+const OPENING_ROW = 14 + LABEL_LONG + 8;
+const PAD = { left: 72, right: 64, top: 64 };
+/** Room under the wall for the marks and the layout note. */
+const padBottom = (openings: boolean) => STUD_ROW + (openings ? OPENING_ROW : 0) + 24;
+
+/**
+ * Where to put labels for marks at `xs` (in order across) so none overlap.
+ * Studs on layout are far enough apart to sit right at their mark; the odd
+ * run too close together, like a corner, spreads out centered on itself.
+ */
+function spreadLabels(xs: number[]): number[] {
+  const runs: { xs: number[]; start: number }[] = [];
+  for (const x of xs) {
+    let run = { xs: [x], start: x };
+    for (;;) {
+      const prev = runs[runs.length - 1];
+      if (!prev || prev.start + prev.xs.length * MARK_GAP <= run.start) break;
+      runs.pop();
+      const all = [...prev.xs, ...run.xs];
+      const mid = all.reduce((sum, v) => sum + v, 0) / all.length;
+      run = { xs: all, start: mid - ((all.length - 1) * MARK_GAP) / 2 };
+    }
+    runs.push(run);
+  }
+  return runs.flatMap((run) => run.xs.map((_, i) => run.start + i * MARK_GAP));
+}
+
+/** A rotated label reading up, its top at (`x`, `y`). */
+function upLabel(x: number, y: number, text: string, attrs: Record<string, string> = {}): SVGTextElement {
+  return el(
+    "text",
+    { class: "mark-text", x, y, dy: "0.35em", transform: `rotate(-90 ${x} ${y})`, ...attrs },
+    text,
+  );
+}
 
 export function drawElevation(
   svg: SVGSVGElement,
@@ -88,7 +126,8 @@ export function drawElevation(
   const L = wall.length_16 / 16;
   const H = wall.height_16 / 16;
   const availW = width - PAD.left - PAD.right;
-  const availH = height - PAD.top - PAD.bottom;
+
+  const availH = height - PAD.top - padBottom(wall.openings.length > 0);
   const s = Math.max(0.1, Math.min(availW / L, availH / H));
   const x0 = PAD.left + (availW - L * s) / 2;
   const yb = PAD.top + (availH - H * s) / 2 + H * s;
@@ -234,34 +273,44 @@ export function drawElevation(
     svg.append(dimension(right, Y(0), right, Y(wall.right_height_16), formatLength(wall.right_height_16), "v"));
   }
 
-  // Layout marks along the bottom plate. Close marks drop to a second row.
+  // Stud positions along the bottom plate.
   const marks = el("g", { class: "marks" });
-  const rowEnds: number[] = [];
-  for (const m of [...wall.marks].sort((a, b) => a.at_16 - b.at_16)) {
-    const member = wall.members.find((v) => v.label === m.label);
-    if (!member) continue;
-    const edge16 = options.layoutFrom === "left" ? member.x_16 : member.x_16 + member.w_16;
-    const x = X(edge16);
-    // Rotated labels need about one line height of horizontal room.
-    let row = rowEnds.findIndex((end) => Math.abs(x - end) >= MARK_GAP);
-    if (row === -1) row = rowEnds.length;
-    if (row >= MARK_ROWS) continue;
-    rowEnds[row] = x;
-    const ty = yb + 16 + row * MARK_ROW;
+  const studs = [...wall.marks]
+    .sort((a, b) => a.at_16 - b.at_16)
+    .flatMap((m) => {
+      if (m.kind === "king_stud" || m.kind === "jack_stud") return [];
+      const member = wall.members.find((v) => v.label === m.label);
+      if (!member) return [];
+      return [{ m, x: X(options.layoutFrom === "left" ? member.x_16 : member.x_16 + member.w_16) }];
+    });
+  const at = spreadLabels(studs.map((v) => v.x));
+  const ty = yb + 16;
+  studs.forEach(({ m, x }, i) => {
     marks.append(
-      el("line", { class: `tick kind-${m.kind}`, x1: x, y1: yb + 3, x2: x, y2: ty - 3 }),
-      el(
-        "text",
-        {
-          class: `mark-text kind-${m.kind}`,
-          x,
-          y: ty,
-          transform: `rotate(-90 ${x} ${ty})`,
-          "data-label": m.label,
-        },
-        m.at,
-      ),
+      el("polyline", { class: "tick", points: `${x},${yb + 3} ${x},${ty - 8} ${at[i]},${ty - 3}` }),
+      upLabel(at[i], ty, m.at, { "data-label": m.label }),
     );
+  });
+
+  // Each opening's rough opening as a bracket, its edges measured from the
+  // layout end like the studs.
+  const by = yb + STUD_ROW + 8;
+  for (const o of wall.openings) {
+    const a = X(o.x_16);
+    const b = X(o.x_16 + o.w_16);
+    const measure = (x16: number) =>
+      formatLength(options.layoutFrom === "left" ? x16 : wall.length_16 - x16, true);
+    marks.append(
+      el("line", { class: "ro", x1: a, y1: by, x2: b, y2: by }),
+      el("line", { class: "ro", x1: a, y1: by - 6, x2: a, y2: by + 6 }),
+      el("line", { class: "ro", x1: b, y1: by - 6, x2: b, y2: by + 6 }),
+      upLabel(a, by + 10, measure(o.x_16)),
+      upLabel(b, by + 10, measure(o.x_16 + o.w_16)),
+    );
+    // The name only where it fits over the bracket.
+    if (b - a >= o.name.length * 7 + 8) {
+      marks.append(el("text", { class: "ro-name", x: (a + b) / 2, y: by - 8 }, o.name));
+    }
   }
   svg.append(marks);
 
@@ -275,7 +324,9 @@ export function drawElevation(
         y: height - 12,
         "text-anchor": options.layoutFrom === "left" ? "start" : "end",
       },
-      options.layoutFrom === "left" ? "Layout measured from this end →" : "← Layout measured from this end",
+      options.layoutFrom === "left"
+        ? `Layout measured from this end →${wall.openings.length ? "   Brackets: rough openings" : ""}`
+        : `${wall.openings.length ? "Brackets: rough openings   " : ""}← Layout measured from this end`,
     ),
   );
 

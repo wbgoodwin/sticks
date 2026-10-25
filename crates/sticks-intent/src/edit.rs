@@ -6,7 +6,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use sticks_core::{
-    Building, Deck, Length, Nominal, Opening, OpeningKind, Pitch, Porch, Project, RoofKind, Wall,
+    Building, Length, Nominal, Opening, OpeningKind, Pitch, Porch, PorchDeck, Project, RoofKind,
+    Wall,
 };
 
 /// A side of the building, named as you'd stand outside it.
@@ -198,7 +199,7 @@ impl Edit {
                     .porch
                     .as_mut()
                     .ok_or(EditError::NoPorch("put a deck under"))?;
-                porch.deck.get_or_insert_with(Deck::default);
+                porch.deck.get_or_insert_with(PorchDeck::default);
             }
             Edit::RemoveDeck => {
                 if let Some(porch) = p.porch.as_mut() {

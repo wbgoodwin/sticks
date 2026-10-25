@@ -114,6 +114,9 @@ function list(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
+/** What the cut list's find box holds, kept across redraws. */
+let query = "";
+
 export function renderCuts(root: HTMLElement, plan: CutListView): void {
   const names = plan.sections.filter((s) => s.on_hand).map((s) => s.name);
   const kept =
@@ -123,11 +126,107 @@ export function renderCuts(root: HTMLElement, plan: CutListView): void {
          <p class="cuts-hint">These aren't on the shopping list. They're here in case you still need to cut them.</p>
          <div class="boards on-hand">${groupBoards(plan.on_hand_boards).map(board).join("")}</div>`;
   root.innerHTML = `
-    <p class="cuts-hint">Pieces are listed in cutting order, measured from one end. Kerf is ${plan.summary.kerf}.</p>
+    <div class="find-cut">
+      <input type="search" placeholder="Find a piece, like front-K1 or king stud" aria-label="Find a piece in the cut list" spellcheck="false" autocomplete="off" />
+      <span class="find-count" aria-live="polite"></span>
+    </div>
+    <p class="cuts-hint">Pieces are listed in cutting order, measured from one end. Kerf is ${plan.summary.kerf}. Double-click a board in a drawing to find it here.</p>
     <div class="boards">${groupBoards(plan.boards).map(board).join("")}</div>
     ${kept}
+    <p class="find-none" hidden>No piece in the cut list matches.</p>
     ${notes(plan, [])}
   `;
+  const input = root.querySelector<HTMLInputElement>(".find-cut input")!;
+  input.value = query;
+  input.addEventListener("input", () => {
+    query = input.value;
+    filterCuts(root);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || input.value === "") return;
+    e.stopPropagation();
+    input.value = query = "";
+    filterCuts(root);
+  });
+  filterCuts(root);
+}
+
+/**
+ * Shows the boards that hold the given pieces, picks them out, and scrolls
+ * the first into view. Called when a board is double-clicked in a drawing.
+ */
+export function findInCuts(root: HTMLElement, labels: string[]): void {
+  query = labels.join(", ");
+  const input = root.querySelector<HTMLInputElement>(".find-cut input");
+  if (!input) return;
+  input.value = query;
+  filterCuts(root);
+  const first = root.querySelector<HTMLElement>(".board:not([hidden]) li.match");
+  if (!first) return;
+  const card = first.closest<HTMLElement>(".board")!;
+  card.scrollIntoView({ block: "nearest" });
+  card.classList.remove("flash");
+  void card.offsetWidth; // restart the animation
+  card.classList.add("flash");
+}
+
+/**
+ * Hides boards with nothing that matches the find box and marks the pieces
+ * that do. Terms are split on commas; a term that names a piece exactly
+ * (front-K1) finds only that piece, not front-K10 too. Anything else matches
+ * part of a label, a board's id or size, or the kind of piece (king stud).
+ */
+function filterCuts(root: HTMLElement): void {
+  const terms = query
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+  const labels = new Set([...root.querySelectorAll<HTMLElement>(".piece-label")].map((l) => l.dataset.label!.toLowerCase()));
+  const exact = terms.filter((t) => labels.has(t));
+  const loose = terms.filter((t) => !labels.has(t));
+  const labelMatches = (label: string) => {
+    const l = label.toLowerCase();
+    return exact.includes(l) || loose.some((t) => l.includes(t));
+  };
+  let shown = 0;
+  let pieces = 0;
+  /** The boards a matching piece is cut from, to say which ones by name. */
+  const holding = new Set<string>();
+  for (const card of root.querySelectorAll<HTMLElement>(".board")) {
+    const head = card.dataset.search!;
+    const whole = loose.some((t) => head.includes(t));
+    let any = whole;
+    for (const row of card.querySelectorAll<HTMLElement>("li[data-row]")) {
+      const kind = loose.some((t) => row.dataset.kind!.includes(t));
+      let hit = kind;
+      for (const l of row.querySelectorAll<HTMLElement>(".piece-label")) {
+        const match = terms.length > 0 && labelMatches(l.dataset.label!);
+        l.classList.toggle("match", match);
+        if (match) {
+          pieces++;
+          holding.add(l.dataset.board!);
+        }
+        hit ||= match;
+      }
+      row.classList.toggle("match", terms.length > 0 && hit);
+      card.querySelector(`.cut[data-row="${row.dataset.row}"]`)?.classList.toggle("match", terms.length > 0 && hit);
+      any ||= hit;
+    }
+    card.hidden = terms.length > 0 && !any;
+    if (!card.hidden) shown += Number(card.dataset.count);
+  }
+  // Headings over a section with nothing left in it go too.
+  const kept = root.querySelector<HTMLElement>(".boards.on-hand");
+  if (kept) {
+    const empty = terms.length > 0 && !kept.querySelector(".board:not([hidden])");
+    for (const node of [kept, kept.previousElementSibling, kept.previousElementSibling?.previousElementSibling]) {
+      if (node instanceof HTMLElement) node.hidden = empty;
+    }
+  }
+  root.querySelector<HTMLElement>(".find-none")!.hidden = terms.length === 0 || shown > 0;
+  const named = holding.size > 0 && holding.size <= 3 ? `, cut from ${list([...holding])}` : "";
+  root.querySelector<HTMLElement>(".find-count")!.textContent =
+    terms.length === 0 || shown === 0 ? "" : pieces > 0 && named ? `${plural(pieces, "piece")}${named}` : plural(shown, "board");
 }
 
 /** Boards cut the same way, together. */
@@ -147,20 +246,24 @@ function board(group: BoardView[]): string {
   const ids = esc(group.length === 1 ? b.id : `${b.id} to ${group[group.length - 1].id}`);
   const count = group.length === 1 ? "" : `<span class="board-count">× ${group.length}</span>`;
   const bar = b.pieces
-    .map((p) => {
+    .map((p, i) => {
       const pct = (p.length_16 / b.length_16) * 100;
       const text = pct > 9 ? `<span>${esc(p.length)}</span>` : "";
-      return `<div class="cut kind-${p.kind}" style="width:${pct}%" title="${esc(p.label)}, ${esc(p.length)}">${text}</div>`;
+      return `<div class="cut kind-${p.kind}" data-row="${i}" style="width:${pct}%" title="${esc(p.label)}, ${esc(p.length)}">${text}</div>`;
     })
     .join("");
   const pieces = b.pieces
     .map((p, i) => {
-      const labels = esc(group.map((g) => g.pieces[i].label).join(", "));
-      return `<li><span class="num">${esc(p.length)}</span><span><span class="swatch kind-${p.kind}"></span>${KIND_NAMES[p.kind] ?? p.kind}</span><span class="labels">${labels}</span></li>`;
+      const labels = group
+        .map((g) => `<span class="piece-label" data-label="${esc(g.pieces[i].label)}" data-board="${esc(g.id)}">${esc(g.pieces[i].label)}</span>`)
+        .join(", ");
+      const kind = KIND_NAMES[p.kind] ?? p.kind;
+      return `<li data-row="${i}" data-kind="${esc(kind.toLowerCase())}"><span class="num">${esc(p.length)}</span><span><span class="swatch kind-${p.kind}"></span>${kind}</span><span class="labels">${labels}</span></li>`;
     })
     .join("");
+  const search = esc([...group.map((g) => g.id), `${b.size} × ${b.length}`, `${b.size} ${b.length}`].join(" ").toLowerCase());
   return `
-    <article class="board">
+    <article class="board" data-count="${group.length}" data-search="${search}">
       <header><strong>${ids}</strong><span>${b.size} × ${b.length}</span>${count}</header>
       <div class="board-bar">${bar}<div class="offcut"></div></div>
       <ol>${pieces}<li class="offcut-row"><span class="num">${b.offcut}</span><span>Offcut</span><span></span></li></ol>
