@@ -2082,3 +2082,23 @@ dialog.replace p {
   opacity: 0.45;
   cursor: not-allowed;
 }
+.print-bar .zoom {
+  display: inline-flex;
+}
+.print-bar .zoom .button {
+  border-radius: 0;
+  margin-left: -1px;
+  padding: 0 10px;
+}
+.print-bar .zoom .button:first-child {
+  border-radius: 8px 0 0 8px;
+  margin-left: 0;
+}
+.print-bar .zoom .button:last-child {
+  border-radius: 0 8px 8px 0;
+}
+.print-bar .zoom-level {
+  min-width: 58px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
