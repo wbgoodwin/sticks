@@ -197,10 +197,23 @@ export async function openInBrowser(url: string): Promise<void> {
   else window.open(url, "_blank", "noopener");
 }
 
+let checkoutOpen = false;
+
 /** Starts the paid plan in the browser, ending on `endsOn` (YYYY-MM-DD) when given. */
 export async function upgrade(endsOn?: string): Promise<void> {
   const { url } = await yard<{ url: string }>("POST", "/billing/checkout", endsOn ? { endsOn } : {});
   await openInBrowser(url);
+  checkoutOpen = true;
+}
+
+/**
+ * After checkout: has the server ask Stripe for the plan, in case Stripe's
+ * own notice is late. Only while a checkout this session started is open.
+ */
+export async function checkPayment(): Promise<void> {
+  if (!checkoutOpen) return;
+  const { paid } = await yard<{ paid: boolean }>("POST", "/billing/refresh");
+  if (paid) checkoutOpen = false;
 }
 
 export async function manageBilling(): Promise<void> {

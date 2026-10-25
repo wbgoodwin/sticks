@@ -27,7 +27,7 @@ import { openSection, revealOpening, renderPanel, wallName, type PanelContext, t
 import { packetZoom } from "./packet-zoom";
 import { bounds, factsAt, movesUpAndDown, snap, type Item, type Spot } from "./snap";
 import { renderSettings } from "./settings";
-import { accountsEnabled, email, finishSignIn, me, onAccountChange, signedIn, type Me } from "./account";
+import { accountsEnabled, checkPayment, email, finishSignIn, me, onAccountChange, signedIn, type Me } from "./account";
 import { renderAccount, statusText } from "./account-ui";
 import { onSyncStatus, scheduleSync, setSyncEnabled, syncStatus, unlink } from "./sync";
 import { ensureStock, fromTemplate, load, loadFiled, normalize, save, saveFiled, TEMPLATES } from "./state";
@@ -1333,6 +1333,7 @@ const accountContext = {
 
 /** Fetches the plan and turns sync on or off to match. */
 async function refreshAccount(): Promise<Me | null> {
+  if (signedIn()) await checkPayment().catch(() => {});
   account = signedIn() ? await me() : null;
   setSyncEnabled(Boolean(account?.paid), project);
   showAccount();
@@ -1364,7 +1365,9 @@ onSyncStatus((s) => {
 });
 // Back from the browser after paying: check the plan again.
 window.addEventListener("focus", () => {
-  if (signedIn() && !account?.paid) refreshAccount().catch(() => {});
+  if (!signedIn() || account?.paid) return;
+  if (accountDialog.open) void renderAccount(accountBody, accountContext);
+  else refreshAccount().catch(() => {});
 });
 
 loadCore().then(async () => {
