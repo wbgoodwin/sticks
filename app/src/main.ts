@@ -20,6 +20,7 @@ import {
 } from "./core";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { mountCommand } from "./command";
+import { checkForUpdates, VERSION } from "./updates";
 import { dollars, findInCuts, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES, type DragOverlay, type Scale } from "./elevation";
 import { openSection, revealOpening, renderPanel, wallName, type PanelContext, type PanelTab } from "./panel";
@@ -35,7 +36,7 @@ import { HIDDEN_LAYERS, LAYERS, layerOf, Viewer, type Layer } from "./view3d";
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><span class="logo" aria-hidden="true"></span>Sticks</div>
+    <div class="brand" title="Sticks ${VERSION}"><span class="logo" aria-hidden="true"></span>Sticks</div>
     <input class="project-name" aria-label="Project name" spellcheck="false" autocomplete="off" />
     <div class="stats" aria-live="polite"></div>
     <div class="actions">
@@ -69,6 +70,7 @@ app.innerHTML = `
       <div class="info" hidden></div>
       <div class="banner" hidden></div>
       <div class="tooltip" hidden></div>
+      <div class="update" role="status" hidden></div>
     </div>
     <div class="resizer" data-pane="schedule" role="separator" aria-orientation="horizontal" aria-controls="schedule" aria-label="Resize lists" tabindex="0"></div>
     <section class="schedule" id="schedule">
@@ -1099,7 +1101,10 @@ document.addEventListener("click", (e) => {
   if (!menu.contains(e.target as Node)) menu.open = false;
 });
 
-mountCommand($<HTMLDivElement>(".command"), {
+// Plain-English changes ask Jev, which needs a key only the dev server or the
+// account server has, so the bar is off unless VITE_JEV=on or the build is set
+// up for accounts.
+if (import.meta.env.VITE_JEV === "on" || accountsEnabled) mountCommand($<HTMLDivElement>(".command"), {
   get project() {
     return project;
   },
@@ -1378,3 +1383,6 @@ loadCore().then(async () => {
     showProblem(message(e));
   }
 });
+
+// The dev server is always the newest code, so only built apps check.
+if (!import.meta.env.DEV) void checkForUpdates($<HTMLDivElement>(".update"));
