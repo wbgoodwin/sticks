@@ -98,8 +98,8 @@ export interface DrawingView {
   /** What `drawing` takes, such as `roof` or `porch-rafter`. */
   id: string;
   name: string;
-  /** The part it shows: `floor`, `roof`, `porch` or `sheathing`. */
-  part: "floor" | "roof" | "porch" | "sheathing";
+  /** The part it shows: `floor`, `roof`, `porch`, `sheathing` or `deck`. */
+  part: "floor" | "roof" | "porch" | "sheathing" | "deck";
 }
 
 export interface FrameView {
@@ -109,7 +109,28 @@ export interface FrameView {
   /** The porch roof, posts and beam, and its deck when it has one. */
   porch: PlanView | null;
   sheathing: SheathingView | null;
+  /** A deck on its own, with its sizes checked against its code. */
+  deck: DeckView | null;
   drawings: DrawingView[];
+}
+
+/** One size checked against the deck's code. */
+export interface CodeCheckView {
+  /** Like `Joist span`. */
+  item: string;
+  actual: string;
+  allowed: string;
+  ok: boolean;
+  /** Like `Fairfax Table 2, southern pine 2x8 at 16" o.c.`. */
+  source: string;
+}
+
+export interface DeckView extends PlanView {
+  checks: CodeCheckView[];
+  /** The rules it was checked against. */
+  code: string;
+  /** Who owns the plans, as every deck sheet says. */
+  notice: string[];
 }
 
 export type SolidKind = MemberKind | "pier" | "subfloor" | "sheathing";
@@ -253,6 +274,8 @@ export interface ProjectJson {
   roof?: RoofJson;
   porch?: PorchJson;
   sheathing?: SheathingJson;
+  /** A deck on its own, beside the building or with none. */
+  deck?: DeckJson;
   hardware?: HardwareJson;
   wall: WallJson[];
 }
@@ -319,17 +342,50 @@ export interface PorchJson {
   overhang?: string;
   ledger?: string;
   ledger_height?: string;
-  deck?: DeckJson;
+  deck?: PorchDeckJson;
 }
 
 /** Decking on joists that hang from the floor's rim. */
-export interface DeckJson {
+export interface PorchDeckJson {
   joist?: string;
   beam?: string;
   decking?: string;
   gap?: string;
   /** How far the deck's top sits below the subfloor's. */
   step_down?: string;
+}
+
+/** A freestanding deck on beams, posts and footings. Left out, a field takes its default. */
+export interface DeckJson {
+  /** Along the beams. */
+  width?: string;
+  /** Along the joists. */
+  depth?: string;
+  /** Grade to the top of the decking. */
+  height?: string;
+  joist?: string;
+  on_center?: string;
+  beam?: string;
+  beam_plies?: number;
+  beams?: number;
+  /** Joists on top of the beams, or hung level with them. */
+  beam_style?: "under" | "flush";
+  /** Joists past the outer beams, each side. */
+  overhang?: string;
+  support?: "piers" | "posts" | "blocks";
+  post?: string;
+  /** Left out, the widest the code's beam span allows. */
+  post_spacing?: string;
+  post_inset?: string;
+  decking?: string;
+  decking_material?: "wood" | "composite";
+  gap?: string;
+  code?: "irc2021" | "fairfax2021";
+  species?: "southern_pine" | "douglas_fir" | "redwood";
+  soil_psf?: number;
+  live_psf?: number;
+  frost_depth?: string;
+  pier_above_grade?: string;
 }
 
 /** Sheet thicknesses; a part left out isn't sheathed. */

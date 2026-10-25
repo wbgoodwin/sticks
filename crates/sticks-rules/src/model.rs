@@ -15,6 +15,7 @@ use serde::Serialize;
 use sticks_core::{Length, Member, MemberKind, Project};
 
 use crate::building::{FramedProject, SIDES};
+use crate::deck::FramedDeck;
 use crate::floor::{FramedFloor, Pier};
 use crate::layout::{Placed, Rect};
 use crate::porch::FramedPorch;
@@ -42,7 +43,8 @@ pub enum OtherKind {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Solid {
     pub label: String,
-    /// The part it belongs to: a wall id, `floor`, `roof` or `porch`.
+    /// The part it belongs to: a wall id, `floor`, `roof`, `porch`,
+    /// `porch-deck` or `deck`.
     pub part: String,
     pub kind: SolidKind,
     /// The member it shows, for framing members.
@@ -113,7 +115,65 @@ pub fn model(project: &Project, framed: &FramedProject) -> Vec<Solid> {
             }
         }
     }
+    if let Some(Ok(deck)) = &framed.deck {
+        // Beside a building, the deck stands to its right with its top level
+        // with the floor; on its own, the ground is at zero.
+        let (dx, dz) = match &project.building {
+            Some(b) => (inches(b.width) + 48.0, -inches(deck.heights.top)),
+            None => (0.0, 0.0),
+        };
+        let start = out.len();
+        deck_solids(&mut out, deck);
+        for s in &mut out[start..] {
+            s.origin[0] += dx;
+            s.origin[2] += dz;
+        }
+    }
     out
+}
+
+/// A deck on its own footings: decking on joists and rims, the beams under
+/// them or level with them, posts, and round concrete footings from below
+/// the ground up to the pier tops.
+fn deck_solids(out: &mut Vec<Solid>, deck: &FramedDeck) {
+    let h = &deck.heights;
+    let (top, jt, jb) = (inches(h.top), inches(h.joist_top), inches(h.joist_bottom));
+    let (bt, bb, pt) = (
+        inches(h.beam_top),
+        inches(h.beam_bottom),
+        inches(h.pier_top),
+    );
+    for p in &deck.members {
+        let (lo, hi) = match p.member.kind {
+            MemberKind::Decking => (jt, top),
+            MemberKind::Beam => (bb, bt),
+            MemberKind::Post => (pt, bb),
+            _ => (jb, jt),
+        };
+        out.push(plan_solid(p, "deck", lo, hi));
+    }
+    for (i, (pier, footing)) in deck.piers.iter().zip(&deck.footings).enumerate() {
+        let r = inches(footing.diameter) / 2.0;
+        let (cx, cy) = (inches(pier.x), inches(pier.y));
+        let profile = (0..16)
+            .map(|k| {
+                let a = k as f64 * std::f64::consts::PI / 8.0;
+                [cx + r * a.cos(), cy + r * a.sin()]
+            })
+            .collect();
+        let bottom = -inches(footing.depth);
+        out.push(Solid {
+            label: format!("deck footing {}", i + 1),
+            part: "deck".to_string(),
+            kind: SolidKind::Other(OtherKind::Pier),
+            member: None,
+            profile,
+            origin: [0.0, 0.0, bottom],
+            u: [1.0, 0.0, 0.0],
+            v: [0.0, 1.0, 0.0],
+            depth: pt - bottom,
+        });
+    }
 }
 
 /// Where a building wall stands: the origin on its inside face at its left
@@ -256,7 +316,7 @@ fn pier_solids(out: &mut Vec<Solid>, piers: &[Pier], top: f64, part: &str) {
     for (i, pier) in piers.iter().enumerate() {
         let (x, y) = (inches(pier.x) - PIER / 2.0, inches(pier.y) - PIER / 2.0);
         out.push(Solid {
-            label: format!("{part} pier {}", i + 1),
+            label: format!("{} pier {}", part.replace('-', " "), i + 1),
             part: part.to_string(),
             kind: SolidKind::Other(OtherKind::Pier),
             member: None,
@@ -452,9 +512,9 @@ fn porch_solids(out: &mut Vec<Solid>, porch: &FramedPorch) {
                 MemberKind::Beam => (bb, jb),
                 _ => (jb, jt),
             };
-            out.push(plan_solid(p, "deck", lo, hi));
+            out.push(plan_solid(p, "porch-deck", lo, hi));
         }
-        pier_solids(out, &deck.piers, bb, "deck");
+        pier_solids(out, &deck.piers, bb, "porch-deck");
     }
 }
 
@@ -653,7 +713,7 @@ mod tests {
         assert!(hi[1] <= 0.01 && lo[1] < -72.0, "{lo:?} {hi:?}");
         assert!(hi[2] <= 117.01, "{hi:?}");
         // The deck sits a step below the floor.
-        let [_, hi] = bounds(&part("deck")).unwrap();
+        let [_, hi] = bounds(&part("porch-deck")).unwrap();
         assert!(close(hi[2], -1.0), "{hi:?}");
         // Wall sheathing hangs off the outside faces.
         let sheathing: Vec<Solid> = m

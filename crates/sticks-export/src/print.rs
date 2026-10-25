@@ -9,8 +9,8 @@ use sticks_hardware::HardwareList;
 use sticks_rules::FramedProject;
 
 use crate::svg::{
-    deck_svg, floor_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg, wall_svg,
-    NOTICE,
+    deck_checks_svg, deck_notice, deck_plan_svg, deck_section_svg, decking_svg, floor_svg,
+    porch_deck_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg, wall_svg, NOTICE,
 };
 
 fn esc(s: &str) -> String {
@@ -110,6 +110,7 @@ td.num, th.num {{ text-align: right; }}
 .board h3 {{ font-size: 10pt; margin: 0 0 2pt; }}
 .notice {{ color: #666; font-size: 8pt; margin-top: 12pt; }}
 .problem {{ color: #a33; }}
+.owner {{ background: #fff8e6; border: 0.75pt solid #c9a86a; padding: 6pt 8pt; }}
 @media print {{ body {{ background: none; }} .page {{ margin: 0; }} }}
 </style>
 </head>
@@ -118,6 +119,18 @@ td.num, th.num {{ text-align: right; }}
 <h1>{name}</h1>
 "#
     );
+    if let Some(deck) = &project.deck {
+        let notice = deck_notice(deck);
+        // The second line opens with the heading, so it's bolded rather than repeated.
+        let (head, rest) = notice[1].split_once(": ").unwrap_or(("", &notice[1]));
+        let _ = writeln!(
+            out,
+            "<p class=\"owner\"><strong>{}:</strong> {} {}</p>",
+            esc(head),
+            esc(rest),
+            esc(&notice[0])
+        );
+    }
 
     let s = cl.summary();
     let cost = s
@@ -202,6 +215,9 @@ td.num, th.num {{ text-align: right; }}
             None => piers.push(format!("{} under the porch posts", porch.piers.len())),
         }
     }
+    if let Some(Ok(d)) = &framed.deck {
+        piers.push(format!("{} under the deck", d.piers.len()));
+    }
     if !piers.is_empty() {
         let _ = writeln!(
             out,
@@ -228,6 +244,15 @@ td.num, th.num {{ text-align: right; }}
     if let Some(Ok(s)) = &framed.sheathing {
         warnings.extend(s.warnings.iter().map(|x| format!("Sheathing: {x}")));
     }
+    if let Some(Ok(d)) = &framed.deck {
+        warnings.extend(d.warnings.iter().map(|x| format!("Deck: {x}")));
+        warnings.extend(d.checks.iter().filter(|c| !c.ok).map(|c| {
+            format!(
+                "Deck check failed: {}: {} (allowed: {})",
+                c.item, c.actual, c.allowed
+            )
+        }));
+    }
     if !warnings.is_empty() {
         out.push_str("<h2>Worth a second look</h2>\n<ul>\n");
         for w in warnings {
@@ -235,11 +260,21 @@ td.num, th.num {{ text-align: right; }}
         }
         out.push_str("</ul>\n");
     }
-    let _ = writeln!(out, "<p class=\"notice\">{}</p>\n</section>", esc(NOTICE));
+    let notice = match &project.deck {
+        Some(deck) => deck_notice(deck).join(" "),
+        None => NOTICE.to_string(),
+    };
+    let _ = writeln!(out, "<p class=\"notice\">{}</p>\n</section>", esc(&notice));
 
     let mut page = |svg: String| {
         let _ = writeln!(out, "<section class=\"page\">\n{svg}</section>");
     };
+    if let (Some(Ok(d)), Some(deck)) = (&framed.deck, &project.deck) {
+        page(deck_checks_svg(&project.name, deck, d));
+        page(deck_plan_svg(&project.name, deck, d, from));
+        page(deck_section_svg(&project.name, deck, d));
+        page(decking_svg(&project.name, deck, d));
+    }
     for w in framed.walls.iter().flatten() {
         page(wall_svg(&project.name, w, from));
     }
@@ -256,7 +291,7 @@ td.num, th.num {{ text-align: right; }}
     if let Some(Ok(porch)) = &framed.porch {
         page(porch_svg(&project.name, porch, from));
         page(rafter_svg(&project.name, &porch.rafter));
-        if let Some(svg) = deck_svg(&project.name, porch, from) {
+        if let Some(svg) = porch_deck_svg(&project.name, porch, from) {
             page(svg);
         }
     }

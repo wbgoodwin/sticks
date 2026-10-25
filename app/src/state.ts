@@ -1,5 +1,6 @@
 // The project being edited, kept in local storage between sessions.
 
+import deckToml from "../../examples/deck.toml?raw";
 import shedToml from "../../examples/shed.toml?raw";
 import { isSide, projectFromToml, type OpeningJson, type OpeningKind, type ProjectJson, type StockJson } from "./core";
 
@@ -7,16 +8,18 @@ const KEY = "sticks.project.v2";
 /** The TOML of the project as last saved to or opened from a file. */
 const FILED_KEY = "sticks.project.filed";
 
-export type Template = "shed" | "wall";
+export type Template = "shed" | "deck" | "wall";
 
 export const TEMPLATES: [Template, string][] = [
   ["shed", "Reference shed"],
+  ["deck", "Low deck"],
   ["wall", "Single wall"],
 ];
 
-/** A fresh project: the reference shed from the PRD, or one wall with a door. */
+/** A fresh project: the reference shed from the PRD, a low deck, or one wall with a door. */
 export function fromTemplate(template: Template): ProjectJson {
   if (template === "shed") return normalize(projectFromToml(shedToml));
+  if (template === "deck") return normalize(projectFromToml(deckToml));
   return normalize({
     name: "Partition wall",
     rules: { on_center: '16"', wall_lumber: "2x4", layout_from: "left", kerf: '1/8"' },
@@ -76,7 +79,8 @@ export function fascia(rafter: string): string {
 
 /** Every lumber size the frame cuts. */
 export function sizesUsed(project: ProjectJson): string[] {
-  const sizes = [project.rules.wall_lumber, ...project.wall.flatMap((w) => w.opening.map((o) => o.header))];
+  const sizes = project.wall.length ? [project.rules.wall_lumber] : [];
+  sizes.push(...project.wall.flatMap((w) => w.opening.map((o) => o.header)));
   if (project.floor) sizes.push(project.floor.joist, project.floor.beam);
   if (project.floor?.support === "posts") sizes.push(project.floor.post ?? "4x4");
   if (project.roof) sizes.push(project.roof.rafter, project.roof.fascia ?? fascia(project.roof.rafter));
@@ -84,6 +88,11 @@ export function sizesUsed(project: ProjectJson): string[] {
     const p = project.porch;
     sizes.push(p.post ?? "4x4", p.beam ?? "2x8");
     if (p.deck) sizes.push(p.deck.decking ?? "5/4x6", p.deck.beam ?? "4x6");
+  }
+  if (project.deck) {
+    const d = project.deck;
+    sizes.push(d.joist ?? "2x8", d.beam ?? "2x8", d.decking ?? "5/4x6");
+    if (d.support === "posts") sizes.push(d.post ?? "4x4");
   }
   return [...new Set(sizes)];
 }

@@ -4,10 +4,13 @@
 
 use std::fmt::Write;
 
-use sticks_core::{LayoutStart, Length, MemberKind, RoofKind};
+use sticks_core::{
+    BeamStyle, Deck, DeckCode, DeckSupport, LayoutStart, Length, MemberKind, RoofKind,
+};
+use sticks_rules::code::beam_name;
 use sticks_rules::{
-    FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark, Placed,
-    RafterDetail, RafterTop, SheathedFace, Splice,
+    FramedDeck, FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark,
+    Placed, RafterDetail, RafterTop, SheathedFace, Splice,
 };
 
 /// Printed on every drawing: the tool frames what it's told and checks nothing.
@@ -17,11 +20,12 @@ pub const NOTICE: &str =
 const PAGE_W: f64 = 792.0;
 const PAGE_H: f64 = 612.0;
 const MARGIN: f64 = 36.0;
-/// Room under a drawing for rows of layout marks.
+/// Room under a drawing for a row of layout marks.
 const MARK_ROW: f64 = 40.0;
-const MARK_ROWS: usize = 3;
 /// Rotated mark text needs about this much room across.
-const MARK_GAP: f64 = 8.0;
+const MARK_GAP: f64 = 10.0;
+/// Height of a leader's jog over to a mark nudged clear of its neighbor.
+const MARK_JOG: f64 = 6.0;
 
 /// Maps a drawing's inches onto the page, `y` up.
 struct Frame {
@@ -119,13 +123,27 @@ impl Doc {
 .splice-text {{ fill: #c0392b; font-size: 6px; }}
 .dim {{ stroke: #444; stroke-width: 0.5; fill: none; }}
 .dim-text {{ font-size: 8px; fill: #222; }}
-.mark {{ stroke: #888; stroke-width: 0.4; }}
-.mark-text {{ font-size: 6.5px; fill: #222; }}
+.mark {{ stroke: #777; stroke-width: 0.4; fill: none; }}
+.ro {{ stroke: #2b7a3d; stroke-width: 0.75; }}
+.ro-name {{ font-size: 7px; fill: #2b7a3d; }}
+.mark-text {{ font-size: 8px; font-weight: bold; fill: #111; paint-order: stroke; stroke: #fff; stroke-width: 1.5px; stroke-linejoin: round; }}
 .label {{ font-size: 4.5px; fill: #555; }}
 .title {{ font-size: 14px; font-weight: bold; fill: #111; }}
 .sub {{ font-size: 8px; fill: #444; }}
 .notice {{ font-size: 7px; fill: #666; }}
 .pier {{ fill: #fff; stroke: #222; stroke-width: 0.6; }}
+.footing {{ fill: none; stroke: #777; stroke-width: 0.5; stroke-dasharray: 2 2; }}
+.concrete {{ fill: #e4e4e0; stroke: #555; stroke-width: 0.6; }}
+.grade {{ stroke: #6b5a3c; stroke-width: 1.2; }}
+.callout {{ font-size: 7px; fill: #222; }}
+.lead {{ stroke: #888; stroke-width: 0.4; fill: none; }}
+.cell {{ font-size: 7px; fill: #222; }}
+.cell-head {{ font-size: 7px; font-weight: bold; fill: #111; }}
+.ok {{ font-size: 7px; font-weight: bold; fill: #2b7a3d; }}
+.fail {{ font-size: 7px; font-weight: bold; fill: #b3261e; }}
+.rule {{ stroke: #ccc; stroke-width: 0.5; }}
+.box {{ fill: #fff8e6; stroke: #c9a86a; stroke-width: 0.8; }}
+.box-title {{ font-size: 9px; font-weight: bold; fill: #111; }}
 .sheet {{ fill: #f6f1e4; stroke: #222; stroke-width: 0.6; }}
 </style>
 <rect width="{PAGE_W}" height="{PAGE_H}" fill="#fff"/>
@@ -136,6 +154,11 @@ impl Doc {
     }
 
     fn header(&mut self, title: &str, sub: &[String]) {
+        self.header_with(title, sub, &[NOTICE]);
+    }
+
+    /// A header with its own notice lines along the foot of the page.
+    fn header_with(&mut self, title: &str, sub: &[String], notice: &[&str]) {
         self.text(MARGIN, MARGIN + 6.0, "title", "start", title);
         for (i, line) in sub.iter().enumerate() {
             self.text(
@@ -146,7 +169,10 @@ impl Doc {
                 line,
             );
         }
-        self.text(MARGIN, PAGE_H - MARGIN + 14.0, "notice", "start", NOTICE);
+        for (i, line) in notice.iter().enumerate() {
+            let y = PAGE_H - MARGIN + 14.0 - (notice.len() - 1 - i) as f64 * 9.0;
+            self.text(MARGIN, y, "notice", "start", line);
+        }
     }
 
     fn text(&mut self, x: f64, y: f64, class: &str, anchor: &str, text: &str) {
@@ -304,8 +330,10 @@ fn half(l: Length) -> Length {
     Length::from_sixteenths(l.sixteenths() / 2)
 }
 
-/// Layout marks in rows under `base_y`: each mark's measurement, rotated,
-/// at the member's near edge. Crowded marks drop to the next row.
+/// Layout marks in a row under `base_y`: each mark's measurement, rotated,
+/// at the member's near edge. Kings and jacks are left off, since they go
+/// just outside the rough opening brackets; the odd run of marks too close
+/// together, like a corner, is nudged apart with a jog in its leaders.
 fn marks(
     doc: &mut Doc,
     f: &Frame,
@@ -314,35 +342,80 @@ fn marks(
     run: Length,
     base_y: f64,
 ) {
-    let mut ends: Vec<f64> = Vec::new();
-    for m in marks {
-        let edge = match from {
-            LayoutStart::Left => m.at,
-            LayoutStart::Right => run - m.at,
-        };
-        let x = f.x(edge);
-        let row = ends
-            .iter()
-            .position(|&end| (x - end).abs() >= MARK_GAP)
-            .unwrap_or(ends.len());
-        let row = if row >= MARK_ROWS {
-            // Out of rows: reuse the one whose last mark is farthest away.
-            (0..ends.len())
-                .max_by(|&a, &b| (x - ends[a]).abs().total_cmp(&(x - ends[b]).abs()))
-                .unwrap_or(0)
-        } else {
-            row
-        };
-        if row == ends.len() {
-            ends.push(x);
-        } else {
-            ends[row] = x;
-        }
-        // Text reads upward from the bottom of its row; the tick reaches it.
-        let ty = base_y + MARK_ROW * (row as f64 + 1.0);
-        doc.line(x, base_y + 2.0, x, ty - MARK_ROW + 6.0, "mark");
-        doc.vtext(x + 2.2, ty, "mark-text", "start", &format!("{:#}", m.at));
+    let mut placed: Vec<(f64, &LayoutMark)> = marks
+        .iter()
+        .filter(|m| !matches!(m.kind, MemberKind::KingStud | MemberKind::JackStud))
+        .map(|m| {
+            let edge = match from {
+                LayoutStart::Left => m.at,
+                LayoutStart::Right => run - m.at,
+            };
+            (f.x(edge), m)
+        })
+        .collect();
+    placed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let xs: Vec<f64> = placed.iter().map(|p| p.0).collect();
+    let at = spread(&xs, MARK_GAP);
+    // Text hangs down from the end of its leader.
+    let ty = base_y + 2.0 + MARK_JOG;
+    for (&(x, m), &lx) in placed.iter().zip(&at) {
+        doc.line(x, base_y + 2.0, x, ty - MARK_JOG, "mark");
+        doc.line(x, ty - MARK_JOG, lx, ty - 1.5, "mark");
+        doc.vtext(lx + 2.8, ty, "mark-text", "end", &format!("{:#}", m.at));
     }
+}
+
+/// A bracket under each opening at `y` spanning its rough opening, with each
+/// edge measured from the layout end like the marks above it.
+fn rough_openings(doc: &mut Doc, f: &Frame, wall: &FramedWall, from: LayoutStart, y: f64) {
+    for o in &wall.openings {
+        let r = o.rect;
+        let (a, b) = (f.x(r.x), f.x(r.right()));
+        doc.line(a, y, b, y, "ro");
+        doc.line(a, y - 4.0, a, y + 4.0, "ro");
+        doc.line(b, y - 4.0, b, y + 4.0, "ro");
+        for edge in [r.x, r.right()] {
+            let at = match from {
+                LayoutStart::Left => edge,
+                LayoutStart::Right => wall.length - edge,
+            };
+            doc.vtext(
+                f.x(edge) + 2.8,
+                y + 7.0,
+                "mark-text",
+                "end",
+                &format!("{at:#}"),
+            );
+        }
+        if b - a >= o.name.len() as f64 * 4.0 + 4.0 {
+            doc.text((a + b) / 2.0, y - 4.0, "ro-name", "middle", &o.name);
+        }
+    }
+}
+
+/// Where to put labels for marks at `xs` (in order across) so they're at
+/// least `gap` apart: runs of marks too close spread out, centered on where
+/// they are.
+fn spread(xs: &[f64], gap: f64) -> Vec<f64> {
+    // Each run is its marks and where its first label goes.
+    let mut runs: Vec<(Vec<f64>, f64)> = Vec::new();
+    for &x in xs {
+        let mut run = (vec![x], x);
+        while let Some(prev) = runs.last() {
+            if prev.1 + prev.0.len() as f64 * gap <= run.1 {
+                break;
+            }
+            let (mut all, _) = runs.pop().unwrap();
+            all.extend(run.0);
+            let mid = all.iter().sum::<f64>() / all.len() as f64;
+            let start = mid - (all.len() - 1) as f64 * gap / 2.0;
+            run = (all, start);
+        }
+        runs.push(run);
+    }
+    runs.iter()
+        .flat_map(|(r, start)| (0..r.len()).map(move |i| start + i as f64 * gap))
+        .collect()
 }
 
 fn origin_note(from: LayoutStart, what: &str) -> String {
@@ -393,7 +466,7 @@ pub fn wall_svg(project: &str, wall: &FramedWall, from: LayoutStart) -> String {
         MARGIN + 40.0,
         MARGIN + 70.0,
         PAGE_W - MARGIN - 40.0,
-        PAGE_H - MARGIN - MARK_ROW * MARK_ROWS as f64 - 24.0,
+        PAGE_H - MARGIN - MARK_ROW * 2.0 - 30.0,
     );
     let f = Frame::fit(
         0.0,
@@ -406,6 +479,12 @@ pub fn wall_svg(project: &str, wall: &FramedWall, from: LayoutStart) -> String {
         format!("{} long, {heights}, seen from outside", wall.length),
         format!("{}. {}", origin_note(from, "Layout marks"), f.note()),
     ];
+    if !wall.openings.is_empty() {
+        sub.push(
+            "Green brackets are rough openings; the jack and king studs go just outside each edge."
+                .to_string(),
+        );
+    }
     if !wall.splices.is_empty() {
         sub.push("Red lines are plate splices, each centered on a stud.".to_string());
     }
@@ -471,6 +550,13 @@ pub fn wall_svg(project: &str, wall: &FramedWall, from: LayoutStart) -> String {
         from,
         wall.length,
         f.y(Length::ZERO),
+    );
+    rough_openings(
+        &mut doc,
+        &f,
+        wall,
+        from,
+        f.y(Length::ZERO) + MARK_ROW + 12.0,
     );
     doc.finish()
 }
@@ -819,7 +905,7 @@ pub fn porch_svg(project: &str, porch: &FramedPorch, from: LayoutStart) -> Strin
 
 /// The porch deck framing in plan: ledger, joists, rim, the beam (dashed)
 /// on its piers, with joist marks. The decking is described, not drawn.
-pub fn deck_svg(project: &str, porch: &FramedPorch, from: LayoutStart) -> Option<String> {
+pub fn porch_deck_svg(project: &str, porch: &FramedPorch, from: LayoutStart) -> Option<String> {
     let deck = porch.deck.as_ref()?;
     let mut doc = Doc::new(&format!("{project}: porch deck"));
     let area = (
@@ -1179,11 +1265,653 @@ pub fn rafter_svg(project: &str, r: &RafterDetail) -> String {
     doc.finish()
 }
 
+/// The line every deck sheet carries: what the sizes were checked against,
+/// and that the builder owns the plans.
+pub fn deck_notice(deck: &Deck) -> [String; 2] {
+    [
+        format!(
+            "Sizes checked by Sticks against {}. Sticks is not an engineer or a building official.",
+            deck.code.name()
+        ),
+        "You are responsible for these plans: confirm every size, footing and connector with your building department before you build."
+            .to_string(),
+    ]
+}
+
+fn deck_header(doc: &mut Doc, deck: &Deck, title: &str, sub: &[String]) {
+    let notice = deck_notice(deck);
+    doc.header_with(title, sub, &[&notice[0], &notice[1]]);
+}
+
+/// A chain of dimensions between `stops` along `x`, at height `y` on the page.
+fn x_chain(doc: &mut Doc, f: &Frame, stops: &[Length], y: f64) {
+    for w in stops.windows(2) {
+        if w[1] > w[0] {
+            doc.dimension(
+                (f.x(w[0]), y),
+                (f.x(w[1]), y),
+                &format!("{:#}", w[1] - w[0]),
+            );
+        }
+    }
+}
+
+/// A chain of dimensions between `stops` along `y`, at `x` on the page.
+fn y_chain(doc: &mut Doc, f: &Frame, stops: &[Length], x: f64) {
+    for w in stops.windows(2) {
+        if w[1] > w[0] {
+            doc.dimension(
+                (x, f.y(w[0])),
+                (x, f.y(w[1])),
+                &format!("{:#}", w[1] - w[0]),
+            );
+        }
+    }
+}
+
+fn of_kind(members: &[Placed], kinds: &[MemberKind]) -> Vec<Placed> {
+    members
+        .iter()
+        .filter(|p| kinds.contains(&p.member.kind))
+        .cloned()
+        .collect()
+}
+
+/// How the deck stands, for sheet notes: `4x4 posts 10-1/2" long on 16" round footings`.
+fn standing(d: &FramedDeck) -> String {
+    let footing = d
+        .footings
+        .iter()
+        .max_by_key(|f| f.diameter)
+        .map(|f| {
+            let kind = f.kind.map(|k| format!("type {k}, ")).unwrap_or_default();
+            format!(
+                "{kind}{:#} round footings {:#} thick, bottoms {:#} below grade",
+                f.diameter, f.thickness, f.depth
+            )
+        })
+        .unwrap_or_default();
+    let post = d
+        .members
+        .iter()
+        .find(|p| p.member.kind == MemberKind::Post)
+        .map(|p| {
+            format!(
+                "{} posts {} long",
+                p.member.size,
+                p.member.length.to_tape_string()
+            )
+        });
+    match (d.support, post) {
+        (DeckSupport::Blocks, Some(p)) => format!("{p} in precast deck blocks"),
+        (_, Some(p)) => format!("{p} on {footing}"),
+        _ => format!("beams on concrete piers: {footing}"),
+    }
+}
+
+/// The deck's framing plan seen from above, front at the bottom: joists,
+/// rims and blocking, beams dashed, posts, piers and the footings around
+/// them, with the beam lines and supports dimensioned.
+pub fn deck_plan_svg(project: &str, deck: &Deck, d: &FramedDeck, from: LayoutStart) -> String {
+    let title = format!("{project}: deck framing plan");
+    let mut doc = Doc::new(&title);
+    let area = (
+        MARGIN + 50.0,
+        MARGIN + 100.0,
+        PAGE_W - MARGIN - 90.0,
+        PAGE_H - MARGIN - MARK_ROW * 2.0 - 40.0,
+    );
+    let f = Frame::fit(
+        0.0,
+        0.0,
+        d.width.as_inches_f64(),
+        d.depth.as_inches_f64(),
+        area,
+    );
+    let joist = deck.joist;
+    let lines = d.beam_y.len();
+    doc.header_with(
+        &title,
+        &[
+            format!(
+                "{} wide by {} deep, decking {} above grade. {joist} joists at {:#} on center {} {lines} beams of {}",
+                d.width,
+                d.depth,
+                d.heights.top,
+                d.layout.oc,
+                if d.beam_style == BeamStyle::Flush {
+                    "hung between"
+                } else {
+                    "on"
+                },
+                beam_name(d.beam, d.beam_plies)
+            ),
+            format!("Beams on {}", standing(d)),
+            format!(
+                "Seen from above with the front at the bottom. Beams dashed, footings as dashed circles. {}. {}",
+                origin_note(from, "Joist marks"),
+                f.note()
+            ),
+        ],
+        &[&deck_notice(deck)[0], &deck_notice(deck)[1]],
+    );
+    let framing = of_kind(
+        &d.members,
+        &[
+            MemberKind::Joist,
+            MemberKind::RimJoist,
+            MemberKind::Blocking,
+        ],
+    );
+    let beams = of_kind(&d.members, &[MemberKind::Beam]);
+    let posts = of_kind(&d.members, &[MemberKind::Post]);
+    members(&mut doc, &f, &framing, true);
+    members(&mut doc, &f, &beams, false);
+    members(&mut doc, &f, &posts, false);
+    for (p, footing) in d.piers.iter().zip(&d.footings) {
+        doc.circle(f.x(p.x), f.y(p.y), f.len(half(footing.diameter)), "footing");
+        if posts.is_empty() {
+            doc.circle(f.x(p.x), f.y(p.y), 3.0, "pier");
+        }
+    }
+    let structural = of_kind(
+        &d.members,
+        &[MemberKind::Joist, MemberKind::RimJoist, MemberKind::Beam],
+    );
+    splices(&mut doc, &f, &structural, &d.splices);
+
+    // Width over the top, the supports along a beam under it.
+    let top = f.y(d.depth) - 14.0;
+    doc.dimension(
+        (f.x(Length::ZERO), top),
+        (f.x(d.width), top),
+        &d.width.to_string(),
+    );
+    let mut stops = vec![Length::ZERO];
+    stops.extend(d.support_x.iter().copied());
+    stops.push(d.width);
+    x_chain(&mut doc, &f, &stops, top - 16.0);
+    doc.text(
+        f.x(Length::ZERO) - 4.0,
+        top - 22.0,
+        "sub",
+        "end",
+        "post centers",
+    );
+    // Depth on the left, beam centers on the right.
+    let left = f.x(Length::ZERO) - 18.0;
+    doc.dimension(
+        (left, f.y(Length::ZERO)),
+        (left, f.y(d.depth)),
+        &d.depth.to_string(),
+    );
+    let mut stops = vec![Length::ZERO];
+    stops.extend(d.beam_y.iter().copied());
+    stops.push(d.depth);
+    let right = f.x(d.width) + 20.0;
+    y_chain(&mut doc, &f, &stops, right);
+    doc.text(
+        right + 6.0,
+        f.y(d.depth) - 8.0,
+        "sub",
+        "start",
+        "beam centers",
+    );
+    marks(&mut doc, &f, &d.marks, from, d.width, f.y(Length::ZERO));
+    doc.finish()
+}
+
+/// A section through the deck along the joists at a line of posts: grade,
+/// footings, posts, beams, a joist and the decking, with heights and the
+/// connections called out.
+pub fn deck_section_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
+    let title = format!("{project}: deck section");
+    let mut doc = Doc::new(&title);
+    let h = d.heights;
+    let deepest = d
+        .footings
+        .iter()
+        .map(|f| f.depth)
+        .max()
+        .unwrap_or(Length::inches(12));
+    let widest = d
+        .footings
+        .iter()
+        .map(|f| f.diameter)
+        .max()
+        .unwrap_or(Length::inches(12));
+    let below = deepest + Length::inches(4);
+    let area = (
+        MARGIN + 60.0,
+        MARGIN + 80.0,
+        PAGE_W - MARGIN - 60.0,
+        PAGE_H - MARGIN - 175.0,
+    );
+    let f = Frame::fit(
+        -12.0,
+        -below.as_inches_f64(),
+        (d.depth + Length::inches(24)).as_inches_f64(),
+        (h.top + below + Length::inches(4)).as_inches_f64(),
+        area,
+    );
+    deck_header(
+        &mut doc,
+        deck,
+        &title,
+        &[
+            format!(
+                "Cut along the joists through a line of posts, front at the left. {}",
+                f.note()
+            ),
+            format!("Beams on {}", standing(d)),
+        ],
+    );
+    let rect = |doc: &mut Doc, x: Length, z: Length, w: Length, hgt: Length, class: &str| {
+        doc.polygon(
+            &[
+                (f.x(x), f.y(z)),
+                (f.x(x + w), f.y(z)),
+                (f.x(x + w), f.y(z + hgt)),
+                (f.x(x), f.y(z + hgt)),
+            ],
+            class,
+        );
+    };
+    // Grade.
+    doc.line(
+        f.x(Length::inches(-12)),
+        f.y(Length::ZERO),
+        f.x(d.depth + Length::inches(12)),
+        f.y(Length::ZERO),
+        "grade",
+    );
+    doc.text(
+        f.x(Length::inches(-12)),
+        f.y(Length::ZERO) + 10.0,
+        "sub",
+        "start",
+        "grade",
+    );
+    let joist = deck.joist;
+    let t = joist.actual_thickness();
+    let bw = d.beam.actual_thickness() * i64::from(d.beam_plies);
+    let post = d.members.iter().find(|p| p.member.kind == MemberKind::Post);
+    for &y in &d.beam_y {
+        // Concrete from the footing's bottom up to the pier top.
+        let fw = widest;
+        rect(
+            &mut doc,
+            y - half(fw),
+            -deepest,
+            fw,
+            deepest + h.pier_top,
+            "concrete",
+        );
+        if let Some(p) = post {
+            let pw = p.member.size.actual_width();
+            rect(
+                &mut doc,
+                y - half(pw),
+                h.pier_top,
+                pw,
+                h.beam_bottom - h.pier_top,
+                "m post",
+            );
+        }
+        rect(
+            &mut doc,
+            y - half(bw),
+            h.beam_bottom,
+            bw,
+            h.beam_top - h.beam_bottom,
+            "m header",
+        );
+    }
+    // A joist, with the rims at its ends when it sits on the beams.
+    let jh = h.joist_top - h.joist_bottom;
+    if d.beam_style == BeamStyle::Flush {
+        for w in d.beam_y.windows(2) {
+            rect(
+                &mut doc,
+                w[0] + half(bw),
+                h.joist_bottom,
+                w[1] - w[0] - bw,
+                jh,
+                "m joist",
+            );
+        }
+    } else {
+        rect(&mut doc, Length::ZERO, h.joist_bottom, t, jh, "m rim");
+        rect(&mut doc, t, h.joist_bottom, d.depth - t * 2, jh, "m joist");
+        rect(&mut doc, d.depth - t, h.joist_bottom, t, jh, "m rim");
+    }
+    rect(
+        &mut doc,
+        Length::ZERO,
+        h.joist_top,
+        d.depth,
+        h.top - h.joist_top,
+        "m decking",
+    );
+
+    // What each piece is, beside the first post line.
+    let y = d.beam_y[0];
+    let label = |doc: &mut Doc, x: Length, z: Length, text: &str| {
+        doc.text(f.x(x), f.y(z) + 2.5, "callout", "start", text);
+    };
+    label(
+        &mut doc,
+        y + half(widest) + Length::inches(2),
+        -half(deepest),
+        "concrete footing",
+    );
+    if let Some(p) = post {
+        label(
+            &mut doc,
+            y + half(p.member.size.actual_width()) + Length::inches(2),
+            h.pier_top + half(h.beam_bottom - h.pier_top),
+            &format!("{} post", p.member.size),
+        );
+    }
+    let beam_label = format!("{} beam", beam_name(d.beam, d.beam_plies));
+    let beam_mid = h.beam_bottom + half(h.beam_top - h.beam_bottom);
+    if d.beam_style == BeamStyle::Flush {
+        label(
+            &mut doc,
+            y + half(bw) + Length::inches(18),
+            h.joist_bottom - Length::inches(3),
+            &beam_label,
+        );
+    } else {
+        label(
+            &mut doc,
+            y + half(bw) + Length::inches(2),
+            beam_mid,
+            &beam_label,
+        );
+    }
+    label(
+        &mut doc,
+        d.depth.mul_div(1, 2) - Length::inches(12),
+        h.joist_bottom + half(h.joist_top - h.joist_bottom),
+        &format!("{joist} joist"),
+    );
+    doc.text(
+        f.x(d.depth.mul_div(1, 2)),
+        f.y(h.top) - 4.0,
+        "callout",
+        "middle",
+        &format!("{} decking", deck.decking),
+    );
+
+    // Heights on the left.
+    let left = f.x(Length::ZERO) - 26.0;
+    doc.dimension(
+        (left, f.y(Length::ZERO)),
+        (left, f.y(h.top)),
+        &format!("{:#} to top of decking", h.top),
+    );
+    doc.dimension(
+        (left, f.y(-deepest)),
+        (left, f.y(Length::ZERO)),
+        &format!("{:#}", deepest),
+    );
+    // Beam centers along the bottom.
+    let mut stops = vec![Length::ZERO];
+    stops.extend(d.beam_y.iter().copied());
+    stops.push(d.depth);
+    x_chain(&mut doc, &f, &stops, f.y(-below) + 14.0);
+
+    // Callouts under the drawing.
+    let mut notes = vec![
+        format!(
+            "Decking: {} boards, (2) 8d nails or (2) #8 screws at every joist, 1/8\" gaps",
+            deck.decking
+        ),
+        if d.beam_style == BeamStyle::Flush {
+            format!(
+                "Joists: {joist} at {:#} o.c. in face-mount hangers at least 60% of the joist depth",
+                d.layout.oc
+            )
+        } else {
+            format!(
+                "Joists: {joist} at {:#} o.c., a hurricane tie (100 lb uplift and lateral) at every joist on a beam",
+                d.layout.oc
+            )
+        },
+        format!(
+            "Beams: {}, plies joined with 10d nails or #10 x 3\" screws in 2 staggered rows at 16\" o.c., 2 at each end and splice",
+            beam_name(d.beam, d.beam_plies)
+        ),
+    ];
+    if let Some(p) = post {
+        notes.push(format!(
+            "Posts: {} {} long, a post cap sized for the beam on top and a post base with a 1\" standoff below",
+            p.member.size,
+            p.member.length.to_tape_string()
+        ));
+    }
+    if let Some(ft) = d.footings.iter().max_by_key(|f| f.diameter) {
+        let kind = ft.kind.map(|k| format!("type {k}, ")).unwrap_or_default();
+        notes.push(format!(
+            "Footings: {kind}{:#} round or {:#} square, at least {:#} thick, bottom {:#} below grade on undisturbed soil",
+            ft.diameter, ft.side, ft.thickness, ft.depth
+        ));
+    }
+    let y0 = PAGE_H - MARGIN - 105.0;
+    for (i, n) in notes.iter().enumerate() {
+        doc.text(MARGIN, y0 + i as f64 * 11.0, "callout", "start", n);
+    }
+    doc.finish()
+}
+
+/// Decking boards in plan, numbered to match the cut list.
+pub fn decking_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
+    let title = format!("{project}: decking");
+    let mut doc = Doc::new(&title);
+    let area = (
+        MARGIN + 40.0,
+        MARGIN + 70.0,
+        PAGE_W - MARGIN - 40.0,
+        PAGE_H - MARGIN - 40.0,
+    );
+    let f = Frame::fit(
+        0.0,
+        0.0,
+        d.width.as_inches_f64(),
+        d.depth.as_inches_f64(),
+        area,
+    );
+    deck_header(
+        &mut doc,
+        deck,
+        &title,
+        &[
+            format!(
+                "{} rows of {} across the joists, a full board at the front, end joints on joists and staggered row to row",
+                d.rows, deck.decking
+            ),
+            format!("Seen from above with the front at the bottom. {}", f.note()),
+        ],
+    );
+    let boards = of_kind(&d.members, &[MemberKind::Decking]);
+    members(&mut doc, &f, &boards, true);
+    let top = f.y(d.depth) - 14.0;
+    doc.dimension(
+        (f.x(Length::ZERO), top),
+        (f.x(d.width), top),
+        &d.width.to_string(),
+    );
+    doc.finish()
+}
+
+/// Splits `text` into lines of at most `width` characters at spaces.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split(' ') {
+        if !line.is_empty() && line.len() + 1 + word.len() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// General notes for a deck under its rules.
+pub fn deck_general_notes(deck: &Deck) -> Vec<String> {
+    match deck.code {
+        DeckCode::Fairfax2021 => vec![
+            "Lumber: preservative-treated southern pine, No. 2 or better. Members touching the ground rated for ground contact (UC4A). Field-treat cut post ends with copper naphthenate.".to_string(),
+            "Fasteners hot-dipped galvanized or stainless; connectors G-185 (ZMAX or equal) or stainless, installed with the maker's fasteners.".to_string(),
+            "Footings bear on solid ground 24\" below grade, deeper where solid ground isn't found; 3,000 psi concrete. Footings within 5' of the house bear as deep as the house footings.".to_string(),
+            "Call Miss Utility (811) before digging. Inspections: footing (holes dug, before concrete), framing (before decking), final.".to_string(),
+            "Keep the approved plat, these plans and the county's Typical Deck Details on site.".to_string(),
+        ],
+        DeckCode::Irc2021 => vec![
+            "Lumber: preservative-treated or naturally durable, No. 2 or better (IRC R507.2). Members touching the ground rated for ground contact.".to_string(),
+            "Fasteners and connectors hot-dipped galvanized or stainless per IRC Table R507.2.3, installed with the maker's fasteners.".to_string(),
+            "Footings at least 12\" below undisturbed ground and below the frost line your building department sets (IRC R507.3).".to_string(),
+            "Call 811 before digging. Ask your building department which inspections it needs; usually footing, framing and final.".to_string(),
+        ],
+    }
+}
+
+/// Every check the deck was put through, with where each limit comes from,
+/// the general notes, and a box for the builder to sign that they own the
+/// plans.
+pub fn deck_checks_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
+    let title = format!("{project}: code checks");
+    let mut doc = Doc::new(&title);
+    let passed = d.checks.iter().filter(|c| c.ok).count();
+    deck_header(
+        &mut doc,
+        deck,
+        &title,
+        &[format!(
+            "{} of {} checks pass against {}. Live load {} psf, dead load 10 psf.",
+            passed,
+            d.checks.len(),
+            deck.code.name(),
+            deck.live_psf
+        )],
+    );
+    // Columns: result, item, design, allowed, source.
+    let cols = [
+        (MARGIN, 28.0, ""),
+        (MARGIN + 28.0, 120.0, "Check"),
+        (MARGIN + 148.0, 170.0, "This deck"),
+        (MARGIN + 318.0, 210.0, "Allowed or required"),
+        (MARGIN + 528.0, 192.0, "Source"),
+    ];
+    let mut y = MARGIN + 52.0;
+    for (x, _, head) in cols {
+        doc.text(x, y, "cell-head", "start", head);
+    }
+    y += 4.0;
+    doc.line(MARGIN, y, PAGE_W - MARGIN, y, "rule");
+    y += 9.0;
+    for c in &d.checks {
+        let cells = [&c.item, &c.actual, &c.allowed, &c.source];
+        let wrapped: Vec<Vec<String>> = cells
+            .iter()
+            .zip(&cols[1..])
+            .map(|(text, (_, w, _))| wrap(text, (w / 3.4) as usize))
+            .collect();
+        let rows = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+        doc.text(
+            cols[0].0,
+            y,
+            if c.ok { "ok" } else { "fail" },
+            "start",
+            if c.ok { "OK" } else { "FAIL" },
+        );
+        for (lines, (x, _, _)) in wrapped.iter().zip(&cols[1..]) {
+            for (i, line) in lines.iter().enumerate() {
+                doc.text(*x, y + i as f64 * 8.5, "cell", "start", line);
+            }
+        }
+        y += rows as f64 * 8.5 + 2.0;
+        doc.line(MARGIN, y - 6.0, PAGE_W - MARGIN, y - 6.0, "rule");
+        y += 3.0;
+    }
+    y += 8.0;
+    doc.text(MARGIN, y, "cell-head", "start", "General notes");
+    y += 10.0;
+    for note in deck_general_notes(deck) {
+        for (i, line) in wrap(&note, 190).iter().enumerate() {
+            let text = if i == 0 {
+                format!("- {line}")
+            } else {
+                format!("  {line}")
+            };
+            doc.text(MARGIN, y, "cell", "start", &text);
+            y += 8.5;
+        }
+    }
+    // The builder's acknowledgement.
+    let box_y = (y + 8.0).min(PAGE_H - MARGIN - 70.0);
+    doc.polygon(
+        &[
+            (MARGIN, box_y),
+            (PAGE_W - MARGIN, box_y),
+            (PAGE_W - MARGIN, box_y + 46.0),
+            (MARGIN, box_y + 46.0),
+        ],
+        "box",
+    );
+    doc.text(
+        MARGIN + 8.0,
+        box_y + 13.0,
+        "box-title",
+        "start",
+        "The builder is responsible for these plans",
+    );
+    doc.text(
+        MARGIN + 8.0,
+        box_y + 24.0,
+        "cell",
+        "start",
+        "Sticks drew these plans from the sizes entered and checked them against the tables above. It is not an engineer, and passing these checks is not a permit.",
+    );
+    doc.text(
+        MARGIN + 8.0,
+        box_y + 38.0,
+        "cell",
+        "start",
+        "I have reviewed these plans and will confirm them with my building department.   Signed ______________________________   Date ____________",
+    );
+    doc.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use sticks_core::Project;
     use sticks_rules::frame_project;
+
+    #[test]
+    fn crowded_marks_spread_apart_around_where_they_are() {
+        // A king and jack 1-1/2" apart at a small scale, then one in the clear.
+        let at = spread(&[100.0, 103.0, 104.0, 200.0], 10.0);
+        assert_eq!(
+            at,
+            vec![
+                92.33333333333333,
+                102.33333333333333,
+                112.33333333333333,
+                200.0
+            ]
+        );
+        let at = spread(&[0.0, 20.0, 40.0], 10.0);
+        assert_eq!(at, vec![0.0, 20.0, 40.0]);
+    }
 
     #[test]
     fn draws_every_part_of_the_shed() {
@@ -1195,14 +1923,28 @@ mod tests {
         assert!(svg.trim_end().ends_with("</svg>"));
         assert!(svg.contains("Backyard shed: front wall"));
         assert!(svg.contains(NOTICE));
-        // Every stud position is printed.
-        for m in &front.marks {
+        // Every stud position is printed, and each opening's rough opening
+        // edges stand in for its kings and jacks.
+        let studs: Vec<_> = front
+            .marks
+            .iter()
+            .filter(|m| !matches!(m.kind, MemberKind::KingStud | MemberKind::JackStud))
+            .collect();
+        for m in &studs {
             assert!(
                 svg.contains(&format!(">{}</text>", esc(&format!("{:#}", m.at)))),
                 "{}",
                 m.at
             );
         }
+        assert_eq!(
+            svg.matches("class=\"mark-text\"").count(),
+            studs.len() + 2 * front.openings.len()
+        );
+        assert_eq!(
+            svg.matches("class=\"ro\"").count(),
+            3 * front.openings.len()
+        );
         assert_eq!(svg.matches("class=\"splice\"").count(), front.splices.len());
 
         let left = framed.walls[2].as_ref().unwrap();
@@ -1232,7 +1974,7 @@ mod tests {
             "{svg}"
         );
         assert!(rafter_svg(&p.name, &porch.rafter).contains("porch rafter"));
-        let svg = deck_svg(&p.name, porch, p.rules.layout_from).unwrap();
+        let svg = porch_deck_svg(&p.name, porch, p.rules.layout_from).unwrap();
         assert_eq!(svg.matches("class=\"pier\"").count(), 4);
 
         let sheathing = framed.sheathing.as_ref().unwrap().as_ref().unwrap();
@@ -1245,6 +1987,25 @@ mod tests {
         assert!(sheathing_svg(&p.name, sheathing, true)
             .unwrap()
             .contains("porch roof"));
+    }
+
+    #[test]
+    fn draws_the_example_deck_with_its_checks_and_notice() {
+        let p =
+            sticks_core::Project::from_toml(include_str!("../../../examples/deck.toml")).unwrap();
+        let framed = sticks_rules::frame_project(&p).unwrap();
+        let d = framed.deck.as_ref().unwrap().as_ref().unwrap();
+        let deck = p.deck.as_ref().unwrap();
+        let checks = deck_checks_svg(&p.name, deck, d);
+        assert_eq!(checks.matches("class=\"ok\"").count(), d.checks.len());
+        assert!(checks.contains("The builder is responsible for these plans"));
+        assert!(checks.contains("Fairfax Table 2"));
+        let plan = deck_plan_svg(&p.name, deck, d, p.rules.layout_from);
+        assert!(plan.contains("You are responsible for these plans"));
+        assert_eq!(plan.matches("class=\"footing\"").count(), d.piers.len());
+        let section = deck_section_svg(&p.name, deck, d);
+        assert!(section.contains("concrete footing") && section.contains("hurricane tie"));
+        assert!(decking_svg(&p.name, deck, d).contains("DK01"));
     }
 
     #[test]

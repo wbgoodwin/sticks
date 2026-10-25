@@ -878,9 +878,13 @@ dialog.settings header p {
   background-size: 24px 24px;
   overflow: hidden;
 }
+.drawing.flat {
+  overflow-y: auto;
+}
 .elevation {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   font-variant-numeric: tabular-nums;
@@ -905,6 +909,8 @@ dialog.settings header p {
 .sheet {
   position: absolute;
   inset: 20px;
+  /* MIN_DRAWING_HEIGHT in main.ts, less the inset. */
+  min-height: 520px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1265,21 +1271,32 @@ dialog.settings header p {
   text-anchor: middle;
 }
 .tick {
-  stroke: var(--text-3);
+  fill: none;
+  stroke: var(--text-2);
   stroke-width: 1;
 }
+/* Stud positions and rough openings, read at the bench. */
 .mark-text {
-  fill: var(--ink);
-  font-size: 11px;
-  text-anchor: end;
-  dominant-baseline: central;
-}
-.mark-text.kind-king_stud,
-.mark-text.kind-jack_stud {
+  fill: var(--text);
+  font-size: 13px;
   font-weight: 600;
+  text-anchor: end;
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
-.mark-text.kind-cripple {
-  fill: var(--text-2);
+.ro {
+  stroke: var(--accent);
+  stroke-width: 1.25;
+}
+.ro-name {
+  fill: var(--accent);
+  font-size: 12px;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 3px;
 }
 .layout-origin {
   fill: var(--text-3);
@@ -1418,6 +1435,56 @@ tr.total td {
   margin: 0 0 12px;
   color: var(--text-3);
   font-size: 12.5px;
+}
+.find-cut {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 10px;
+}
+.find-cut input {
+  max-width: 340px;
+}
+.find-count {
+  color: var(--text-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.find-none {
+  margin: 0 0 12px;
+  color: var(--text-2);
+}
+.boards[hidden],
+.board[hidden],
+.find-none[hidden],
+.on-hand-heading[hidden],
+.cuts-hint[hidden] {
+  display: none;
+}
+.board.flash {
+  animation: flash 1.2s ease-out;
+}
+@keyframes flash {
+  from {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+}
+.board li.match {
+  margin: 0 -6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+.board li.match .labels {
+  white-space: normal;
+}
+.board .piece-label.match {
+  color: var(--accent);
+  font-weight: 600;
+}
+.board-bar .cut.match {
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 .boards {
   display: grid;
@@ -2039,4 +2106,117 @@ dialog.settings.account {
 .synced-list em {
   font-style: normal;
   color: var(--text-3);
+.panel-section.deck-notice {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+.deck-notice p {
+  margin: 4px 0 0;
+  color: var(--text-2);
+}
+.print-bar .owner-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 360px;
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+.print-bar .owner-check[hidden] {
+  display: none;
+}
+.layers label[hidden] {
+  display: none;
+}
+.sheet .checks {
+  align-self: stretch;
+  width: 100%;
+  max-width: 1000px;
+  overflow: auto;
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+}
+.checks-status {
+  margin: 0 0 10px;
+  color: var(--text-2);
+}
+.checks-status strong {
+  color: var(--accent);
+}
+.checks-status.failed strong,
+.checks tr.failed .mark {
+  color: var(--danger);
+}
+.checks table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.checks th,
+.checks td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.checks thead th {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.checks tbody th {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.checks .mark {
+  color: var(--accent);
+  font-weight: 600;
+}
+.checks tr.failed {
+  background: var(--danger-soft);
+}
+.checks .source {
+  color: var(--text-2);
+}
+.checks-notice {
+  margin: 12px 0 0;
+  color: var(--text-2);
+}
+.print-bar .owner-check input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.print-bar .button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.print-bar .zoom {
+  display: inline-flex;
+}
+.print-bar .zoom .button {
+  border-radius: 0;
+  margin-left: -1px;
+  padding: 0 10px;
+}
+.print-bar .zoom .button:first-child {
+  border-radius: 8px 0 0 8px;
+  margin-left: 0;
+}
+.print-bar .zoom .button:last-child {
+  border-radius: 0 8px 8px 0;
+}
+.print-bar .zoom-level {
+  min-width: 58px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
 }
