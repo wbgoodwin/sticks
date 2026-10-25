@@ -10,7 +10,9 @@
     "typecheck": "tsc",
     "tauri": "tauri",
     "app:install": "node scripts/install-app.mjs",
-    "probe:jev": "cargo build -q -p sticks-cli && node scripts/jev-probe.ts"
+    "probe:jev": "cargo build -q -p sticks-cli && node scripts/jev-probe.ts",
+    "probe:local": "cargo run -q --release -p sticks-local --features llama --bin sticks-local-probe --",
+    "model:get": "node scripts/get-model.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.3",

@@ -5,10 +5,12 @@
 // the confident answers into changes. Whatever Jev wasn't sure of, or the
 // request doesn't say, shows as buttons for the user. An answer from the
 // user may open new questions for Jev, such as once they pick what changes.
+// Without Jev, a model on this machine answers the same questions (see
+// answerer.ts).
 
 import { cutList, describeDesign, editQuestions, readEdit, type EditAnswer, type EditReading, type ProjectJson } from "./core";
 import { dollars } from "./cutlist";
-import { askJev } from "./jev";
+import { ask } from "./answerer";
 import { normalize } from "./state";
 
 export interface CommandContext {
@@ -30,7 +32,7 @@ async function settle(base: ProjectJson, request: string, answers: Record<string
   for (let round = 0; round < ROUNDS; round++) {
     const asks = editQuestions(base, request, answers);
     if (asks.length === 0) return;
-    Object.assign(answers, await askJev(request, design, asks, change));
+    Object.assign(answers, await ask(request, design, asks, change));
   }
 }
 
