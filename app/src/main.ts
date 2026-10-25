@@ -23,6 +23,7 @@ import { mountCommand } from "./command";
 import { dollars, findInCuts, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES, type DragOverlay, type Scale } from "./elevation";
 import { openSection, revealOpening, renderPanel, wallName, type PanelContext, type PanelTab } from "./panel";
+import { packetZoom } from "./packet-zoom";
 import { bounds, factsAt, movesUpAndDown, snap, type Item, type Spot } from "./snap";
 import { renderSettings } from "./settings";
 import { ensureStock, fromTemplate, load, loadFiled, normalize, save, saveFiled, TEMPLATES } from "./state";
@@ -115,6 +116,11 @@ app.innerHTML = `
         <input type="checkbox" />
         These are my plans. I'll confirm every size, footing and connector with my building department.
       </label>
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button type="button" class="button" data-action="zoom-out" title="Zoom out (⌘−)" aria-label="Zoom out">−</button>
+        <button type="button" class="button zoom-level" data-action="zoom-reset" title="Actual size (⌘0)">100%</button>
+        <button type="button" class="button" data-action="zoom-in" title="Zoom in (⌘+)" aria-label="Zoom in">+</button>
+      </div>
       <button type="button" class="button" data-action="download-packet">Download</button>
       <button type="button" class="button primary" data-action="print-now">Print</button>
       <button type="button" class="button" data-action="close-preview">Close</button>
@@ -154,6 +160,7 @@ const settings = $<HTMLDialogElement>("dialog.settings");
 const settingsBody = $<HTMLDivElement>(".settings-body");
 const replaceDialog = $<HTMLDialogElement>("dialog.replace");
 const previewFrame = $<HTMLIFrameElement>(".print-preview iframe");
+const zoom = packetZoom(previewFrame, $<HTMLButtonElement>(".zoom-level"), () => !preview.hidden);
 const ownerCheck = $<HTMLLabelElement>(".owner-check");
 const ownerBox = $<HTMLInputElement>(".owner-check input");
 const packetButtons = [...app.querySelectorAll<HTMLButtonElement>('[data-action="print-now"], [data-action="download-packet"]')];
@@ -1164,6 +1171,15 @@ app.addEventListener("click", (e) => {
       saveFile(`${fileName(project.name)}-build-packet.html`, previewFrame.srcdoc, "Web page", "html").catch((err) =>
         showProblem(`Couldn't save the build packet: ${message(err)}`),
       );
+      break;
+    case "zoom-in":
+      zoom.step(1);
+      break;
+    case "zoom-out":
+      zoom.step(-1);
+      break;
+    case "zoom-reset":
+      zoom.set(1);
       break;
     case "close-preview":
       preview.hidden = true;
