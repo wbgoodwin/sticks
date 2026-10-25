@@ -1,0 +1,38 @@
+# A generic low deck in the back yard, standing on its own footings, drawn
+# to Fairfax County, Virginia's Typical Deck Details. The decking is 28"
+# off the ground, under the 30" where guards are needed, short 4x4 posts
+# stand on round concrete footings, and the joists run a foot past each
+# beam so the beams sit back out of sight.
+name = "Backyard deck"
+
+[rules]
+on_center = "16\""
+kerf = "1/8\""
+layout_from = "left"
+
+[deck]
+code = "fairfax2021"
+width = "16'"          # along the beams
+depth = "12'"          # along the joists
+height = "28\""        # ground to the top of the decking
+joist = "2x8"
+beam = "2x8"
+beam_plies = 2
+beams = 2
+overhang = "12\""      # joists past each beam
+support = "posts"      # 4x4 posts on concrete footings
+post = "4x4"
+decking = "5/4x6"
+species = "southern_pine"
+
+[[stock]]
+size = "2x8"
+lengths = ["8'", "10'", "12'", "14'", "16'"]
+
+[[stock]]
+size = "4x4"
+lengths = ["8'"]
+
+[[stock]]
+size = "5/4x6"
+lengths = ["8'", "10'", "12'", "16'"]

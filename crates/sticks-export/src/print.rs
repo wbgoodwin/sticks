@@ -1,15 +1,16 @@
-//! The build packet: one HTML page to print, with the shopping list, every
-//! drawing on its own sheet, and the board-by-board cut list.
+//! The build packet: one HTML page to print, with the shopping list and
+//! hardware, every drawing on its own sheet, and the board-by-board cut list.
 
 use std::fmt::Write;
 
 use sticks_core::Project;
 use sticks_cutlist::CutList;
+use sticks_hardware::HardwareList;
 use sticks_rules::FramedProject;
 
 use crate::svg::{
-    deck_svg, floor_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg, wall_svg,
-    NOTICE,
+    deck_checks_svg, deck_notice, deck_plan_svg, deck_section_svg, decking_svg, floor_svg,
+    porch_deck_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg, wall_svg, NOTICE,
 };
 
 fn esc(s: &str) -> String {
@@ -23,7 +24,65 @@ fn dollars(cents: u64) -> String {
     format!("${}.{:02}", cents / 100, cents % 100)
 }
 
-pub fn print_html(project: &Project, framed: &FramedProject, cl: &CutList) -> String {
+/// Connectors, then boxes of fasteners, then what the catalog couldn't fit.
+fn hardware_table(out: &mut String, list: &HardwareList) {
+    if list.parts.is_empty() && list.warnings.is_empty() {
+        return;
+    }
+    let price = |p: Option<u64>| p.map(dollars).unwrap_or_default();
+    let _ = writeln!(
+        out,
+        "<h2>Hardware ({})</h2>\n<table>\n<tr><th class=\"num\">Qty</th><th>Part</th><th>For</th><th class=\"num\">Each</th><th class=\"num\">Total</th></tr>",
+        esc(&list.brand)
+    );
+    for l in &list.parts {
+        let note = l
+            .note
+            .as_ref()
+            .map(|n| format!("; {}", esc(n)))
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "<tr><td class=\"num\">{}</td><td>{} {}</td><td>{}{note}</td><td class=\"num\">{}</td><td class=\"num\">{}</td></tr>",
+            l.count,
+            esc(&l.model),
+            esc(&l.name),
+            esc(&l.joints.join(", ")),
+            price(l.unit_price_cents.map(u64::from)),
+            price(l.total_cents)
+        );
+    }
+    for l in &list.fasteners {
+        let _ = writeln!(
+            out,
+            "<tr><td class=\"num\">{}</td><td>{}</td><td>{} pieces</td><td class=\"num\">{}</td><td class=\"num\">{}</td></tr>",
+            l.boxes,
+            esc(&l.name),
+            l.count,
+            price(l.box_price_cents.map(u64::from)),
+            price(l.total_cents)
+        );
+    }
+    if let Some(total) = list.total_cents {
+        let _ = writeln!(
+            out,
+            "<tr><td></td><td><strong>Total</strong></td><td></td><td></td><td class=\"num\"><strong>{}</strong></td></tr>",
+            dollars(total)
+        );
+    }
+    out.push_str("</table>\n");
+    for w in &list.warnings {
+        let _ = writeln!(out, "<p class=\"problem\">{}</p>", esc(w));
+    }
+    let _ = writeln!(out, "<p>{}</p>", esc(sticks_hardware::NOTICE));
+}
+
+pub fn print_html(
+    project: &Project,
+    framed: &FramedProject,
+    cl: &CutList,
+    hardware: &HardwareList,
+) -> String {
     let from = project.rules.layout_from;
     let name = esc(&project.name);
     let mut out = String::new();
@@ -51,6 +110,7 @@ td.num, th.num {{ text-align: right; }}
 .board h3 {{ font-size: 10pt; margin: 0 0 2pt; }}
 .notice {{ color: #666; font-size: 8pt; margin-top: 12pt; }}
 .problem {{ color: #a33; }}
+.owner {{ background: #fff8e6; border: 0.75pt solid #c9a86a; padding: 6pt 8pt; }}
 @media print {{ body {{ background: none; }} .page {{ margin: 0; }} }}
 </style>
 </head>
@@ -59,6 +119,18 @@ td.num, th.num {{ text-align: right; }}
 <h1>{name}</h1>
 "#
     );
+    if let Some(deck) = &project.deck {
+        let notice = deck_notice(deck);
+        // The second line opens with the heading, so it's bolded rather than repeated.
+        let (head, rest) = notice[1].split_once(": ").unwrap_or(("", &notice[1]));
+        let _ = writeln!(
+            out,
+            "<p class=\"owner\"><strong>{}:</strong> {} {}</p>",
+            esc(head),
+            esc(rest),
+            esc(&notice[0])
+        );
+    }
 
     let s = cl.summary();
     let cost = s
@@ -70,6 +142,14 @@ td.num, th.num {{ text-align: right; }}
         "<p>{} boards and {} sheets for {} pieces, {:.1}% lumber waste{cost}. Kerf {:#}, end trim {:#}.</p>",
         s.boards, s.sheets, s.pieces, s.waste_percent, cl.kerf, cl.end_trim
     );
+    let on_hand = framed.on_hand_names(&project.on_hand);
+    if !on_hand.is_empty() {
+        let _ = writeln!(
+            out,
+            "<p>Not on the shopping list, since you have it: {}.</p>",
+            esc(&on_hand.join(", "))
+        );
+    }
     for e in framed.errors() {
         let _ = writeln!(
             out,
@@ -110,6 +190,7 @@ td.num, th.num {{ text-align: right; }}
         );
     }
     out.push_str("</table>\n");
+    hardware_table(&mut out, hardware);
     if !cl.too_long.is_empty() {
         out.push_str("<h2 class=\"problem\">Longer than any stock board</h2>\n<table>\n");
         for p in &cl.too_long {
@@ -133,6 +214,9 @@ td.num, th.num {{ text-align: right; }}
             Some(d) => piers.push(format!("{} under the porch deck", d.piers.len())),
             None => piers.push(format!("{} under the porch posts", porch.piers.len())),
         }
+    }
+    if let Some(Ok(d)) = &framed.deck {
+        piers.push(format!("{} under the deck", d.piers.len()));
     }
     if !piers.is_empty() {
         let _ = writeln!(
@@ -160,6 +244,15 @@ td.num, th.num {{ text-align: right; }}
     if let Some(Ok(s)) = &framed.sheathing {
         warnings.extend(s.warnings.iter().map(|x| format!("Sheathing: {x}")));
     }
+    if let Some(Ok(d)) = &framed.deck {
+        warnings.extend(d.warnings.iter().map(|x| format!("Deck: {x}")));
+        warnings.extend(d.checks.iter().filter(|c| !c.ok).map(|c| {
+            format!(
+                "Deck check failed: {}: {} (allowed: {})",
+                c.item, c.actual, c.allowed
+            )
+        }));
+    }
     if !warnings.is_empty() {
         out.push_str("<h2>Worth a second look</h2>\n<ul>\n");
         for w in warnings {
@@ -167,11 +260,21 @@ td.num, th.num {{ text-align: right; }}
         }
         out.push_str("</ul>\n");
     }
-    let _ = writeln!(out, "<p class=\"notice\">{}</p>\n</section>", esc(NOTICE));
+    let notice = match &project.deck {
+        Some(deck) => deck_notice(deck).join(" "),
+        None => NOTICE.to_string(),
+    };
+    let _ = writeln!(out, "<p class=\"notice\">{}</p>\n</section>", esc(&notice));
 
     let mut page = |svg: String| {
         let _ = writeln!(out, "<section class=\"page\">\n{svg}</section>");
     };
+    if let (Some(Ok(d)), Some(deck)) = (&framed.deck, &project.deck) {
+        page(deck_checks_svg(&project.name, deck, d));
+        page(deck_plan_svg(&project.name, deck, d, from));
+        page(deck_section_svg(&project.name, deck, d));
+        page(decking_svg(&project.name, deck, d));
+    }
     for w in framed.walls.iter().flatten() {
         page(wall_svg(&project.name, w, from));
     }
@@ -188,7 +291,7 @@ td.num, th.num {{ text-align: right; }}
     if let Some(Ok(porch)) = &framed.porch {
         page(porch_svg(&project.name, porch, from));
         page(rafter_svg(&project.name, &porch.rafter));
-        if let Some(svg) = deck_svg(&project.name, porch, from) {
+        if let Some(svg) = porch_deck_svg(&project.name, porch, from) {
             page(svg);
         }
     }
@@ -274,7 +377,15 @@ mod tests {
             &p.rules,
         )
         .unwrap();
-        let html = print_html(&p, &framed, &cl);
+        let joints: Vec<_> = framed
+            .sections()
+            .into_iter()
+            .flat_map(|s| s.joints)
+            .collect();
+        let hw = sticks_hardware::for_project(&joints, p.hardware.as_ref());
+        let html = print_html(&p, &framed, &cl, &hw);
+        assert!(html.contains("<h2>Hardware (Simpson Strong-Tie)</h2>"));
+        assert!(html.contains("LRU26Z"));
         // Cover, four walls, floor, subfloor, roof, rafter, porch, porch
         // rafter, deck, wall and roof sheathing, cut list.
         assert_eq!(html.matches("<section class=\"page").count(), 15);

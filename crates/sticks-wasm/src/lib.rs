@@ -6,9 +6,11 @@
 
 use serde::Serialize;
 use sticks_core::{Length, Member, MemberKind, Project};
-use sticks_cutlist::{cut_list_with_sheets, CutList};
+use sticks_cutlist::{cut_list_with_sheets, Board, CutList};
+use sticks_hardware::HardwareList;
 use sticks_rules::{
-    bounds, frame_project, model, wall_ids, FramedProject, FramedWall, Placed, Solid, SolidKind,
+    bounds, frame_project, model, wall_ids, CodeCheck, FramedProject, FramedWall, Placed, Section,
+    Solid, SolidKind,
 };
 use wasm_bindgen::prelude::*;
 
@@ -118,6 +120,7 @@ struct FrameView {
     roof: Option<PlanView>,
     porch: Option<PlanView>,
     sheathing: Option<SheathingView>,
+    deck: Option<DeckView>,
     /// Printable drawings besides the walls, in order.
     drawings: Vec<DrawingView>,
 }
@@ -130,6 +133,18 @@ struct DrawingView {
     /// The part it shows, for its members and warnings: `floor`, `roof`,
     /// `porch` or `sheathing`.
     part: String,
+}
+
+/// A deck on its own: its plan, and its sizes checked against its rules.
+#[derive(Serialize)]
+struct DeckView {
+    #[serde(flatten)]
+    plan: PlanView,
+    checks: Vec<CodeCheck>,
+    /// The rules it was checked against, as printed on its sheets.
+    code: String,
+    /// What every deck sheet says about who owns the plans.
+    notice: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -237,6 +252,29 @@ struct CutListView {
     summary: SummaryView,
     /// Parts left out because they don't frame, such as `wall front`.
     skipped: Vec<String>,
+    /// Every stage of the build, and whether it's kept off the list.
+    sections: Vec<SectionView>,
+    /// Boards for the stages the builder already has, which the shopping
+    /// list leaves out. Numbered on from `boards`.
+    on_hand_boards: Vec<BoardView>,
+    on_hand: OnHandView,
+    /// Connectors and fasteners for the stages still to buy.
+    hardware: HardwareList,
+}
+
+#[derive(Serialize)]
+struct SectionView {
+    key: String,
+    name: String,
+    on_hand: bool,
+}
+
+/// What the stages left off the shopping list would have cost.
+#[derive(Serialize)]
+struct OnHandView {
+    boards: usize,
+    sheets: usize,
+    total_cents: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -285,15 +323,56 @@ pub fn cut_list_json(project_json: &str) -> Result<String, String> {
     let project: Project = serde_json::from_str(project_json).map_err(|e| e.to_string())?;
     let framed = frame_project(&project).map_err(|e| e.to_string())?;
     let skipped = framed.errors().iter().map(|e| e.part.clone()).collect();
-    let cl = cut_list_with_sheets(
-        &framed.members(),
-        &framed.sheet_pieces(),
-        &project.stock,
-        &project.sheets,
-        &project.rules,
-    )
-    .map_err(|e| e.to_string())?;
-    serde_json::to_string(&cut_list_view(cl, skipped)).map_err(|e| e.to_string())
+    let (buy, have) = framed.split(&project.on_hand);
+    let plan = |s: &Section| {
+        cut_list_with_sheets(
+            &s.members,
+            &s.sheets,
+            &project.stock,
+            &project.sheets,
+            &project.rules,
+        )
+        .map_err(|e| e.to_string())
+    };
+    let cl = plan(&buy)?;
+    let mut kept = plan(&have)?;
+    kept.number_after(&cl);
+    let sections = framed
+        .sections()
+        .into_iter()
+        .map(|s| SectionView {
+            on_hand: project.on_hand.contains(&s.key),
+            key: s.key,
+            name: s.name,
+        })
+        .collect();
+    let k = kept.summary();
+    let mut view = cut_list_view(cl, skipped);
+    view.sections = sections;
+    view.on_hand = OnHandView {
+        boards: k.boards,
+        sheets: k.sheets,
+        total_cents: k.total_cents,
+    };
+    view.on_hand_boards = kept.boards.into_iter().map(board_view).collect();
+    view.hardware = sticks_hardware::for_project(
+        &buy.joints,
+        sticks_rules::hardware_settings(&project).as_ref(),
+    );
+    serde_json::to_string(&view).map_err(|e| e.to_string())
+}
+
+fn board_view(b: Board) -> BoardView {
+    BoardView {
+        id: b.id,
+        size: b.size.to_string(),
+        length_16: b.length.sixteenths(),
+        length: b.length.to_string(),
+        price_cents: b.price_cents,
+        pieces: b.pieces.into_iter().map(piece_view).collect(),
+        offcut_16: b.offcut.sixteenths(),
+        offcut: format!("{:#}", b.offcut),
+    }
 }
 
 fn cut_list_view(cl: CutList, skipped: Vec<String>) -> CutListView {
@@ -328,22 +407,17 @@ fn cut_list_view(cl: CutList, skipped: Vec<String>) -> CutListView {
             kerf: format!("{:#}", cl.kerf),
         },
         bom,
-        boards: cl
-            .boards
-            .into_iter()
-            .map(|b| BoardView {
-                id: b.id,
-                size: b.size.to_string(),
-                length_16: b.length.sixteenths(),
-                length: b.length.to_string(),
-                price_cents: b.price_cents,
-                pieces: b.pieces.into_iter().map(piece_view).collect(),
-                offcut_16: b.offcut.sixteenths(),
-                offcut: format!("{:#}", b.offcut),
-            })
-            .collect(),
+        boards: cl.boards.into_iter().map(board_view).collect(),
         too_long: cl.too_long.into_iter().map(piece_view).collect(),
         skipped,
+        sections: Vec::new(),
+        on_hand_boards: Vec::new(),
+        on_hand: OnHandView {
+            boards: 0,
+            sheets: 0,
+            total_cents: Some(0),
+        },
+        hardware: HardwareList::default(),
     }
 }
 
@@ -498,12 +572,39 @@ pub fn frame_json(project_json: &str) -> Result<String, String> {
             error: Some(e.reason),
         },
     });
+    let deck = framed.deck.map(|r| {
+        let (code, notice) = project
+            .deck
+            .as_ref()
+            .map(|d| {
+                (
+                    d.code.name().to_string(),
+                    sticks_export::deck_notice(d).to_vec(),
+                )
+            })
+            .unwrap_or_default();
+        match r {
+            Ok(d) => DeckView {
+                plan: plan_view(d.width, d.depth, &d.members, d.warnings.clone()),
+                checks: d.checks,
+                code,
+                notice,
+            },
+            Err(e) => DeckView {
+                plan: plan_error(e.reason),
+                checks: Vec::new(),
+                code,
+                notice,
+            },
+        }
+    });
     serde_json::to_string(&FrameView {
         walls,
         floor,
         roof,
         porch,
         sheathing,
+        deck,
         drawings,
     })
     .map_err(|e| e.to_string())
@@ -537,8 +638,14 @@ fn drawing_list(framed: &FramedProject) -> Vec<DrawingView> {
         add("porch", "Porch", "porch");
         add("porch-rafter", "Porch rafter", "porch");
         if matches!(porch, Ok(p) if p.deck.is_some()) {
-            add("deck", "Deck", "porch");
+            add("deck", "Porch deck", "porch");
         }
+    }
+    if framed.deck.is_some() {
+        add("deck-checks", "Code checks", "deck");
+        add("deck-plan", "Deck plan", "deck");
+        add("deck-section", "Deck section", "deck");
+        add("decking", "Decking", "deck");
     }
     if let Some(s) = &framed.sheathing {
         let (walls, roofs) = match s {
@@ -668,9 +775,22 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
             match which {
                 "porch" => Ok(sticks_export::porch_svg(name, &porch, from)),
                 "porch-rafter" => Ok(sticks_export::rafter_svg(name, &porch.rafter)),
-                _ => sticks_export::deck_svg(name, &porch, from)
+                _ => sticks_export::porch_deck_svg(name, &porch, from)
                     .ok_or_else(|| "this porch has no deck".to_string()),
             }
+        }
+        "deck-checks" | "deck-plan" | "deck-section" | "decking" => {
+            let d = framed
+                .deck
+                .ok_or("this project has no deck")?
+                .map_err(|e| e.reason)?;
+            let deck = project.deck.as_ref().ok_or("this project has no deck")?;
+            Ok(match which {
+                "deck-checks" => sticks_export::deck_checks_svg(name, deck, &d),
+                "deck-plan" => sticks_export::deck_plan_svg(name, deck, &d, from),
+                "deck-section" => sticks_export::deck_section_svg(name, deck, &d),
+                _ => sticks_export::decking_svg(name, deck, &d),
+            })
         }
         "wall-sheathing" | "roof-sheathing" => {
             let s = framed
@@ -693,15 +813,20 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
 
 pub fn print_html(project_json: &str) -> Result<String, String> {
     let (project, framed) = framed(project_json)?;
+    let (buy, _) = framed.split(&project.on_hand);
     let cl = cut_list_with_sheets(
-        &framed.members(),
-        &framed.sheet_pieces(),
+        &buy.members,
+        &buy.sheets,
         &project.stock,
         &project.sheets,
         &project.rules,
     )
     .map_err(|e| e.to_string())?;
-    Ok(sticks_export::print_html(&project, &framed, &cl))
+    let hw = sticks_hardware::for_project(
+        &buy.joints,
+        sticks_rules::hardware_settings(&project).as_ref(),
+    );
+    Ok(sticks_export::print_html(&project, &framed, &cl, &hw))
 }
 
 fn wall_view(w: FramedWall) -> WallView {
@@ -827,6 +952,74 @@ mod tests {
     }
 
     #[test]
+    fn keeps_on_hand_sections_off_the_shopping_list() {
+        let json = project_from_toml(include_str!("../../../examples/shed.toml")).unwrap();
+        let all: serde_json::Value = serde_json::from_str(&cut_list_json(&json).unwrap()).unwrap();
+        let mut project: serde_json::Value = serde_json::from_str(&json).unwrap();
+        project["on_hand"] = serde_json::json!(["floor", "subfloor"]);
+        let json = project.to_string();
+        let plan: serde_json::Value = serde_json::from_str(&cut_list_json(&json).unwrap()).unwrap();
+
+        let floor = plan["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["key"] == "floor")
+            .unwrap();
+        assert_eq!(floor["name"], "Floor framing");
+        assert_eq!(floor["on_hand"], true);
+        let boards = |v: &serde_json::Value, key: &str| v[key].as_array().unwrap().len();
+        assert!(boards(&plan, "on_hand_boards") > 0);
+        assert_eq!(
+            plan["on_hand"]["boards"].as_u64().unwrap() as usize,
+            boards(&plan, "on_hand_boards")
+        );
+        assert!(boards(&plan, "boards") < boards(&all, "boards"));
+        // The floor's post caps and bases come off with it.
+        let caps = |v: &serde_json::Value| {
+            v["hardware"]["parts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|l| l["model"] == "BC4Z")
+                .map_or(0, |l| l["count"].as_u64().unwrap())
+        };
+        assert_eq!(caps(&all), 12);
+        assert_eq!(caps(&plan), 0);
+        // No subfloor sheets left to buy; the shed's sheathing is a
+        // different thickness.
+        assert_eq!(
+            plan["summary"]["sheets"].as_u64().unwrap()
+                + plan["on_hand"]["sheets"].as_u64().unwrap(),
+            all["summary"]["sheets"].as_u64().unwrap()
+        );
+        assert!(!plan["bom"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["size"] == "3/4\" sheet"));
+        // Every board id is used once across the two plans.
+        let mut ids: Vec<_> = plan["boards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(plan["on_hand_boards"].as_array().unwrap())
+            .map(|b| b["id"].as_str().unwrap().to_string())
+            .collect();
+        let count = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), count);
+        assert!(print_html(&json)
+            .unwrap()
+            .contains("since you have it: Floor framing, Subfloor."));
+        let toml = project_to_toml(&json).unwrap();
+        let back: serde_json::Value =
+            serde_json::from_str(&project_from_toml(&toml).unwrap()).unwrap();
+        assert_eq!(back["on_hand"], serde_json::json!(["floor", "subfloor"]));
+    }
+
+    #[test]
     fn models_drawings_and_packet() {
         let json = project_from_toml(include_str!("../../../examples/shed.toml")).unwrap();
         let out: serde_json::Value = serde_json::from_str(&frame_json(&json).unwrap()).unwrap();
@@ -868,7 +1061,7 @@ mod tests {
         assert!(out["porch"]["error"].is_null());
         assert!(out["sheathing"]["pieces"].as_u64().unwrap() > 20);
         assert!(solids.iter().any(|s| s["kind"] == "sheathing"));
-        assert!(solids.iter().any(|s| s["part"] == "deck"));
+        assert!(solids.iter().any(|s| s["part"] == "porch-deck"));
         for which in ["front", "left"].iter().chain(&drawings) {
             assert!(
                 drawing_svg(&json, which).unwrap().starts_with("<svg"),

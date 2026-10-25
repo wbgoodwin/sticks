@@ -6,7 +6,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { ModelView, SolidKind, SolidView } from "./core";
 
 /** Groups of solids that can be hidden to see inside. */
-export type Layer = "sheathing" | "roof" | "walls" | "porch" | "subfloor" | "floor";
+export type Layer = "sheathing" | "roof" | "walls" | "porch" | "subfloor" | "floor" | "deck";
 
 export const LAYERS: [Layer, string][] = [
   ["sheathing", "Sheathing"],
@@ -15,6 +15,7 @@ export const LAYERS: [Layer, string][] = [
   ["porch", "Porch"],
   ["subfloor", "Subfloor"],
   ["floor", "Floor framing"],
+  ["deck", "Deck"],
 ];
 
 /** Hidden until turned on, so the framing shows first. */
@@ -25,7 +26,8 @@ export function layerOf(s: SolidView): Layer {
   if (s.kind === "subfloor") return "subfloor";
   if (s.part === "floor") return "floor";
   if (s.part === "roof") return "roof";
-  if (s.part === "porch" || s.part === "deck") return "porch";
+  if (s.part === "porch" || s.part === "porch-deck") return "porch";
+  if (s.part === "deck") return "deck";
   return "walls";
 }
 
@@ -302,5 +304,8 @@ export class Viewer {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    // Resizing clears the canvas, and this runs after the frame's render but
+    // before it is painted; without drawing again the view blinks blank.
+    this.renderer.render(this.scene, this.camera);
   }
 }

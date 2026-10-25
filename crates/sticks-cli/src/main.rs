@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use sticks_core::Project;
 use sticks_cutlist::{cut_list_with_sheets, CutList};
+use sticks_hardware::HardwareList;
 use sticks_rules::{frame_project, FramedProject};
 
 #[derive(Parser)]
@@ -33,7 +34,7 @@ enum Command {
     /// Frame the walls, floor and roof and print their members and layout marks.
     Frame {
         project: PathBuf,
-        /// Only this part: a wall's id, `floor`, `roof`, `porch` or `sheathing`.
+        /// Only this part: a wall's id, `floor`, `roof`, `porch`, `sheathing` or `deck`.
         #[arg(long)]
         part: Option<String>,
     },
@@ -77,9 +78,13 @@ fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::Check { project, json } => load(&project).and_then(|p| check(&p, json)),
         Command::Frame { project, part } => load(&project).and_then(|p| frame(&p, part.as_deref())),
-        Command::Cuts { project } => load(&project)
-            .and_then(|p| plan(&p))
-            .map(|cl| print!("{}", text::cut_list(&cl))),
+        Command::Cuts { project } => load(&project).and_then(|p| {
+            let f = framed(&p)?;
+            let cl = plan_framed(&p, &f)?;
+            let hw = hardware(&p, &f);
+            print!("{}", text::cut_list(&cl, &f.on_hand_names(&p.on_hand), &hw));
+            Ok(())
+        }),
         Command::Build { project, out } => load(&project).and_then(|p| build(&p, &out)),
         Command::Edit {
             project,
@@ -149,9 +154,13 @@ fn frame(project: &Project, only: Option<&str>) -> Result<(), String> {
         print!("{}", text::sheathing(s));
         shown = true;
     }
+    if let Some(Ok(d)) = f.deck.as_ref().filter(|_| want("deck")) {
+        print!("{}", text::deck(d, from));
+        shown = true;
+    }
     match (only, shown) {
         (Some(part), false) => Err(format!(
-            "no wall, floor, roof, porch or sheathing called {part:?}"
+            "no wall, floor, roof, porch, sheathing or deck called {part:?}"
         )),
         _ => Ok(()),
     }
@@ -161,10 +170,12 @@ pub(crate) fn plan(project: &Project) -> Result<CutList, String> {
     plan_framed(project, &framed(project)?)
 }
 
+/// What to buy: every section but the ones the project has on hand.
 fn plan_framed(project: &Project, f: &FramedProject) -> Result<CutList, String> {
+    let (buy, _) = f.split(&project.on_hand);
     cut_list_with_sheets(
-        &f.members(),
-        &f.sheet_pieces(),
+        &buy.members,
+        &buy.sheets,
         &project.stock,
         &project.sheets,
         &project.rules,
@@ -172,14 +183,25 @@ fn plan_framed(project: &Project, f: &FramedProject) -> Result<CutList, String> 
     .map_err(|e| e.to_string())
 }
 
+/// Connectors for every section but the ones the project has on hand.
+fn hardware(project: &Project, f: &FramedProject) -> HardwareList {
+    let (buy, _) = f.split(&project.on_hand);
+    sticks_hardware::for_project(
+        &buy.joints,
+        sticks_rules::hardware_settings(project).as_ref(),
+    )
+}
+
 fn build(project: &Project, out: &Path) -> Result<(), String> {
     let f = framed(project)?;
     let cl = plan_framed(project, &f)?;
+    let hw = hardware(project, &f);
     let from = project.rules.layout_from;
     let name = &project.name;
     let mut files = vec![
         ("bom.csv".to_string(), sticks_export::bom_csv(&cl)),
         ("cut-list.csv".to_string(), sticks_export::cut_list_csv(&cl)),
+        ("hardware.csv".to_string(), sticks_export::hardware_csv(&hw)),
     ];
     for w in f.walls.iter().flatten() {
         files.push((
@@ -220,7 +242,7 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             "porch-rafter.svg".to_string(),
             sticks_export::rafter_svg(name, &porch.rafter),
         ));
-        if let Some(svg) = sticks_export::deck_svg(name, porch, from) {
+        if let Some(svg) = sticks_export::porch_deck_svg(name, porch, from) {
             files.push(("deck.svg".to_string(), svg));
         }
     }
@@ -231,9 +253,27 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             }
         }
     }
+    if let (Some(Ok(d)), Some(deck)) = (&f.deck, &project.deck) {
+        files.push((
+            "deck-checks.svg".to_string(),
+            sticks_export::deck_checks_svg(name, deck, d),
+        ));
+        files.push((
+            "deck-plan.svg".to_string(),
+            sticks_export::deck_plan_svg(name, deck, d, from),
+        ));
+        files.push((
+            "deck-section.svg".to_string(),
+            sticks_export::deck_section_svg(name, deck, d),
+        ));
+        files.push((
+            "decking.svg".to_string(),
+            sticks_export::decking_svg(name, deck, d),
+        ));
+    }
     files.push((
         "print.html".to_string(),
-        sticks_export::print_html(project, &f, &cl),
+        sticks_export::print_html(project, &f, &cl, &hw),
     ));
 
     std::fs::create_dir_all(out).map_err(|e| format!("can't create {}: {e}", out.display()))?;
@@ -252,7 +292,14 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             p.size
         );
     }
-    eprintln!("note: {}", sticks_export::NOTICE);
+    match &project.deck {
+        Some(deck) => {
+            for line in sticks_export::deck_notice(deck) {
+                eprintln!("note: {line}");
+            }
+        }
+        None => eprintln!("note: {}", sticks_export::NOTICE),
+    }
     Ok(())
 }
 

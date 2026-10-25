@@ -5,9 +5,10 @@ use std::fmt::Write;
 use sticks_core::RoofKind;
 use sticks_core::{Cut, LayoutStart};
 use sticks_cutlist::CutList;
+use sticks_hardware::HardwareList;
 use sticks_rules::{
-    FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark, Placed,
-    RafterDetail, Splice,
+    FramedDeck, FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark,
+    Placed, RafterDetail, Splice,
 };
 
 fn members(out: &mut String, members: &[Placed]) {
@@ -120,6 +121,47 @@ pub fn floor(f: &FramedFloor, from: LayoutStart) -> String {
     }
     splices(&mut out, &f.splices);
     notes(&mut out, &f.warnings);
+    out
+}
+
+pub fn deck(d: &FramedDeck, from: LayoutStart) -> String {
+    let mut out = String::new();
+    let h = &d.heights;
+    let _ = writeln!(out, "Deck: {} wide, {} deep", d.width, d.depth);
+    let _ = writeln!(
+        out,
+        "  Decking top {} above grade; joists {} to {}; beams {} to {}; pier tops {}",
+        h.top, h.joist_bottom, h.joist_top, h.beam_bottom, h.beam_top, h.pier_top
+    );
+    let _ = writeln!(out);
+    members(&mut out, &d.members);
+    marks(&mut out, &d.marks, from, "Joist marks on the rims");
+    for (pier, f) in d.piers.iter().zip(&d.footings) {
+        let _ = writeln!(
+            out,
+            "  pier: {:>10} from the left, {:#} from the front; footing {:#} round, {:#} thick, bottom {:#} down",
+            format!("{:#}", pier.x),
+            pier.y,
+            f.diameter,
+            f.thickness,
+            f.depth
+        );
+    }
+    splices(&mut out, &d.splices);
+    let _ = writeln!(out);
+    let _ = writeln!(out, "  Code checks:");
+    for c in &d.checks {
+        let _ = writeln!(
+            out,
+            "  {} {}: {} (allowed: {}) [{}]",
+            if c.ok { "ok  " } else { "FAIL" },
+            c.item,
+            c.actual,
+            c.allowed,
+            c.source
+        );
+    }
+    notes(&mut out, &d.warnings);
     out
 }
 
@@ -281,10 +323,15 @@ pub fn sheathing(s: &FramedSheathing) -> String {
     out
 }
 
-pub fn cut_list(cl: &CutList) -> String {
+/// The shopping list, hardware and cut list. `on_hand` names the sections
+/// left off because the builder already has them.
+pub fn cut_list(cl: &CutList, on_hand: &[String], hardware: &HardwareList) -> String {
     let mut out = String::new();
     let s = cl.summary();
     let _ = writeln!(out, "Shopping list");
+    if !on_hand.is_empty() {
+        let _ = writeln!(out, "  (leaves out what you have: {})", on_hand.join(", "));
+    }
     let _ = writeln!(out);
     for line in cl.bom() {
         let price = match (line.unit_price_cents, line.total_cents) {
@@ -323,6 +370,48 @@ pub fn cut_list(cl: &CutList) -> String {
         s.boards, s.pieces, s.waste_percent, cl.kerf, cl.end_trim
     );
     let _ = writeln!(out);
+    if !hardware.parts.is_empty() || !hardware.warnings.is_empty() {
+        let _ = writeln!(out, "Hardware ({})", hardware.brand);
+        let _ = writeln!(out);
+        for l in &hardware.parts {
+            let price = match (l.unit_price_cents, l.total_cents) {
+                (Some(each), Some(total)) => {
+                    format!("  @ {} = {}", dollars(each.into()), dollars(total))
+                }
+                _ => String::new(),
+            };
+            let _ = writeln!(
+                out,
+                "  {:>3} x {:<12} {} for {}{price}",
+                l.count,
+                l.model,
+                l.name,
+                l.joints.join(", ")
+            );
+            if let Some(note) = &l.note {
+                let _ = writeln!(out, "        ({note})");
+            }
+        }
+        for l in &hardware.fasteners {
+            let price = match (l.box_price_cents, l.total_cents) {
+                (Some(each), Some(total)) => {
+                    format!("  @ {} = {}", dollars(each.into()), dollars(total))
+                }
+                _ => String::new(),
+            };
+            let _ = writeln!(
+                out,
+                "  {:>3} x {} for {} pieces{price}",
+                l.boxes, l.name, l.count
+            );
+        }
+        if let Some(total) = hardware.total_cents {
+            let _ = writeln!(out, "  total {}", dollars(total));
+        }
+        notes(&mut out, &hardware.warnings);
+        let _ = writeln!(out, "  {}", sticks_hardware::NOTICE);
+        let _ = writeln!(out);
+    }
     let _ = writeln!(out, "Cut list");
     for b in &cl.boards {
         let _ = writeln!(out);

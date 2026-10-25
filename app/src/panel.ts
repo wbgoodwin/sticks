@@ -1,17 +1,19 @@
 // The parameter panel: every field edits the project in place and asks for a
 // re-frame. The panel is rebuilt only when its structure changes (an opening
 // added, the roof removed, another wall picked), so typing never loses focus.
+// A building's panel has two tabs: the building's parts, each folding to a
+// one-line summary, and the walls' openings and partitions.
 
 import {
   isSide,
   parseLength,
   type BuildingJson,
+  type DeckJson,
+  type OpeningJson,
   type OpeningKind,
   type PorchJson,
   type ProjectJson,
   type RoofJson,
-  type SheetJson,
-  type StockJson,
   type WallJson,
 } from "./core";
 import { newOpening } from "./state";
@@ -25,7 +27,7 @@ export interface PanelEvents {
 
 type Attrs = Record<string, string | boolean | ((e: Event) => void)>;
 
-function h<K extends keyof HTMLElementTagNameMap>(
+export function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   attrs: Attrs = {},
   ...children: (Node | string | null)[]
@@ -41,12 +43,14 @@ function h<K extends keyof HTMLElementTagNameMap>(
 }
 
 /** A text field that accepts builder notation and flags anything it can't read. */
-function lengthField(
+export function lengthField(
   label: string,
   get: () => string,
   set: (v: string) => void,
   events: PanelEvents,
   hint?: string,
+  /** Called instead of `set` when the field is emptied, for a length that can be left out. */
+  clear?: () => void,
 ): HTMLElement {
   const message = h("div", { class: "field-error", role: "alert" });
   const input = h("input", {
@@ -56,6 +60,13 @@ function lengthField(
     autocomplete: "off",
     "aria-label": label,
     oninput: () => {
+      if (clear && input.value.trim() === "") {
+        input.classList.remove("invalid");
+        message.textContent = "";
+        clear();
+        events.changed();
+        return;
+      }
       const result = parseLength(input.value);
       if ("error" in result) {
         input.classList.add("invalid");
@@ -152,6 +163,9 @@ export function wallName(id: string): string {
   return WALL_NAMES[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
 }
 
+/** The panel's two tabs, when the project is a building. */
+export type PanelTab = "building" | "walls";
+
 /** What the panel needs to know about the framed project. */
 export interface PanelContext {
   /** Every wall, in drawing order. */
@@ -161,6 +175,9 @@ export interface PanelContext {
   selectWall(id: string): void;
   /** A wall's framed length in sixteenths, when it frames. */
   wallLength(id: string): number | null;
+  /** The tab on show. */
+  tab: PanelTab;
+  selectTab(tab: PanelTab): void;
 }
 
 export function renderPanel(
@@ -170,18 +187,187 @@ export function renderPanel(
   events: PanelEvents,
 ): void {
   const building = project.building;
+  const deck = project.deck;
+  // A deck on its own has no walls to edit, only the deck.
+  if (!building && deck && project.wall.length === 0) {
+    root.replaceChildren(deckNotice(deck), ...deckSections(deck, events));
+    return;
+  }
+  if (!building) {
+    root.replaceChildren(wallsSection(project, ctx, events));
+    return;
+  }
+  const tabs = segmented(
+    "Design",
+    [
+      ["building", "Building"],
+      ["walls", "Walls"],
+    ],
+    () => ctx.tab,
+    (v) => ctx.selectTab(v),
+    () => {},
+  );
+  // The group's own label names it; the tabs need no heading.
+  tabs.querySelector(".field-label")?.remove();
+  tabs.classList.add("panel-tabs");
   root.replaceChildren(
-    ...(building
-      ? [
+    tabs,
+    ...(ctx.tab === "walls"
+      ? [wallsSection(project, ctx, events)]
+      : [
           shedSection(project, building, events),
+          framingSection(project, events),
           roofSection(project, events),
           floorSection(project, events),
           porchSection(project, events),
           sheathingSection(project, events),
-          wallsSection(project, ctx, events),
-        ]
-      : [wallsSection(project, ctx, events)]),
-    lumberSection(project, events),
+          ...(deck ? deckSections(deck, events, () => delete project.deck) : []),
+          addParts(project, events),
+        ].filter((s) => s !== null)),
+  );
+}
+
+// Which of the building's sections are unfolded, remembered between sessions.
+const OPEN_KEY = "sticks.panel.open";
+const openSections = new Set<string>(["shed"]);
+try {
+  const saved = JSON.parse(localStorage.getItem(OPEN_KEY) ?? "null");
+  if (Array.isArray(saved)) {
+    openSections.clear();
+    for (const key of saved) openSections.add(String(key));
+  }
+} catch {
+  // Nothing remembered; the shed's size starts open.
+}
+
+/** Unfolds a section the next time the panel is drawn. */
+export function openSection(key: string): void {
+  openSections.add(key);
+  rememberOpen();
+}
+
+function rememberOpen(): void {
+  try {
+    localStorage.setItem(OPEN_KEY, JSON.stringify([...openSections]));
+  } catch {
+    // Not remembered this time; folding still works.
+  }
+}
+
+const CHEVRON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>`;
+
+/** A button that folds `body` away, showing `summary` in its place. */
+function foldButton(
+  title: Node | string,
+  summary: () => string,
+  body: HTMLElement,
+  isOpen: boolean,
+  onToggle: (open: boolean) => void,
+): HTMLButtonElement {
+  const sum = h("span", { class: "fold-summary" });
+  const chevron = h("span", { class: "chevron" });
+  chevron.innerHTML = CHEVRON;
+  const button = h("button", { type: "button", class: "fold-head" }, chevron, title, sum);
+  const show = (open: boolean) => {
+    body.hidden = !open;
+    button.setAttribute("aria-expanded", String(open));
+    // The summary is read when folding, so it shows the values just typed.
+    sum.textContent = open ? "" : summary();
+  };
+  button.addEventListener("click", () => {
+    const open = button.getAttribute("aria-expanded") !== "true";
+    show(open);
+    onToggle(open);
+  });
+  show(isOpen);
+  return button;
+}
+
+/** One of the building's parts, folding to a line of its values. */
+function foldSection(
+  key: string,
+  title: string,
+  summary: () => string,
+  body: (Node | null)[],
+  remove?: [label: string, remove: () => void],
+): HTMLElement {
+  const content = h(
+    "div",
+    { class: "fold-body", id: `fold-${key}` },
+    ...body,
+    remove ? h("button", { type: "button", class: "remove-button", onclick: remove[1] }, remove[0]) : null,
+  );
+  const head = foldButton(h("span", { class: "fold-title" }, title), summary, content, openSections.has(key), (open) => {
+    if (open) openSections.add(key);
+    else openSections.delete(key);
+    rememberOpen();
+  });
+  head.setAttribute("aria-controls", content.id);
+  return h("section", { class: "panel-section fold", "data-section": key }, h("h2", {}, head), content);
+}
+
+/** Buttons for the parts the building doesn't have yet. */
+function addParts(project: ProjectJson, events: PanelEvents): HTMLElement | null {
+  const add = (key: string, text: string, title: string, make: () => void) =>
+    h(
+      "button",
+      {
+        type: "button",
+        class: "add-button",
+        title,
+        onclick: () => {
+          make();
+          openSection(key);
+          events.restructured();
+        },
+      },
+      text,
+    );
+  const buttons = [
+    project.roof
+      ? null
+      : add("roof", "+ Roof", "A lean-to roof at 2:12", () => {
+          project.roof = { kind: "lean_to", pitch: "2:12", rafter: "2x6", front_overhang: '12"', back_overhang: '12"' };
+        }),
+    project.floor
+      ? null
+      : add("floor", "+ Floor", "A floor on beams; without one the walls stand on a slab", () => {
+          project.floor = {
+            joist: "2x6",
+            beam: "4x6",
+            beam_plies: 1,
+            beams: 2,
+            support: "piers",
+            pier_spacing: "6'",
+            pier_inset: '12"',
+            subfloor: '3/4"',
+          };
+        }),
+    project.porch
+      ? null
+      : add("porch", "+ Porch", "A porch off the front", () => {
+          const p: PorchJson = { depth: "6'", post: "4x4", beam: "2x8", beam_plies: 2 };
+          // A deck hangs from the floor's rim, so it needs a floor.
+          if (project.floor) p.deck = { beam: "4x6", decking: "5/4x6", step_down: '1"' };
+          project.porch = p;
+        }),
+    project.deck
+      ? null
+      : add("deck", "+ Deck", "A low deck on its own footings, beside the shed", () => {
+          project.deck = { width: "12'", depth: "10'", height: '24"', code: "irc2021" };
+        }),
+    project.sheathing
+      ? null
+      : add("sheathing", "+ Sheathing", "Sheathing on the walls and roof", () => {
+          project.sheathing = { wall: '7/16"', roof: '1/2"' };
+        }),
+  ].filter((b) => b !== null);
+  if (buttons.length === 0) return null;
+  return h(
+    "section",
+    { class: "panel-section add-parts" },
+    h("p", { class: "section-hint" }, "Add to the shed"),
+    h("div", { class: "add-row" }, ...buttons),
   );
 }
 
@@ -218,11 +404,9 @@ function rulesFields(project: ProjectJson, events: PanelEvents): HTMLElement[] {
   ];
 }
 
+
 function shedSection(project: ProjectJson, b: BuildingJson, events: PanelEvents): HTMLElement {
-  return h(
-    "section",
-    { class: "panel-section" },
-    h("h2", {}, "Shed"),
+  return foldSection("shed", "Shed", () => `${b.width} × ${b.depth} · ${b.height} front`, [
     h(
       "div",
       { class: "row" },
@@ -238,71 +422,61 @@ function shedSection(project: ProjectJson, b: BuildingJson, events: PanelEvents)
         ? "Floor to top of cap plate. The other walls follow the roof."
         : "Floor to top of cap plate",
     ),
-    ...rulesFields(project, events),
+  ]);
+}
+
+function framingSection(project: ProjectJson, events: PanelEvents): HTMLElement {
+  const rules = project.rules;
+  return foldSection(
+    "framing",
+    "Framing",
+    () => {
+      const oc = parseLength(rules.on_center);
+      const spacing = "ok" in oc ? `${oc.ok / 16}"` : rules.on_center;
+      return `${rules.wall_lumber} at ${spacing} · from ${rules.layout_from}`;
+    },
+    rulesFields(project, events),
   );
 }
 
-function roofSection(project: ProjectJson, events: PanelEvents): HTMLElement {
+function roofSection(project: ProjectJson, events: PanelEvents): HTMLElement | null {
   const roof = project.roof;
-  if (!roof) {
-    return h(
-      "section",
-      { class: "panel-section" },
-      h("h2", {}, "Roof"),
-      h("p", { class: "empty" }, "No roof yet."),
+  if (!roof) return null;
+  return foldSection(
+    "roof",
+    "Roof",
+    () => `${roof.kind === "gable" ? "Gable" : "Lean-to"} · ${roof.pitch} · ${roof.rafter} rafters`,
+    [
+      segmented(
+        "Shape",
+        [
+          ["lean_to", "Lean-to"],
+          ["gable", "Gable"],
+        ],
+        () => roof.kind ?? "lean_to",
+        (v) => (roof.kind = v),
+        events.restructured,
+      ),
       h(
         "div",
-        { class: "add-row" },
-        h(
-          "button",
-          {
-            type: "button",
-            class: "add-button",
-            onclick: () => {
-              project.roof = {
-                kind: "lean_to",
-                pitch: "2:12",
-                rafter: "2x6",
-                front_overhang: '12"',
-                back_overhang: '12"',
-              };
-              events.restructured();
-            },
-          },
-          "+ Roof",
-        ),
+        { class: "row" },
+        pitchField(roof, events),
+        select("Rafters", RAFTERS, () => roof.rafter, (v) => (roof.rafter = v), events),
       ),
-    );
-  }
-  return h(
-    "section",
-    { class: "panel-section" },
-    sectionHead("Roof", "Remove the roof", () => {
-      delete project.roof;
-      events.restructured();
-    }),
-    segmented(
-      "Shape",
-      [
-        ["lean_to", "Lean-to"],
-        ["gable", "Gable"],
-      ],
-      () => roof.kind ?? "lean_to",
-      (v) => (roof.kind = v),
-      events.restructured,
-    ),
-    h(
-      "div",
-      { class: "row" },
-      pitchField(roof, events),
-      select("Rafters", RAFTERS, () => roof.rafter, (v) => (roof.rafter = v), events),
-    ),
-    h(
-      "div",
-      { class: "row" },
-      lengthField("Front overhang", () => roof.front_overhang, (v) => (roof.front_overhang = v), events),
-      lengthField("Back overhang", () => roof.back_overhang, (v) => (roof.back_overhang = v), events),
-    ),
+      h(
+        "div",
+        { class: "row" },
+        lengthField("Front overhang", () => roof.front_overhang, (v) => (roof.front_overhang = v), events),
+        lengthField("Back overhang", () => roof.back_overhang, (v) => (roof.back_overhang = v), events),
+      ),
+    ],
+    [
+      "Remove roof",
+      () => {
+        delete project.roof;
+        events.restructured();
+      },
+    ],
   );
 }
 
@@ -335,180 +509,301 @@ function pitchField(roof: RoofJson, events: PanelEvents): HTMLElement {
   );
 }
 
-function floorSection(project: ProjectJson, events: PanelEvents): HTMLElement {
+
+function floorSection(project: ProjectJson, events: PanelEvents): HTMLElement | null {
   const floor = project.floor;
-  if (!floor) {
-    return h(
-      "section",
-      { class: "panel-section" },
-      h("h2", {}, "Floor"),
-      h("p", { class: "empty" }, "No floor yet; the walls stand on a slab."),
+  if (!floor) return null;
+  return foldSection(
+    "floor",
+    "Floor",
+    () => `${floor.joist} joists · ${floor.beams} beams on ${{ piers: "piers", posts: "posts", skids: "grade" }[floor.support]}`,
+    [
       h(
         "div",
-        { class: "add-row" },
-        h(
-          "button",
-          {
-            type: "button",
-            class: "add-button",
-            onclick: () => {
-              project.floor = {
-                joist: "2x6",
-                beam: "4x6",
-                beam_plies: 1,
-                beams: 2,
-                support: "piers",
-                pier_spacing: "6'",
-                pier_inset: '12"',
-                subfloor: '3/4"',
-              };
-              events.restructured();
-            },
-          },
-          "+ Floor on beams",
+        { class: "row" },
+        select("Joists", JOISTS, () => floor.joist, (v) => (floor.joist = v), events),
+        select("Beams", BEAMS, () => floor.beam, (v) => (floor.beam = v), events),
+      ),
+      h(
+        "div",
+        { class: "row" },
+        stepper("Beam lines", () => floor.beams, (v) => (floor.beams = v), 2, 6, events),
+        segmented(
+          "Beams sit on",
+          [
+            ["piers", "Piers"],
+            ["posts", "Posts"],
+            ["skids", "Grade"],
+          ],
+          () => floor.support,
+          (v) => (floor.support = v),
+          events.restructured,
         ),
       ),
-    );
-  }
-  return h(
-    "section",
-    { class: "panel-section" },
-    sectionHead("Floor", "Remove the floor", () => {
-      delete project.floor;
-      events.restructured();
-    }),
-    h(
-      "div",
-      { class: "row" },
-      select("Joists", JOISTS, () => floor.joist, (v) => (floor.joist = v), events),
-      select("Beams", BEAMS, () => floor.beam, (v) => (floor.beam = v), events),
-    ),
-    h(
-      "div",
-      { class: "row" },
-      stepper("Beam lines", () => floor.beams, (v) => (floor.beams = v), 2, 6, events),
+      floor.support === "posts"
+        ? h(
+            "div",
+            { class: "row" },
+            select("Posts", POSTS, () => floor.post ?? "4x4", (v) => (floor.post = v), events),
+            lengthField("Post height", () => floor.post_height ?? '12"', (v) => (floor.post_height = v), events, "Pier top to beam"),
+          )
+        : null,
+      floor.support !== "skids"
+        ? lengthField("Most room between piers", () => floor.pier_spacing, (v) => (floor.pier_spacing = v), events)
+        : null,
+    ],
+    [
+      "Remove floor",
+      () => {
+        delete project.floor;
+        events.restructured();
+      },
+    ],
+  );
+}
+
+function porchSection(project: ProjectJson, events: PanelEvents): HTMLElement | null {
+  const porch = project.porch;
+  if (!porch) return null;
+  const deck = porch.deck;
+  return foldSection(
+    "porch",
+    "Porch",
+    () => `${porch.depth ?? "6'"} deep · ${porch.deck ? "deck" : "open ground"}`,
+    [
+      h(
+        "div",
+        { class: "row" },
+        lengthField("Depth", () => porch.depth ?? "6'", (v) => (porch.depth = v), events, "Out from the front wall"),
+        lengthField("Rafter overhang", () => porch.overhang ?? '12"', (v) => (porch.overhang = v), events, "Past the beam"),
+      ),
+      h(
+        "div",
+        { class: "row" },
+        select("Posts", POSTS, () => porch.post ?? "4x4", (v) => (porch.post = v), events),
+        lengthField("Most room between posts", () => porch.post_spacing ?? "8'", (v) => (porch.post_spacing = v), events),
+      ),
+      h(
+        "div",
+        { class: "row" },
+        select("Beam", PORCH_BEAMS, () => porch.beam ?? "2x8", (v) => (porch.beam = v), events),
+        stepper("Beam plies", () => porch.beam_plies ?? 2, (v) => (porch.beam_plies = v), 1, 3, events),
+      ),
       segmented(
-        "Beams sit on",
+        "Under the porch",
         [
-          ["piers", "Piers"],
-          ["skids", "Grade"],
+          ["deck", "Deck"],
+          ["ground", "Open ground"],
         ],
-        () => floor.support,
-        (v) => (floor.support = v),
+        () => (deck ? "deck" : "ground"),
+        (v) => {
+          if (v === "deck") porch.deck = { beam: "4x6", decking: "5/4x6", step_down: '1"' };
+          else delete porch.deck;
+        },
         events.restructured,
       ),
-    ),
-    floor.support === "piers"
-      ? lengthField("Most room between piers", () => floor.pier_spacing, (v) => (floor.pier_spacing = v), events)
-      : null,
+      deck
+        ? h(
+            "div",
+            { class: "row" },
+            select("Decking", DECKING, () => deck.decking ?? "5/4x6", (v) => (deck.decking = v), events),
+            lengthField("Step down", () => deck.step_down ?? '1"', (v) => (deck.step_down = v), events, "Below the shed floor"),
+          )
+        : null,
+    ],
+    [
+      "Remove porch",
+      () => {
+        delete project.porch;
+        events.restructured();
+      },
+    ],
   );
 }
 
-function porchSection(project: ProjectJson, events: PanelEvents): HTMLElement {
-  const porch = project.porch;
-  if (!porch) {
-    return h(
-      "section",
-      { class: "panel-section" },
-      h("h2", {}, "Porch"),
-      h("p", { class: "empty" }, "No porch yet."),
-      h(
-        "div",
-        { class: "add-row" },
-        h(
-          "button",
-          {
-            type: "button",
-            class: "add-button",
-            onclick: () => {
-              const p: PorchJson = { depth: "6'", post: "4x4", beam: "2x8", beam_plies: 2 };
-              // A deck hangs from the floor's rim, so it needs a floor.
-              if (project.floor) p.deck = { beam: "4x6", decking: "5/4x6", step_down: '1"' };
-              project.porch = p;
-              events.restructured();
-            },
-          },
-          "+ Porch off the front",
-        ),
-      ),
-    );
-  }
-  const deck = porch.deck;
+const CODES: [NonNullable<DeckJson["code"]>, string][] = [
+  ["irc2021", "2021 IRC"],
+  ["fairfax2021", "Fairfax County"],
+];
+const CODE_NAMES: Record<NonNullable<DeckJson["code"]>, string> = {
+  irc2021: "the 2021 IRC deck tables (R507)",
+  fairfax2021: "Fairfax County's Typical Deck Details (2021 VRC)",
+};
+const SPECIES: [NonNullable<DeckJson["species"]>, string][] = [
+  ["southern_pine", "Southern pine"],
+  ["douglas_fir", "Douglas fir"],
+  ["redwood", "Redwood"],
+];
+const DECK_BEAMS = ["2x6", "2x8", "2x10", "2x12"];
+const SOILS = ["1500", "2000", "2500", "3000"];
+
+/** Who owns a deck's plans, at the top of its panel and on every sheet. */
+function deckNotice(deck: DeckJson): HTMLElement {
   return h(
     "section",
-    { class: "panel-section" },
-    sectionHead("Porch", "Remove the porch", () => {
-      delete project.porch;
-      events.restructured();
-    }),
+    { class: "panel-section deck-notice", role: "note" },
+    h("strong", {}, "You're responsible for these plans."),
     h(
-      "div",
-      { class: "row" },
-      lengthField("Depth", () => porch.depth ?? "6'", (v) => (porch.depth = v), events, "Out from the front wall"),
-      lengthField("Rafter overhang", () => porch.overhang ?? '12"', (v) => (porch.overhang = v), events, "Past the beam"),
+      "p",
+      {},
+      `Sticks checks spans, beams, posts and footings against ${CODE_NAMES[deck.code ?? "irc2021"]}, but it isn't an engineer or a building official. Confirm every size, footing and connector with your building department before you build.`,
     ),
-    h(
-      "div",
-      { class: "row" },
-      select("Posts", POSTS, () => porch.post ?? "4x4", (v) => (porch.post = v), events),
-      lengthField("Most room between posts", () => porch.post_spacing ?? "8'", (v) => (porch.post_spacing = v), events),
-    ),
-    h(
-      "div",
-      { class: "row" },
-      select("Beam", PORCH_BEAMS, () => porch.beam ?? "2x8", (v) => (porch.beam = v), events),
-      stepper("Beam plies", () => porch.beam_plies ?? 2, (v) => (porch.beam_plies = v), 1, 3, events),
-    ),
-    segmented(
-      "Under the porch",
-      [
-        ["deck", "Deck"],
-        ["ground", "Open ground"],
-      ],
-      () => (deck ? "deck" : "ground"),
-      (v) => {
-        if (v === "deck") porch.deck = { beam: "4x6", decking: "5/4x6", step_down: '1"' };
-        else delete porch.deck;
-      },
-      events.restructured,
-    ),
-    deck
-      ? h(
-          "div",
-          { class: "row" },
-          select("Decking", DECKING, () => deck.decking ?? "5/4x6", (v) => (deck.decking = v), events),
-          lengthField("Step down", () => deck.step_down ?? '1"', (v) => (deck.step_down = v), events, "Below the shed floor"),
-        )
-      : null,
   );
 }
 
-function sheathingSection(project: ProjectJson, events: PanelEvents): HTMLElement {
-  const sheathing = project.sheathing;
-  if (!sheathing) {
-    return h(
-      "section",
-      { class: "panel-section" },
-      h("h2", {}, "Sheathing"),
-      h("p", { class: "empty" }, "No sheathing yet."),
-      h(
-        "div",
-        { class: "add-row" },
+/** A deck on its own footings: its size, framing, supports, decking and code. */
+function deckSections(deck: DeckJson, events: PanelEvents, remove?: () => void): HTMLElement[] {
+  const flush = () => (deck.beam_style ?? "under") === "flush";
+  const support = () => deck.support ?? "piers";
+  const plies = () => deck.beam_plies ?? 2;
+  return [
+    foldSection(
+      "deck",
+      "Deck",
+      () => `${deck.width ?? "12'"} × ${deck.depth ?? "12'"} · ${deck.height ?? '18"'} high`,
+      [
         h(
-          "button",
-          {
-            type: "button",
-            class: "add-button",
-            onclick: () => {
-              project.sheathing = { wall: '7/16"', roof: '1/2"' };
+          "div",
+          { class: "row" },
+          lengthField("Width", () => deck.width ?? "12'", (v) => (deck.width = v), events, "Along the beams"),
+          lengthField("Depth", () => deck.depth ?? "12'", (v) => (deck.depth = v), events, "Along the joists"),
+        ),
+        lengthField("Height", () => deck.height ?? '18"', (v) => (deck.height = v), events, "Ground to the top of the decking. Over 30\" needs guards."),
+      ],
+      remove
+        ? [
+            "Remove deck",
+            () => {
+              remove();
               events.restructured();
             },
-          },
-          "+ Walls and roof",
+          ]
+        : undefined,
+    ),
+    foldSection(
+      "deck-framing",
+      "Deck framing",
+      () => `${deck.joist ?? "2x8"} joists · ${deck.beams ?? 2} beams of (${plies()}) ${deck.beam ?? "2x8"}${flush() ? " · flush" : ""}`,
+      [
+        h(
+          "div",
+          { class: "row" },
+          select("Joists", JOISTS, () => deck.joist ?? "2x8", (v) => (deck.joist = v), events),
+          select("On center", ['12"', '16"', '24"'], () => deck.on_center ?? '16"', (v) => (deck.on_center = v), events),
         ),
-      ),
-    );
-  }
+        h(
+          "div",
+          { class: "row" },
+          select("Beams", DECK_BEAMS, () => deck.beam ?? "2x8", (v) => (deck.beam = v), events),
+          stepper("Plies", plies, (v) => (deck.beam_plies = v), 1, 3, events),
+        ),
+        h(
+          "div",
+          { class: "row" },
+          stepper("Beam lines", () => deck.beams ?? 2, (v) => (deck.beams = v), 2, 4, events),
+          lengthField("Joist overhang", () => deck.overhang ?? "0", (v) => (deck.overhang = v), events, "Past each outer beam"),
+        ),
+        segmented(
+          "Joists sit",
+          [
+            ["under", "On the beams"],
+            ["flush", "Hung level with them"],
+          ],
+          () => deck.beam_style ?? "under",
+          (v) => (deck.beam_style = v),
+          events.changed,
+        ),
+      ],
+    ),
+    foldSection(
+      "deck-supports",
+      "Deck supports",
+      () => `${support() === "posts" ? `${deck.post ?? "4x4"} posts` : support() === "blocks" ? "deck blocks" : "beams on piers"}${deck.post_spacing ? ` · ${deck.post_spacing} apart` : ""}`,
+      [
+        segmented(
+          "Beams sit on",
+          [
+            ["posts", "Posts on footings"],
+            ["piers", "Piers"],
+            ["blocks", "Deck blocks"],
+          ],
+          support,
+          (v) => (deck.support = v),
+          events.restructured,
+        ),
+        support() === "posts" ? select("Posts", POSTS, () => deck.post ?? "4x4", (v) => (deck.post = v), events) : null,
+        h(
+          "div",
+          { class: "row" },
+          lengthField(
+            "Most room between supports",
+            () => deck.post_spacing ?? "",
+            (v) => (deck.post_spacing = v),
+            events,
+            "Blank: as far as the beam can span",
+            () => delete deck.post_spacing,
+          ),
+          lengthField("End inset", () => deck.post_inset ?? '12"', (v) => (deck.post_inset = v), events, "From each end of the beam"),
+        ),
+      ],
+    ),
+    foldSection(
+      "deck-decking",
+      "Decking",
+      () => `${deck.decking ?? "5/4x6"} ${deck.decking_material ?? "wood"}`,
+      [
+        h(
+          "div",
+          { class: "row" },
+          select("Boards", DECKING, () => deck.decking ?? "5/4x6", (v) => (deck.decking = v), events),
+          lengthField("Gap", () => deck.gap ?? '1/8"', (v) => (deck.gap = v), events),
+        ),
+        segmented(
+          "Material",
+          [
+            ["wood", "Wood"],
+            ["composite", "Composite"],
+          ],
+          () => deck.decking_material ?? "wood",
+          (v) => (deck.decking_material = v),
+          events.changed,
+        ),
+      ],
+    ),
+    foldSection(
+      "deck-code",
+      "Deck code",
+      () => `${CODES.find(([c]) => c === (deck.code ?? "irc2021"))![1]} · ${SPECIES.find(([c]) => c === (deck.species ?? "southern_pine"))![1].toLowerCase()}`,
+      [
+        segmented("Check against", CODES, () => deck.code ?? "irc2021", (v) => (deck.code = v), events.restructured),
+        h(
+          "div",
+          { class: "row" },
+          select(
+            "Lumber",
+            SPECIES.map(([, name]) => name),
+            () => SPECIES.find(([c]) => c === (deck.species ?? "southern_pine"))![1],
+            (v) => (deck.species = SPECIES.find(([, name]) => name === v)![0]),
+            events,
+          ),
+          select("Soil, psf", SOILS, () => String(deck.soil_psf ?? 1500), (v) => (deck.soil_psf = Number(v)), events),
+        ),
+        lengthField(
+          "Frost depth",
+          () => deck.frost_depth ?? "",
+          (v) => (deck.frost_depth = v),
+          events,
+          "Blank: 24\" in Fairfax, 12\" under the IRC",
+          () => delete deck.frost_depth,
+        ),
+      ],
+    ),
+  ];
+}
+
+function sheathingSection(project: ProjectJson, events: PanelEvents): HTMLElement | null {
+  const sheathing = project.sheathing;
+  if (!sheathing) return null;
   const thickness = (part: "wall" | "roof", label: string) =>
     select(
       label,
@@ -520,24 +815,25 @@ function sheathingSection(project: ProjectJson, events: PanelEvents): HTMLElemen
       },
       events,
     );
-  return h(
-    "section",
-    { class: "panel-section" },
-    sectionHead("Sheathing", "Remove the sheathing", () => {
-      delete project.sheathing;
-      events.restructured();
-    }),
-    h("div", { class: "row" }, thickness("wall", "Walls"), thickness("roof", "Roof")),
-    h("p", { class: "section-hint" }, "4 × 8 sheets, joints on framing, cut around doors and windows."),
-  );
-}
-
-function sectionHead(title: string, removeLabel: string, remove: () => void): HTMLElement {
-  return h(
-    "div",
-    { class: "section-head" },
-    h("h2", {}, title),
-    h("button", { type: "button", class: "icon-button", "aria-label": removeLabel, title: removeLabel, onclick: remove }, "×"),
+  const summary = () =>
+    [sheathing.wall ? `${sheathing.wall} walls` : null, sheathing.roof ? `${sheathing.roof} roof` : null]
+      .filter((p) => p !== null)
+      .join(" · ") || "None";
+  return foldSection(
+    "sheathing",
+    "Sheathing",
+    summary,
+    [
+      h("div", { class: "row" }, thickness("wall", "Walls"), thickness("roof", "Roof")),
+      h("p", { class: "section-hint" }, "4 × 8 sheets, joints on framing, cut around doors and windows."),
+    ],
+    [
+      "Remove sheathing",
+      () => {
+        delete project.sheathing;
+        events.restructured();
+      },
+    ],
   );
 }
 
@@ -614,7 +910,8 @@ function wallsSection(project: ProjectJson, ctx: PanelContext, events: PanelEven
     h(
       "section",
       { class: "panel-section" },
-      h("h2", {}, project.building ? "Walls" : "Wall"),
+      // A building's tab already names the walls.
+      project.building ? null : h("h2", {}, "Wall"),
       picker,
       ...sizeFields,
       ...(project.building ? [] : rulesFields(project, events)),
@@ -642,6 +939,16 @@ function endField(
   );
 }
 
+/** Openings folded to their summary; new ones start unfolded. */
+const foldedOpenings = new WeakSet<object>();
+/** The opening to unfold and mark on the next render, after a click on it in the drawing. */
+let revealed: OpeningJson | null = null;
+
+export function revealOpening(o: OpeningJson): void {
+  foldedOpenings.delete(o);
+  revealed = o;
+}
+
 function openingsSection(
   wall: WallJson | undefined,
   ensure: () => WallJson,
@@ -654,29 +961,11 @@ function openingsSection(
     events.restructured();
   };
   const openings = wall?.opening ?? [];
-  const cards = openings.map((o, i) =>
-    h(
+  const cards = openings.map((o, i) => {
+    const name = `${KIND_NAMES[o.kind]} ${i + 1}`;
+    const body = h(
       "div",
-      { class: "card" },
-      h(
-        "div",
-        { class: "card-head" },
-        h("span", { class: "card-title" }, `${KIND_NAMES[o.kind]} ${i + 1}`),
-        h(
-          "button",
-          {
-            type: "button",
-            class: "icon-button",
-            "aria-label": `Remove ${KIND_NAMES[o.kind].toLowerCase()} ${i + 1}`,
-            title: "Remove",
-            onclick: () => {
-              openings.splice(i, 1);
-              events.restructured();
-            },
-          },
-          "×",
-        ),
-      ),
+      { class: "card-body" },
       h(
         "div",
         { class: "row" },
@@ -692,11 +981,33 @@ function openingsSection(
           : lengthField("Sill height", () => o.sill_height, (v) => (o.sill_height = v), events),
       ),
       o.kind === "door" ? null : select("Header", HEADERS, () => o.header, (v) => (o.header = v), events),
-    ),
-  );
+      h(
+        "button",
+        {
+          type: "button",
+          class: "remove-button",
+          "aria-label": `Remove ${name.toLowerCase()}`,
+          onclick: () => {
+            openings.splice(i, 1);
+            events.restructured();
+          },
+        },
+        "Remove",
+      ),
+    );
+    const head = foldButton(
+      h("span", { class: "card-title" }, name),
+      () => `${o.width} × ${o.height} at ${o.offset}`,
+      body,
+      !foldedOpenings.has(o),
+      (open) => (open ? foldedOpenings.delete(o) : foldedOpenings.add(o)),
+    );
+    return h("div", { class: o === revealed ? "card revealed" : "card" }, head, body);
+  });
+  revealed = null;
   return h(
     "section",
-    { class: "panel-section" },
+    { class: "panel-section", "data-section": "openings" },
     h("h2", {}, "Openings"),
     ...cards,
     openings.length === 0 ? h("p", { class: "empty" }, "No doors or windows in this wall.") : null,
@@ -778,172 +1089,4 @@ function freeSpot(wall: WallJson, length16: number | null): string {
   }
   if (length16 !== null && end > length16 - 60 * 16) end = 24 * 16;
   return `${Math.round(end / 16)}"`;
-}
-
-function lumberSection(project: ProjectJson, events: PanelEvents): HTMLElement {
-  const rules = project.rules;
-  const cards = (project.stock ?? []).map((stock) =>
-    h(
-      "div",
-      { class: "card" },
-      h("div", { class: "card-head" }, h("span", { class: "card-title" }, stock.size)),
-      h(
-        "div",
-        { class: "stock-head", "aria-hidden": "true" },
-        h("span", {}, "Length"),
-        h("span", {}, "Price each"),
-      ),
-      ...stock.lengths.map((_, i) => stockRow(stock, i, events)),
-      h(
-        "div",
-        { class: "add-row" },
-        h(
-          "button",
-          {
-            type: "button",
-            class: "add-button",
-            onclick: () => {
-              stock.lengths.push(nextLength(stock));
-              if (stock.prices_cents.length > 0) stock.prices_cents.push(null);
-              events.restructured();
-            },
-          },
-          "+ Length",
-        ),
-      ),
-    ),
-  );
-  return h(
-    "section",
-    { class: "panel-section" },
-    h("h2", {}, "Lumber yard"),
-    h(
-      "p",
-      { class: "section-hint" },
-      "Boards the cut list can buy. With a price on every length it plans for the lowest cost; otherwise for the least lumber.",
-    ),
-    lengthField("Saw kerf", () => rules.kerf ?? '1/8"', (v) => (rules.kerf = v), events, "Lost to the blade on every cut"),
-    ...cards,
-    ...(project.sheet ?? []).map((sheet) => sheetCard(sheet, sheetUses(project, sheet), events)),
-  );
-}
-
-/** What a sheet thickness covers, such as `subfloor` or `wall and roof`. */
-function sheetUses(project: ProjectJson, sheet: SheetJson): string {
-  const uses = [
-    project.floor?.subfloor === sheet.thickness ? "subfloor" : null,
-    project.sheathing?.wall === sheet.thickness ? "wall" : null,
-    project.sheathing?.roof === sheet.thickness ? "roof" : null,
-  ].filter((u) => u !== null);
-  if (uses.length === 0) return "sheets";
-  return `${uses.join(" and ")} sheets`;
-}
-
-function sheetCard(sheet: SheetJson, uses: string, events: PanelEvents): HTMLElement {
-  const message = h("div", { class: "field-error", role: "alert" });
-  const price = h("input", {
-    type: "text",
-    inputmode: "decimal",
-    placeholder: "$",
-    value: formatCents(sheet.price_cents ?? null),
-    autocomplete: "off",
-    "aria-label": `${sheet.thickness} sheet price`,
-    oninput: () => {
-      const cents = parseCents(price.value);
-      if (cents === undefined) {
-        price.classList.add("invalid");
-        message.textContent = "Try a price like 45.99";
-        return;
-      }
-      price.classList.remove("invalid");
-      message.textContent = "";
-      if (cents === null) delete sheet.price_cents;
-      else sheet.price_cents = cents;
-      events.changed();
-    },
-  });
-  return h(
-    "div",
-    { class: "card" },
-    h("div", { class: "card-head" }, h("span", { class: "card-title" }, `${sheet.thickness} ${uses}`)),
-    h(
-      "div",
-      { class: "stock-row" },
-      h("div", { class: "sheet-size" }, `${sheet.width ?? "4'"} × ${sheet.length ?? "8'"}`),
-      h("label", { class: "field" }, price, message),
-    ),
-  );
-}
-
-function stockRow(stock: StockJson, i: number, events: PanelEvents): HTMLElement {
-  const message = h("div", { class: "field-error", role: "alert" });
-  const price = h("input", {
-    type: "text",
-    inputmode: "decimal",
-    placeholder: "$",
-    value: formatCents(stock.prices_cents[i] ?? null),
-    autocomplete: "off",
-    "aria-label": `${stock.size} ${stock.lengths[i]} price`,
-    oninput: () => {
-      const cents = parseCents(price.value);
-      if (cents === undefined) {
-        price.classList.add("invalid");
-        message.textContent = "Try a price like 4.98";
-        return;
-      }
-      price.classList.remove("invalid");
-      message.textContent = "";
-      while (stock.prices_cents.length < stock.lengths.length) stock.prices_cents.push(null);
-      stock.prices_cents[i] = cents;
-      if (stock.prices_cents.every((p) => p === null)) stock.prices_cents = [];
-      events.changed();
-    },
-  });
-  const length = lengthField(`${stock.size} length`, () => stock.lengths[i], (v) => (stock.lengths[i] = v), events);
-  // The card's column heads label these rows.
-  length.querySelector(".field-label")?.remove();
-  return h(
-    "div",
-    { class: "stock-row" },
-    length,
-    h("label", { class: "field" }, price, message),
-    h(
-      "button",
-      {
-        type: "button",
-        class: "icon-button",
-        "aria-label": `Remove ${stock.size} ${stock.lengths[i]}`,
-        title: "Remove",
-        disabled: stock.lengths.length === 1,
-        onclick: () => {
-          stock.lengths.splice(i, 1);
-          stock.prices_cents.splice(i, 1);
-          events.restructured();
-        },
-      },
-      "×",
-    ),
-  );
-}
-
-/** Cents from `4.98` or `$4.98`; null when blank; undefined when unreadable. */
-function parseCents(text: string): number | null | undefined {
-  const t = text.trim().replace(/^\$\s*/, "");
-  if (t === "") return null;
-  const m = /^(\d+)(?:\.(\d{0,2}))?$/.exec(t);
-  if (!m) return undefined;
-  return Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
-}
-
-function formatCents(cents: number | null): string {
-  return cents === null ? "" : (cents / 100).toFixed(2);
-}
-
-/** Two feet past the longest length on the list. */
-function nextLength(stock: StockJson): string {
-  const longest = Math.max(
-    0,
-    ...stock.lengths.map(parseLength).map((r) => ("ok" in r ? r.ok : 0)),
-  );
-  return `${Math.round(longest / 192) + 2}'`;
 }

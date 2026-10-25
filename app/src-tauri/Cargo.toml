@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 sticks-intent = { path = "../../crates/sticks-intent" }
 sticks-local = { path = "../../crates/sticks-local" }
+tauri-plugin-dialog = "2"
 
 [features]
 # Plain-English edits with a model on this machine when Jev can't be reached.

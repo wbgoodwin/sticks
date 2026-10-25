@@ -2,9 +2,31 @@
 // length, the height, and the layout marks you'd snap on the plates.
 
 import { formatLength, type MemberKind, type MemberView, type WallView } from "./core";
+import type { Guide } from "./snap";
 
 export interface DrawOptions {
   layoutFrom: "left" | "right";
+  /** What's good about each opening's spot, such as "Centered on the wall". */
+  notes?: string[][];
+  drag?: DragOverlay;
+}
+
+/** What to show while an opening is dragged. */
+export interface DragOverlay {
+  index: number;
+  guides: Guide[];
+  /** The space to either side, measured while it moves. */
+  gaps: [number, number][];
+  /** Where the pointer is asking for, when the frame won't take it there. */
+  ghost: { x: number; y: number; w: number; h: number } | null;
+}
+
+/** Maps the drawing back to the wall, in sixteenths. */
+export interface Scale {
+  /** Pixels per inch. */
+  s: number;
+  x16(px: number): number;
+  y16(py: number): number;
 }
 
 export const KIND_NAMES: Record<MemberKind, string> = {
@@ -49,10 +71,48 @@ export function groupKey(m: MemberView): string {
   return `${m.kind}|${m.size}|${m.length_16}`;
 }
 
-const MARK_ROW = 54;
-const MARK_ROWS = 2;
-const MARK_GAP = 13;
-const PAD = { left: 72, right: 64, top: 64, bottom: 16 + MARK_ROW * MARK_ROWS + 28 };
+// Under the bottom plate: one row of stud positions, and below it a bracket
+// for each opening's rough opening. Kings and jacks aren't numbered: they go
+// just outside each rough opening edge. Labels are rotated so studs on
+// layout never crowd, each reading up from the end of its tick.
+const MARK_GAP = 16;
+const LABEL_LONG = 64;
+const STUD_ROW = 14 + LABEL_LONG + 14;
+const OPENING_ROW = 14 + LABEL_LONG + 8;
+const PAD = { left: 72, right: 64, top: 64 };
+/** Room under the wall for the marks and the layout note. */
+const padBottom = (openings: boolean) => STUD_ROW + (openings ? OPENING_ROW : 0) + 24;
+
+/**
+ * Where to put labels for marks at `xs` (in order across) so none overlap.
+ * Studs on layout are far enough apart to sit right at their mark; the odd
+ * run too close together, like a corner, spreads out centered on itself.
+ */
+function spreadLabels(xs: number[]): number[] {
+  const runs: { xs: number[]; start: number }[] = [];
+  for (const x of xs) {
+    let run = { xs: [x], start: x };
+    for (;;) {
+      const prev = runs[runs.length - 1];
+      if (!prev || prev.start + prev.xs.length * MARK_GAP <= run.start) break;
+      runs.pop();
+      const all = [...prev.xs, ...run.xs];
+      const mid = all.reduce((sum, v) => sum + v, 0) / all.length;
+      run = { xs: all, start: mid - ((all.length - 1) * MARK_GAP) / 2 };
+    }
+    runs.push(run);
+  }
+  return runs.flatMap((run) => run.xs.map((_, i) => run.start + i * MARK_GAP));
+}
+
+/** A rotated label reading up, its top at (`x`, `y`). */
+function upLabel(x: number, y: number, text: string, attrs: Record<string, string> = {}): SVGTextElement {
+  return el(
+    "text",
+    { class: "mark-text", x, y, dy: "0.35em", transform: `rotate(-90 ${x} ${y})`, ...attrs },
+    text,
+  );
+}
 
 export function drawElevation(
   svg: SVGSVGElement,
@@ -60,13 +120,14 @@ export function drawElevation(
   options: DrawOptions,
   width: number,
   height: number,
-): void {
+): Scale {
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.replaceChildren();
   const L = wall.length_16 / 16;
   const H = wall.height_16 / 16;
   const availW = width - PAD.left - PAD.right;
-  const availH = height - PAD.top - PAD.bottom;
+
+  const availH = height - PAD.top - padBottom(wall.openings.length > 0);
   const s = Math.max(0.1, Math.min(availW / L, availH / H));
   const x0 = PAD.left + (availW - L * s) / 2;
   const yb = PAD.top + (availH - H * s) / 2 + H * s;
@@ -74,13 +135,27 @@ export function drawElevation(
   const Y = (y16: number) => yb - (y16 / 16) * s;
 
   // Openings first so framing draws over their outlines.
+  const drag = options.drag;
   const openings = el("g", { class: "openings" });
-  for (const o of wall.openings) {
+  const handles = el("g", { class: "opening-handles" });
+  for (const [i, o] of wall.openings.entries()) {
     const x = X(o.x_16);
     const y = Y(o.y_16 + o.h_16);
     const w = (o.w_16 / 16) * s;
     const hgt = (o.h_16 / 16) * s;
-    openings.append(el("rect", { class: "rough-opening", x, y, width: w, height: hgt }));
+    const notes = options.notes?.[i] ?? [];
+    const dragged = drag?.index === i;
+    openings.append(
+      el("rect", {
+        class: `rough-opening${dragged ? " dragging" : ""}${notes.length > 0 ? " ideal" : ""}`,
+        x,
+        y,
+        width: w,
+        height: hgt,
+      }),
+    );
+    // A clear target over the hole itself, above the framing, to grab it by.
+    handles.append(el("rect", { class: "opening-handle", "data-index": i, x, y, width: w, height: hgt }));
     // Labels only where they fit inside the opening (about 7px a character).
     const size = `${formatLength(o.w_16, true)} × ${formatLength(o.h_16, true)}`;
     const cx = x + w / 2;
@@ -90,6 +165,14 @@ export function drawElevation(
       if (w > size.length * 7 + 12) {
         openings.append(el("text", { class: "opening-size", x: cx, y: cy + 12 }, size));
       }
+    }
+    // The good thing about its spot, or a check mark where the words won't fit.
+    if (notes.length > 0 && !dragged) {
+      const text = shortNote(notes[0]);
+      const fits = hgt > 64 && w > text.length * 6.5 + 16;
+      const mark = el("text", { class: "opening-ideal", x: cx, y: fits ? cy + 30 : y + Math.min(14, hgt / 2 + 4) }, fits ? `✓ ${text}` : "✓");
+      mark.append(el("title", {}, notes.join("\n")));
+      openings.append(mark);
     }
   }
   svg.append(openings);
@@ -127,6 +210,41 @@ export function drawElevation(
   }
   svg.append(members);
 
+  if (drag) {
+    const g = el("g", { class: "drag-overlay" });
+    for (const guide of drag.guides) {
+      g.append(
+        guide.dir === "v"
+          ? el("line", { class: "snap-guide", x1: X(guide.at), y1: Y(wall.height_16) - 14, x2: X(guide.at), y2: Y(0) + 8 })
+          : el("line", { class: "snap-guide", x1: X(0) - 8, y1: Y(guide.at), x2: X(wall.length_16) + 8, y2: Y(guide.at) }),
+      );
+    }
+    const o = wall.openings[drag.index];
+    // Below the opening's name, so the two don't overlap.
+    const gy = Y(o.y_16 + o.h_16 * 0.3);
+    const even = drag.gaps.length === 2 && drag.gaps[0][1] - drag.gaps[0][0] === drag.gaps[1][1] - drag.gaps[1][0];
+    for (const [a, b] of drag.gaps) {
+      if (b - a < 16) continue;
+      const d = dimension(X(a), gy, X(b), gy, formatLength(b - a), "h");
+      d.classList.add("gap", ...(even ? ["even"] : []));
+      g.append(d);
+    }
+    if (drag.ghost) {
+      const r = drag.ghost;
+      g.append(
+        el("rect", {
+          class: "drag-ghost",
+          x: X(r.x),
+          y: Y(r.y + r.h),
+          width: (r.w / 16) * s,
+          height: (r.h / 16) * s,
+        }),
+      );
+    }
+    svg.append(g);
+  }
+  svg.append(handles);
+
   // Plate splices: a red line across each piece that starts at the joint.
   const splices = el("g", { class: "splices" });
   for (const sp of wall.splices) {
@@ -155,34 +273,44 @@ export function drawElevation(
     svg.append(dimension(right, Y(0), right, Y(wall.right_height_16), formatLength(wall.right_height_16), "v"));
   }
 
-  // Layout marks along the bottom plate. Close marks drop to a second row.
+  // Stud positions along the bottom plate.
   const marks = el("g", { class: "marks" });
-  const rowEnds: number[] = [];
-  for (const m of [...wall.marks].sort((a, b) => a.at_16 - b.at_16)) {
-    const member = wall.members.find((v) => v.label === m.label);
-    if (!member) continue;
-    const edge16 = options.layoutFrom === "left" ? member.x_16 : member.x_16 + member.w_16;
-    const x = X(edge16);
-    // Rotated labels need about one line height of horizontal room.
-    let row = rowEnds.findIndex((end) => Math.abs(x - end) >= MARK_GAP);
-    if (row === -1) row = rowEnds.length;
-    if (row >= MARK_ROWS) continue;
-    rowEnds[row] = x;
-    const ty = yb + 16 + row * MARK_ROW;
+  const studs = [...wall.marks]
+    .sort((a, b) => a.at_16 - b.at_16)
+    .flatMap((m) => {
+      if (m.kind === "king_stud" || m.kind === "jack_stud") return [];
+      const member = wall.members.find((v) => v.label === m.label);
+      if (!member) return [];
+      return [{ m, x: X(options.layoutFrom === "left" ? member.x_16 : member.x_16 + member.w_16) }];
+    });
+  const at = spreadLabels(studs.map((v) => v.x));
+  const ty = yb + 16;
+  studs.forEach(({ m, x }, i) => {
     marks.append(
-      el("line", { class: `tick kind-${m.kind}`, x1: x, y1: yb + 3, x2: x, y2: ty - 3 }),
-      el(
-        "text",
-        {
-          class: `mark-text kind-${m.kind}`,
-          x,
-          y: ty,
-          transform: `rotate(-90 ${x} ${ty})`,
-          "data-label": m.label,
-        },
-        m.at,
-      ),
+      el("polyline", { class: "tick", points: `${x},${yb + 3} ${x},${ty - 8} ${at[i]},${ty - 3}` }),
+      upLabel(at[i], ty, m.at, { "data-label": m.label }),
     );
+  });
+
+  // Each opening's rough opening as a bracket, its edges measured from the
+  // layout end like the studs.
+  const by = yb + STUD_ROW + 8;
+  for (const o of wall.openings) {
+    const a = X(o.x_16);
+    const b = X(o.x_16 + o.w_16);
+    const measure = (x16: number) =>
+      formatLength(options.layoutFrom === "left" ? x16 : wall.length_16 - x16, true);
+    marks.append(
+      el("line", { class: "ro", x1: a, y1: by, x2: b, y2: by }),
+      el("line", { class: "ro", x1: a, y1: by - 6, x2: a, y2: by + 6 }),
+      el("line", { class: "ro", x1: b, y1: by - 6, x2: b, y2: by + 6 }),
+      upLabel(a, by + 10, measure(o.x_16)),
+      upLabel(b, by + 10, measure(o.x_16 + o.w_16)),
+    );
+    // The name only where it fits over the bracket.
+    if (b - a >= o.name.length * 7 + 8) {
+      marks.append(el("text", { class: "ro-name", x: (a + b) / 2, y: by - 8 }, o.name));
+    }
   }
   svg.append(marks);
 
@@ -196,9 +324,25 @@ export function drawElevation(
         y: height - 12,
         "text-anchor": options.layoutFrom === "left" ? "start" : "end",
       },
-      options.layoutFrom === "left" ? "Layout measured from this end →" : "← Layout measured from this end",
+      options.layoutFrom === "left"
+        ? `Layout measured from this end →${wall.openings.length ? "   Brackets: rough openings" : ""}`
+        : `${wall.openings.length ? "Brackets: rough openings   " : ""}← Layout measured from this end`,
     ),
   );
+
+  return {
+    s,
+    x16: (px) => ((px - x0) / s) * 16,
+    y16: (py) => ((yb - py) / s) * 16,
+  };
+}
+
+/** A few words for a note, to fit inside the opening. */
+function shortNote(note: string): string {
+  if (note.startsWith("Centered between")) return "Centered in its space";
+  if (note.startsWith("Centered")) return "Centered";
+  if (note.startsWith("Spaced evenly")) return "Evenly spaced";
+  return note.replace(/ with .*/, "");
 }
 
 function dimension(

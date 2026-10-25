@@ -1,11 +1,13 @@
 //! The project file: a plain-text TOML description of a structure that diffs
 //! cleanly in Git.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::joint::JointKind;
 use crate::lumber::Nominal;
 use crate::units::Length;
 
@@ -13,6 +15,11 @@ use crate::units::Length;
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub name: String,
+    /// Stages of the build the builder already has the lumber for, such as
+    /// `floor` or `wall front`, kept off the shopping list. See the rules
+    /// crate's `Section` for the names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_hand: Vec<String>,
     #[serde(default)]
     pub rules: Rules,
     #[serde(default, rename = "stock", skip_serializing_if = "Vec::is_empty")]
@@ -32,6 +39,13 @@ pub struct Project {
     pub porch: Option<Porch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheathing: Option<Sheathing>,
+    /// A deck standing on its own footings, apart from any building.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deck: Option<Deck>,
+    /// Connectors and their nails. Left out, the shopping list carries the
+    /// connectors every design needs, nailed, with no prices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<Hardware>,
     #[serde(default, rename = "wall", skip_serializing_if = "Vec::is_empty")]
     pub walls: Vec<Wall>,
 }
@@ -69,6 +83,13 @@ pub struct Floor {
     pub beams: u8,
     /// What the beams sit on. Default piers.
     pub support: FloorSupport,
+    /// Post size, when the beams sit on posts. Default 4x4.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post: Option<Nominal>,
+    /// Post length, pier top to beam bottom, when the beams sit on posts.
+    /// Default 12".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_height: Option<Length>,
     /// Most room between piers along a beam. Default 6'.
     pub pier_spacing: Length,
     /// From each end of a beam to the center of its end pier. Default 12".
@@ -86,6 +107,8 @@ impl Default for Floor {
             beam_plies: 1,
             beams: 2,
             support: FloorSupport::Piers,
+            post: None,
+            post_height: None,
             pier_spacing: Length::feet(6),
             pier_inset: Length::inches(12),
             subfloor: Length::from_sixteenths(12),
@@ -101,6 +124,67 @@ pub enum FloorSupport {
     Piers,
     /// Beams laid on grade as skids; no piers.
     Skids,
+    /// Beams on short posts, each post on a pier; beam joints land on a post.
+    Posts,
+}
+
+impl Floor {
+    /// The post under each beam, when the beams sit on posts.
+    pub fn post_size(&self) -> Nominal {
+        self.post.unwrap_or(Nominal::new(4, 4))
+    }
+
+    /// Pier top to beam bottom, when the beams sit on posts.
+    pub fn post_length(&self) -> Length {
+        self.post_height.unwrap_or(Length::inches(12))
+    }
+}
+
+/// The metal connectors at the joints and the nails or screws that hold
+/// them. Every connector the design needs is on the list unless `parts`
+/// says `none` for its joint; the extra ties are off unless asked for.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Hardware {
+    /// Nails or connector screws. Default nails.
+    pub fasten_with: Fastening,
+    /// Every extra tie for a high-wind area: rafters at the ridge, joists on
+    /// beams, studs to plates and the deck's lateral ties.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub high_wind: bool,
+    /// Extra ties to add without `high_wind`, by joint, such as
+    /// `joist_on_beam`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub add: Vec<JointKind>,
+    /// A model to use in place of the catalog's pick for a kind of joint, or
+    /// `none` to leave that joint's connector off, such as
+    /// `rafter_on_plate = "H1"`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub parts: BTreeMap<JointKind, String>,
+    /// Price in cents by model for connectors, and per box for fasteners,
+    /// such as `"H2.5A" = 89`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub prices_cents: BTreeMap<String, u32>,
+}
+
+impl Hardware {
+    /// Whether joints of `kind` get a connector.
+    pub fn wants(&self, kind: JointKind) -> bool {
+        if self.parts.get(&kind).is_some_and(|p| p == "none") {
+            return false;
+        }
+        kind.required() || self.high_wind || self.add.contains(&kind)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fastening {
+    /// The nails each connector's catalog listing calls for.
+    #[default]
+    Nails,
+    /// Connector screws, one in each nail hole.
+    Screws,
 }
 
 /// The roof over a building.
@@ -189,7 +273,7 @@ pub struct Porch {
     pub ledger_height: Option<Length>,
     /// A deck under the porch roof. Leave it out for open ground.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub deck: Option<Deck>,
+    pub deck: Option<PorchDeck>,
 }
 
 /// A porch deck a step below the subfloor: joists hung from a ledger on the
@@ -197,7 +281,7 @@ pub struct Porch {
 /// posts, with decking boards across the joists. The posts stand on it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct Deck {
+pub struct PorchDeck {
     /// Joist, rim and ledger size. Defaults to the floor's joists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub joist: Option<Nominal>,
@@ -211,9 +295,9 @@ pub struct Deck {
     pub step_down: Length,
 }
 
-impl Default for Deck {
+impl Default for PorchDeck {
     fn default() -> Self {
-        Deck {
+        PorchDeck {
             joist: None,
             beam: Nominal::new(4, 6),
             decking: "5/4x6".parse().expect("5/4x6 is a lumber size"),
@@ -237,6 +321,182 @@ impl Default for Porch {
             ledger: None,
             ledger_height: None,
             deck: None,
+        }
+    }
+}
+
+/// A deck standing on its own footings: joists on center across beams,
+/// the beams on posts or straight on piers, and decking boards across the
+/// joists. Its sizes are checked against the prescriptive deck tables of
+/// the International Residential Code (section R507).
+///
+/// In plan the beams run along `width` and the joists along `depth`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Deck {
+    /// Along the beams, outside to outside. Default 12'.
+    pub width: Length,
+    /// Along the joists, outside to outside. Default 12'.
+    pub depth: Length,
+    /// Ground to the top of the decking. Default 18".
+    pub height: Length,
+    /// Joist and rim size. Default 2x8.
+    pub joist: Nominal,
+    /// Joist spacing, on center. Defaults to the rules' spacing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_center: Option<Length>,
+    /// Beam board size. Default 2x8.
+    pub beam: Nominal,
+    /// Boards laminated into each beam. Default 2.
+    pub beam_plies: u8,
+    /// Beam lines across the joists, the outer two near the ends. Default 2.
+    pub beams: u8,
+    /// Whether the joists sit on the beams or hang between them. Default
+    /// under.
+    pub beam_style: BeamStyle,
+    /// With beams under the joists: how far the joists run past the outer
+    /// beams' outside faces. Default 0".
+    pub overhang: Length,
+    /// What the beams sit on. Default piers.
+    pub support: DeckSupport,
+    /// Post size, when the beams sit on posts. Default 4x4.
+    pub post: Nominal,
+    /// Most room between supports along a beam, center to center. Defaults
+    /// to the longest span the code's beam table allows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_spacing: Option<Length>,
+    /// From each end of a beam to the center of its end support. Default 12".
+    pub post_inset: Length,
+    /// Decking boards, laid across the joists. Default 5/4x6.
+    pub decking: Nominal,
+    /// What the decking is, which sets how far apart the joists may be.
+    /// Default wood.
+    pub decking_material: DeckingMaterial,
+    /// Space between decking boards. Default 1/8".
+    pub gap: Length,
+    /// Which deck rules the sizes are checked against. Default the plain
+    /// 2021 IRC.
+    pub code: DeckCode,
+    /// Wood species group for the span tables. Default southern pine.
+    pub species: Species,
+    /// Soil bearing pressure for footing sizes, pounds per square foot.
+    /// Default 1500, the code's floor when the soil isn't tested.
+    pub soil_psf: u32,
+    /// Live load the deck is designed for, pounds per square foot.
+    /// Default 40. Heavier snow loads need tables Sticks doesn't carry.
+    pub live_psf: u32,
+    /// Local frost depth, which the footings go below. Ask the building
+    /// department; left out, only the code's 12" minimum is shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frost_depth: Option<Length>,
+    /// Pier tops above the ground. Default 2".
+    pub pier_above_grade: Length,
+}
+
+impl Default for Deck {
+    fn default() -> Self {
+        Deck {
+            width: Length::feet(12),
+            depth: Length::feet(12),
+            height: Length::inches(18),
+            joist: Nominal::new(2, 8),
+            on_center: None,
+            beam: Nominal::new(2, 8),
+            beam_plies: 2,
+            beams: 2,
+            beam_style: BeamStyle::Under,
+            overhang: Length::ZERO,
+            support: DeckSupport::Piers,
+            post: Nominal::new(4, 4),
+            post_spacing: None,
+            post_inset: Length::inches(12),
+            decking: "5/4x6".parse().expect("5/4x6 is a lumber size"),
+            decking_material: DeckingMaterial::Wood,
+            gap: Length::from_sixteenths(2),
+            code: DeckCode::Irc2021,
+            species: Species::SouthernPine,
+            soil_psf: 1500,
+            live_psf: 40,
+            frost_depth: None,
+            pier_above_grade: Length::inches(2),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BeamStyle {
+    /// Joists sit on top of the beams and may run past them.
+    #[default]
+    Under,
+    /// Joists hang in hangers between beams level with them, for a deck too
+    /// low for beams underneath.
+    Flush,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeckSupport {
+    /// Beams straight on concrete piers.
+    #[default]
+    Piers,
+    /// Beams on posts, each post on a concrete pier.
+    Posts,
+    /// Beams on precast concrete deck blocks set on the ground.
+    Blocks,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeckingMaterial {
+    /// Wood boards: 5/4 boards span 16", 2x boards 24".
+    #[default]
+    Wood,
+    /// Plastic or wood-plastic composite boards, which span what their
+    /// maker's listing says.
+    Composite,
+}
+
+/// A set of deck rules to check a deck against.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeckCode {
+    /// The International Residential Code's prescriptive deck tables
+    /// (R507), with no local changes.
+    #[default]
+    Irc2021,
+    /// Fairfax County, Virginia's Typical Deck Details (2021 Virginia
+    /// Residential Code), which permit drawings there may follow.
+    Fairfax2021,
+}
+
+impl DeckCode {
+    pub fn name(self) -> &'static str {
+        match self {
+            DeckCode::Irc2021 => "2021 IRC, section R507",
+            DeckCode::Fairfax2021 => "Fairfax County Typical Deck Details (2021 VRC)",
+        }
+    }
+}
+
+/// Wood species groups in the code's deck span tables.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Species {
+    #[default]
+    SouthernPine,
+    /// Douglas fir-larch, hem-fir and spruce-pine-fir, incised for treatment.
+    DouglasFir,
+    /// Redwood, western cedars, ponderosa pine and red pine.
+    Redwood,
+}
+
+impl Species {
+    pub fn name(self) -> &'static str {
+        match self {
+            Species::SouthernPine => "southern pine",
+            Species::DouglasFir => "Douglas fir-larch, hem-fir or SPF",
+            Species::Redwood => "redwood, western cedar, ponderosa or red pine",
         }
     }
 }
@@ -591,6 +851,45 @@ id = "front"
         assert_eq!(floor.joist, Nominal::new(2, 6));
         assert_eq!(p.sheets[0].length, Length::feet(8));
         assert_eq!(p.walls[0].length, None);
+        let text = p.to_toml().unwrap();
+        assert_eq!(Project::from_toml(&text).unwrap(), p);
+    }
+
+    #[test]
+    fn loads_hardware_and_posts() {
+        let p = Project::from_toml(
+            r#"
+name = "Shed"
+[building]
+width = "12'"
+depth = "8'"
+height = "8'"
+[floor]
+support = "posts"
+post_height = "18\""
+[hardware]
+fasten_with = "screws"
+add = ["joist_on_beam"]
+[hardware.parts]
+rafter_on_plate = "H1"
+stud_to_plate = "none"
+[hardware.prices_cents]
+"H2.5A" = 89
+"#,
+        )
+        .unwrap();
+        let floor = p.floor.as_ref().unwrap();
+        assert_eq!(floor.support, FloorSupport::Posts);
+        assert_eq!(floor.post_size(), Nominal::new(4, 4));
+        assert_eq!(floor.post_length(), Length::inches(18));
+        let hw = p.hardware.as_ref().unwrap();
+        assert_eq!(hw.fasten_with, Fastening::Screws);
+        assert!(hw.wants(JointKind::JoistOnBeam));
+        assert!(hw.wants(JointKind::RafterOnPlate));
+        assert!(!hw.wants(JointKind::StudToPlate));
+        assert!(!hw.wants(JointKind::DeckLateral));
+        assert_eq!(hw.parts[&JointKind::RafterOnPlate], "H1");
+        assert_eq!(hw.prices_cents["H2.5A"], 89);
         let text = p.to_toml().unwrap();
         assert_eq!(Project::from_toml(&text).unwrap(), p);
     }

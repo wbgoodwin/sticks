@@ -98,8 +98,8 @@ export interface DrawingView {
   /** What `drawing` takes, such as `roof` or `porch-rafter`. */
   id: string;
   name: string;
-  /** The part it shows: `floor`, `roof`, `porch` or `sheathing`. */
-  part: "floor" | "roof" | "porch" | "sheathing";
+  /** The part it shows: `floor`, `roof`, `porch`, `sheathing` or `deck`. */
+  part: "floor" | "roof" | "porch" | "sheathing" | "deck";
 }
 
 export interface FrameView {
@@ -109,7 +109,28 @@ export interface FrameView {
   /** The porch roof, posts and beam, and its deck when it has one. */
   porch: PlanView | null;
   sheathing: SheathingView | null;
+  /** A deck on its own, with its sizes checked against its code. */
+  deck: DeckView | null;
   drawings: DrawingView[];
+}
+
+/** One size checked against the deck's code. */
+export interface CodeCheckView {
+  /** Like `Joist span`. */
+  item: string;
+  actual: string;
+  allowed: string;
+  ok: boolean;
+  /** Like `Fairfax Table 2, southern pine 2x8 at 16" o.c.`. */
+  source: string;
+}
+
+export interface DeckView extends PlanView {
+  checks: CodeCheckView[];
+  /** The rules it was checked against. */
+  code: string;
+  /** Who owns the plans, as every deck sheet says. */
+  notice: string[];
 }
 
 export type SolidKind = MemberKind | "pier" | "subfloor" | "sheathing";
@@ -181,11 +202,63 @@ export interface CutListView {
   };
   /** Parts that don't frame, such as `wall front` or `floor`. */
   skipped: string[];
+  /** Every stage of the build, and whether it's kept off the shopping list. */
+  sections: SectionView[];
+  /** Boards for the stages already on hand, numbered on from `boards`. */
+  on_hand_boards: BoardView[];
+  /** What the stages left off would have cost. */
+  on_hand: { boards: number; sheets: number; total_cents: number | null };
+  /** Connectors and fasteners for the stages still to buy. */
+  hardware: HardwareView;
+}
+
+export interface HardwareView {
+  /** Whose catalog the parts come from. */
+  brand: string;
+  parts: HardwarePartView[];
+  fasteners: FastenerView[];
+  /** Joints nothing in the catalog fits, and models it doesn't know. */
+  warnings: string[];
+  /** When every line has a price. */
+  total_cents: number | null;
+}
+
+export interface HardwarePartView {
+  /** Like `H2.5A`; prices are kept under it. */
+  model: string;
+  name: string;
+  /** What it's for, like `rafter on plate`. */
+  joints: string[];
+  count: number;
+  note?: string;
+  unit_price_cents: number | null;
+  total_cents: number | null;
+}
+
+export interface FastenerView {
+  /** Like `10d` or `SD9212`; box prices are kept under it. */
+  key: string;
+  name: string;
+  count: number;
+  per_box: number;
+  boxes: number;
+  box_price_cents: number | null;
+  total_cents: number | null;
+}
+
+export interface SectionView {
+  /** What `ProjectJson.on_hand` names it by, like `floor` or `wall front`. */
+  key: string;
+  /** Like `Floor framing`. */
+  name: string;
+  on_hand: boolean;
 }
 
 /** The project file's shape. Lengths stay as the builder typed them. */
 export interface ProjectJson {
   name: string;
+  /** Stages of the build already on hand, kept off the shopping list. */
+  on_hand?: string[];
   rules: {
     on_center: string;
     wall_lumber: string;
@@ -201,7 +274,23 @@ export interface ProjectJson {
   roof?: RoofJson;
   porch?: PorchJson;
   sheathing?: SheathingJson;
+  /** A deck on its own, beside the building or with none. */
+  deck?: DeckJson;
+  hardware?: HardwareJson;
   wall: WallJson[];
+}
+
+/** Connector settings. Left out, every needed connector is listed, nailed. */
+export interface HardwareJson {
+  fasten_with?: "nails" | "screws";
+  /** Every extra tie for a high-wind area. */
+  high_wind?: boolean;
+  /** Extra ties by joint, like `joist_on_beam`. */
+  add?: string[];
+  /** A model in place of the catalog's pick, or `none`, by joint. */
+  parts?: Record<string, string>;
+  /** By model for connectors, and per box for fasteners. */
+  prices_cents?: Record<string, number>;
 }
 
 export interface BuildingJson {
@@ -218,7 +307,11 @@ export interface FloorJson {
   beam: string;
   beam_plies: number;
   beams: number;
-  support: "piers" | "skids";
+  support: "piers" | "skids" | "posts";
+  /** When the beams sit on posts. Default 4x4. */
+  post?: string;
+  /** Pier top to beam bottom, when on posts. Default 12". */
+  post_height?: string;
   pier_spacing: string;
   pier_inset: string;
   subfloor: string;
@@ -249,17 +342,50 @@ export interface PorchJson {
   overhang?: string;
   ledger?: string;
   ledger_height?: string;
-  deck?: DeckJson;
+  deck?: PorchDeckJson;
 }
 
 /** Decking on joists that hang from the floor's rim. */
-export interface DeckJson {
+export interface PorchDeckJson {
   joist?: string;
   beam?: string;
   decking?: string;
   gap?: string;
   /** How far the deck's top sits below the subfloor's. */
   step_down?: string;
+}
+
+/** A freestanding deck on beams, posts and footings. Left out, a field takes its default. */
+export interface DeckJson {
+  /** Along the beams. */
+  width?: string;
+  /** Along the joists. */
+  depth?: string;
+  /** Grade to the top of the decking. */
+  height?: string;
+  joist?: string;
+  on_center?: string;
+  beam?: string;
+  beam_plies?: number;
+  beams?: number;
+  /** Joists on top of the beams, or hung level with them. */
+  beam_style?: "under" | "flush";
+  /** Joists past the outer beams, each side. */
+  overhang?: string;
+  support?: "piers" | "posts" | "blocks";
+  post?: string;
+  /** Left out, the widest the code's beam span allows. */
+  post_spacing?: string;
+  post_inset?: string;
+  decking?: string;
+  decking_material?: "wood" | "composite";
+  gap?: string;
+  code?: "irc2021" | "fairfax2021";
+  species?: "southern_pine" | "douglas_fir" | "redwood";
+  soil_psf?: number;
+  live_psf?: number;
+  frost_depth?: string;
+  pier_above_grade?: string;
 }
 
 /** Sheet thicknesses; a part left out isn't sheathed. */

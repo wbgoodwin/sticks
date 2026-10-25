@@ -5,11 +5,14 @@ pub mod svg;
 
 use sticks_core::{Cut, Length};
 use sticks_cutlist::CutList;
+use sticks_hardware::HardwareList;
 
 pub use print::print_html;
+
 pub use svg::{
-    deck_svg, floor_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg, wall_svg,
-    NOTICE,
+    deck_checks_svg, deck_general_notes, deck_notice, deck_plan_svg, deck_section_svg, decking_svg,
+    floor_svg, porch_deck_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg,
+    wall_svg, NOTICE,
 };
 
 /// The shopping list: one row per size and stock length.
@@ -48,6 +51,55 @@ pub fn bom_csv(cut_list: &CutList) -> String {
     let total = cut_list.summary().total_cents;
     if total.is_some() {
         row(&mut out, ["total", "", "", "", "", &dollars(total)]);
+    }
+    out
+}
+
+/// The hardware list: connectors, then boxes of nails or screws.
+pub fn hardware_csv(list: &HardwareList) -> String {
+    let mut out = String::new();
+    row(
+        &mut out,
+        [
+            "item",
+            "description",
+            "for",
+            "quantity",
+            "unit price",
+            "total",
+        ],
+    );
+    for l in &list.parts {
+        row(
+            &mut out,
+            [
+                l.model.clone(),
+                l.name.clone(),
+                l.joints.join("; "),
+                l.count.to_string(),
+                dollars(l.unit_price_cents.map(u64::from)),
+                dollars(l.total_cents),
+            ],
+        );
+    }
+    for l in &list.fasteners {
+        row(
+            &mut out,
+            [
+                l.key.clone(),
+                l.name.clone(),
+                format!("{} pieces", l.count),
+                format!("{} {}", l.boxes, if l.boxes == 1 { "box" } else { "boxes" }),
+                dollars(l.box_price_cents.map(u64::from)),
+                dollars(l.total_cents),
+            ],
+        );
+    }
+    if list.total_cents.is_some() {
+        row(
+            &mut out,
+            ["total", "", "", "", "", &dollars(list.total_cents)],
+        );
     }
     out
 }

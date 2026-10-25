@@ -15,7 +15,8 @@ app, in a browser or on the desktop; see [The app](#the-app). One project file
 frames a whole building: a floor on beams and piers, four outside walls
 generated from the footprint, a lean-to or gable roof, a porch roof on posts
 off the front with a deck under it, and sheathing on the walls and roof. From
-that come the shopping list (lumber and sheets), a board-by-board cut list,
+that come the shopping list (lumber, sheets, and the Simpson Strong-Tie
+connectors with their nails), a board-by-board cut list,
 and printable drawings of every wall, the floor, the roof, its rafters, the
 porch, the deck and the sheathing layout.
 
@@ -26,7 +27,7 @@ cargo run -p sticks-cli -- cuts examples/shed.toml                # shopping lis
 cargo run -p sticks-cli -- build examples/shed.toml --out build/  # CSVs, SVG drawings, print.html
 ```
 
-`build` writes `bom.csv`, `cut-list.csv`, `wall-<id>.svg` for each wall,
+`build` writes `bom.csv`, `cut-list.csv`, `hardware.csv`, `wall-<id>.svg` for each wall,
 `floor.svg`, `subfloor.svg`, `roof.svg`, `rafter.svg` (and `rafter-2.svg`
 when the back rafters differ), `porch.svg`, `porch-rafter.svg`, `deck.svg`,
 `wall-sheathing.svg`, `roof-sheathing.svg`, and `print.html`: the whole build
@@ -99,7 +100,10 @@ only from the listed options and its odds over them are the confidence, so the
 
 `examples/shed.toml` is the reference shed from the PRD. A `[building]` gives
 the footprint and the front wall's height; `[floor]`, `[roof]`, `[porch]` and
-`[sheathing]` build on it.
+`[sheathing]` build on it. A top-level `on_hand` list keeps stages you
+already have off the shopping list, such as `on_hand = ["floor"]`. The stages
+are `floor`, `subfloor`, `wall front` (and each other wall by id), `roof`,
+`porch`, `deck`, `wall sheathing` and `roof sheathing`.
 
 ```toml
 [building]
@@ -111,6 +115,7 @@ height = "10'"    # the front (high) wall
 joist = "2x6"
 beam = "4x6"
 beams = 3
+support = "posts" # short posts on piers; or "piers", or "skids" on grade
 
 [roof]
 pitch = "2:12"    # kind = "gable" for a ridge over the middle
@@ -134,6 +139,28 @@ kind = "door"
 Walls with other ids (an interior partition, say) give their own `length`,
 `height` and ends, as before. A project with no `[building]` is just walls.
 
+### Hardware
+
+The framing rules note every joint that takes a connector (a rafter on a
+plate, a joist hung on a ledger, a beam on a post), and the shopping list
+carries a Simpson Strong-Tie part for each, sized to the lumber, in ZMAX
+where it's outdoors or against treated wood, with boxes of the nails it
+takes. Stages on hand take their hardware with them. The catalog is
+`crates/sticks-hardware/src/simpson.toml`. Sticks picks the usual part for
+the sizes; it doesn't check loads. An optional `[hardware]` section changes
+what goes on the list:
+
+```toml
+[hardware]
+fasten_with = "screws"        # SD connector screws in place of nails
+high_wind = true              # every extra tie: ridge straps, joist ties, stud ties, deck ties
+add = ["joist_on_beam"]       # or just some of them
+[hardware.parts]
+rafter_on_plate = "H1"        # a different model for a kind of joint, or "none"
+[hardware.prices_cents]
+"H2.5A" = 89                  # each, by model; nails and screws by the box
+```
+
 ## The app
 
 A desktop window (Tauri) for designing the whole shed. The panel on the left
@@ -151,7 +178,9 @@ stock and prices. Everything redraws as you type:
 - **Floor, Subfloor, Roof, Rafter, Porch, Deck, Sheathing**: the printed
   framing plans, rafter details and sheet layouts.
 - **Shopping list and cut list** for the whole project, with the total when
-  every stock length has a price.
+  every stock length has a price, and the connectors and nails under it.
+  Settings holds the hardware prices, nails or screws, and the high-wind
+  switch.
 
 **Print** opens the build packet (the shopping list, every drawing and the cut
 list on letter pages) to print or download. **Open** and **Save** read and
