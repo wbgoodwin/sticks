@@ -106,6 +106,7 @@ async fn save_file(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![ask_local, save_file])
         .run(tauri::generate_context!())
         .expect("error while running Sticks");

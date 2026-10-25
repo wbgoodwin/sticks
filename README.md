@@ -66,13 +66,13 @@ frames the result and shows the change in boards and sheets.
 (comments in the file are not kept).
 
 In the app, the bar above the drawing takes the same requests (Ctrl K or
-⌘K). It shows each change, what was assumed, and buttons for anything left to
+⌘K). The bar is off unless the app is started with `VITE_JEV=on`. It shows each change, what was assumed, and buttons for anything left to
 ask, along with the change in boards and sheets. Nothing changes until you
 press Make, and Undo puts it back. The app asks
 [Jev](https://docs.typesafe.ai/introduction/quickstart) through the dev
 server, which adds your key so the page never holds it. Start it with the key
-set: `TYPESAFE_API_KEY=... npm run tauri dev` (or `npm run dev`), or put the
-key in `app/.env.local`. A bundled build can't reach Jev yet.
+set: `VITE_JEV=on TYPESAFE_API_KEY=... npm run tauri dev` (or `npm run dev`),
+or put both in `app/.env.local`. A bundled build can't reach Jev yet.
 
 `app/scripts/jev-probe.ts` runs sample requests through Jev from the command
 line: `TYPESAFE_API_KEY=... npm run probe:jev` in `app/`, which builds
@@ -189,6 +189,37 @@ single wall. The app keeps your work between sessions.
 
 The same page runs in a browser with nothing to install, since all framing
 happens in the Rust core compiled to WebAssembly.
+
+### Install
+
+Sticks is installed by building it from this repository. You need
+[Rust](https://rustup.rs), Node 22, and Tauri's prerequisites for your OS (on
+a Mac, the Xcode command line tools: `xcode-select --install`). Then:
+
+```sh
+git clone https://github.com/wbgoodwin/sticks.git
+cd sticks
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129
+cd app
+npm run app:install
+```
+
+On a Mac that builds `Sticks.app` and puts it in `/Applications`. On Windows
+or Linux it builds the installers and prints where they are. The first build
+takes a few minutes.
+
+The app checks GitHub for a newer release once a day. When there is one, it
+says so with a link to what's new. To update, run `git pull` and then
+`npm run app:install` again in the `app` folder. Skipping a version keeps it
+quiet until the next one.
+
+To publish an update, raise `version` in `app/src-tauri/tauri.conf.json`,
+merge it, and push a matching tag (`git tag v0.2.0 && git push origin
+v0.2.0`). The Release workflow then publishes the GitHub release the app
+looks for.
+
+### Develop
 
 You need Node 22, the `wasm32-unknown-unknown` Rust target, and the
 `wasm-bindgen` CLI at the version pinned in `crates/sticks-wasm/Cargo.toml`:

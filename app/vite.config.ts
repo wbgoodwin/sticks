@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs";
 import { defineConfig, loadEnv } from "vite";
+
+// One version for the whole app: the one Tauri bundles with.
+const version: string = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
 
 // Tauri serves the dev build from a fixed port and loads dist/ when bundled.
 export default defineConfig(({ mode }) => {
@@ -8,6 +12,7 @@ export default defineConfig(({ mode }) => {
   const key = env.TYPESAFE_API_KEY ?? "";
   return {
     clearScreen: false,
+    define: { __APP_VERSION__: JSON.stringify(version) },
     server: {
       port: 5173,
       strictPort: true,
