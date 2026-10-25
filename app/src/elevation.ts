@@ -81,17 +81,7 @@ const STUD_ROW = 14 + LABEL_LONG + 14;
 const OPENING_ROW = 14 + LABEL_LONG + 8;
 const PAD = { left: 72, right: 64, top: 64 };
 /** Room under the wall for the marks and the layout note. */
-const padBottom = (rows: MarkRows) =>
-  (rows === "none" ? 0 : STUD_ROW) + (rows === "all" ? OPENING_ROW : 0) + 24;
-/**
- * Fewest pixels per inch at which studs on layout get their labels without
- * fanning out wider than the wall. Below it, rows of marks are dropped so a
- * short view still shows the wall at a useful size.
- */
-const MIN_MARK_SCALE = (MARK_GAP + 2) / 16;
-
-/** Which rows of marks go under the wall: studs and openings, studs, or none. */
-type MarkRows = "all" | "studs" | "none";
+const padBottom = (openings: boolean) => STUD_ROW + (openings ? OPENING_ROW : 0) + 24;
 
 /**
  * Where to put labels for marks at `xs` (in order across) so none overlap.
@@ -137,14 +127,8 @@ export function drawElevation(
   const H = wall.height_16 / 16;
   const availW = width - PAD.left - PAD.right;
 
-  // Every row of marks that fits at a readable scale, dropping the openings'
-  // row first and then the studs' when the view is short.
-  const scaleFor = (rows: MarkRows) =>
-    Math.max(0.1, Math.min(availW / L, (height - PAD.top - padBottom(rows)) / H));
-  const choices: MarkRows[] = wall.openings.length ? ["all", "studs"] : ["studs"];
-  const rows = choices.find((r) => scaleFor(r) >= MIN_MARK_SCALE) ?? "none";
-  const s = scaleFor(rows);
-  const availH = height - PAD.top - padBottom(rows);
+  const availH = height - PAD.top - padBottom(wall.openings.length > 0);
+  const s = Math.max(0.1, Math.min(availW / L, availH / H));
   const x0 = PAD.left + (availW - L * s) / 2;
   const yb = PAD.top + (availH - H * s) / 2 + H * s;
   const X = (x16: number) => x0 + (x16 / 16) * s;
@@ -291,7 +275,7 @@ export function drawElevation(
 
   // Stud positions along the bottom plate.
   const marks = el("g", { class: "marks" });
-  const studs = (rows === "none" ? [] : [...wall.marks])
+  const studs = [...wall.marks]
     .sort((a, b) => a.at_16 - b.at_16)
     .flatMap((m) => {
       if (m.kind === "king_stud" || m.kind === "jack_stud") return [];
@@ -311,7 +295,7 @@ export function drawElevation(
   // Each opening's rough opening as a bracket, its edges measured from the
   // layout end like the studs.
   const by = yb + STUD_ROW + 8;
-  for (const o of rows === "all" ? wall.openings : []) {
+  for (const o of wall.openings) {
     const a = X(o.x_16);
     const b = X(o.x_16 + o.w_16);
     const measure = (x16: number) =>
@@ -340,7 +324,9 @@ export function drawElevation(
         y: height - 12,
         "text-anchor": options.layoutFrom === "left" ? "start" : "end",
       },
-      originNote(options.layoutFrom, rows, wall.openings.length > 0),
+      options.layoutFrom === "left"
+        ? `Layout measured from this end →${wall.openings.length ? "   Brackets: rough openings" : ""}`
+        : `${wall.openings.length ? "Brackets: rough openings   " : ""}← Layout measured from this end`,
     ),
   );
 
@@ -349,16 +335,6 @@ export function drawElevation(
     x16: (px) => ((px - x0) / s) * 16,
     y16: (py) => ((yb - py) / s) * 16,
   };
-}
-
-/** The note under the marks: where layout starts, or what a taller view shows. */
-function originNote(from: "left" | "right", rows: MarkRows, openings: boolean): string {
-  if (rows === "none") return "Make the drawing taller to see the layout marks";
-  const origin = from === "left" ? "Layout measured from this end →" : "← Layout measured from this end";
-  const extra =
-    rows === "all" ? "Brackets: rough openings" : openings ? "Make the drawing taller to see rough openings" : "";
-  if (!extra) return origin;
-  return from === "left" ? `${origin}   ${extra}` : `${extra}   ${origin}`;
 }
 
 /** A few words for a note, to fit inside the opening. */

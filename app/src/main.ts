@@ -127,6 +127,12 @@ const $ = <T extends Element>(selector: string) => app.querySelector<T>(selector
 const panel = $<HTMLElement>(".panel");
 const views = $<HTMLElement>(".views");
 const drawingBox = $<HTMLDivElement>(".drawing");
+/**
+ * The shortest a flat drawing gets. Below it the drawing scrolls instead of
+ * shrinking, so pulling the lists up doesn't change how the wall looks.
+ */
+const MIN_DRAWING_HEIGHT = 560;
+
 const svg = $<SVGSVGElement>(".elevation");
 const sheet = $<HTMLDivElement>(".sheet");
 const layers = $<HTMLDivElement>(".layers");
@@ -319,6 +325,9 @@ function renderStage(): void {
   layers.hidden = !is3d;
   resetView.hidden = !is3d;
   drawingBox.classList.toggle("plain", view.kind !== "wall");
+  // Flat drawings keep their size when the lists are pulled up, and scroll.
+  drawingBox.classList.toggle("flat", !is3d);
+  if (is3d) drawingBox.scrollTop = 0;
   if (!is3d) info.hidden = true;
 
   if (view.kind === "3d") {
@@ -408,7 +417,9 @@ let scale: Scale | null = null;
 
 function drawWall(drag?: DragOverlay): void {
   if (!shownWall || view.kind !== "wall") return;
-  const { width, height } = drawingBox.getBoundingClientRect();
+  const width = drawingBox.clientWidth;
+  const height = Math.max(drawingBox.clientHeight, MIN_DRAWING_HEIGHT);
+  svg.style.height = `${height}px`;
   const w = shownWall;
   const items = openingItems(w);
   const notes = items ? items.map((o, i) => factsAt(items, i, o, w.length_16).map((f) => f.text)) : undefined;
@@ -542,7 +553,8 @@ function showTooltip(html: string, x: number, y: number): void {
   tooltip.hidden = false;
   const box = drawingBox.getBoundingClientRect();
   const left = Math.max(8, Math.min(x + 14, box.width - tooltip.offsetWidth - 8));
-  const top = Math.max(8, y - tooltip.offsetHeight - 10);
+  // The tooltip scrolls with a flat drawing, so it's placed in scrolled terms.
+  const top = Math.max(8, y - tooltip.offsetHeight - 10) + drawingBox.scrollTop;
   tooltip.style.transform = `translate(${left}px, ${top}px)`;
 }
 
