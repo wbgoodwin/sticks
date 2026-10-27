@@ -5,12 +5,12 @@
 //! numbers and never formats fractions itself.
 
 use serde::Serialize;
-use sticks_core::{Length, Member, MemberKind, Project};
+use sticks_core::{LayoutStart, Length, Member, MemberKind, Project};
 use sticks_cutlist::{cut_list_with_sheets, Board, CutList};
 use sticks_hardware::HardwareList;
 use sticks_rules::{
-    bounds, frame_project, model, wall_ids, CodeCheck, FramedProject, FramedWall, Placed, Section,
-    Solid, SolidKind,
+    bounds, frame_project, model, plate_layout, plate_letter, wall_ids, CodeCheck, FramedProject,
+    FramedWall, Placed, PlateBoard, PlateLayout, Section, Solid, SolidKind,
 };
 use wasm_bindgen::prelude::*;
 
@@ -209,9 +209,54 @@ struct WallView {
     marks: Vec<MarkView>,
     splices: Vec<SpliceView>,
     openings: Vec<OpeningView>,
+    /// What to mark on the plates; empty when the wall can't be framed.
+    plates: Option<PlatesView>,
     warnings: Vec<String>,
     /// Set when the wall can't be framed; the other fields are then empty.
     error: Option<String>,
+}
+
+/// The plate layout, measured from the layout end.
+#[derive(Serialize)]
+struct PlatesView {
+    top_sloped: bool,
+    marks: Vec<PlateMarkView>,
+    openings: Vec<PlateOpeningView>,
+    splices: Vec<PlateSpliceView>,
+}
+
+#[derive(Serialize)]
+struct PlateMarkView {
+    at_16: i64,
+    at: String,
+    top_at_16: i64,
+    top_at: String,
+    bottom: Option<PlateBoardView>,
+    top: Option<PlateBoardView>,
+}
+
+#[derive(Serialize)]
+struct PlateBoardView {
+    label: String,
+    kind: MemberKind,
+    letter: &'static str,
+}
+
+#[derive(Serialize)]
+struct PlateOpeningView {
+    name: String,
+    from_16: i64,
+    from: String,
+    to_16: i64,
+    to: String,
+    no_bottom_plate: bool,
+}
+
+#[derive(Serialize)]
+struct PlateSpliceView {
+    kind: MemberKind,
+    at_16: i64,
+    at: String,
 }
 
 #[derive(Serialize)]
@@ -519,7 +564,7 @@ pub fn frame_json(project_json: &str) -> Result<String, String> {
         .into_iter()
         .zip(wall_ids(&project))
         .map(|(result, id)| match result {
-            Ok(framed) => wall_view(framed),
+            Ok(framed) => wall_view(framed, project.rules.layout_from),
             Err(e) => {
                 let wall = project.walls.iter().find(|w| w.id == id);
                 let length = wall.and_then(|w| w.length).unwrap_or_default();
@@ -534,6 +579,7 @@ pub fn frame_json(project_json: &str) -> Result<String, String> {
                     marks: Vec::new(),
                     splices: Vec::new(),
                     openings: Vec::new(),
+                    plates: None,
                     warnings: Vec::new(),
                     error: Some(e.reason),
                 }
@@ -829,8 +875,57 @@ pub fn print_html(project_json: &str) -> Result<String, String> {
     Ok(sticks_export::print_html(&project, &framed, &cl, &hw))
 }
 
-fn wall_view(w: FramedWall) -> WallView {
+fn plates_view(p: PlateLayout) -> PlatesView {
+    let tape = |l: Length| format!("{l:#}");
+    let board = |b: Option<PlateBoard>| {
+        b.map(|b| PlateBoardView {
+            letter: plate_letter(b.kind),
+            label: b.label,
+            kind: b.kind,
+        })
+    };
+    PlatesView {
+        top_sloped: p.top_sloped,
+        marks: p
+            .marks
+            .into_iter()
+            .map(|m| PlateMarkView {
+                at_16: m.at.sixteenths(),
+                at: tape(m.at),
+                top_at_16: m.top_at.sixteenths(),
+                top_at: tape(m.top_at),
+                bottom: board(m.bottom),
+                top: board(m.top),
+            })
+            .collect(),
+        openings: p
+            .openings
+            .into_iter()
+            .map(|o| PlateOpeningView {
+                name: o.name,
+                from_16: o.from.sixteenths(),
+                from: tape(o.from),
+                to_16: o.to.sixteenths(),
+                to: tape(o.to),
+                no_bottom_plate: o.no_bottom_plate,
+            })
+            .collect(),
+        splices: p
+            .splices
+            .into_iter()
+            .map(|s| PlateSpliceView {
+                kind: s.kind,
+                at_16: s.at.sixteenths(),
+                at: tape(s.at),
+            })
+            .collect(),
+    }
+}
+
+fn wall_view(w: FramedWall, from: LayoutStart) -> WallView {
+    let plates = plates_view(plate_layout(&w, from));
     WallView {
+        plates: Some(plates),
         id: w.id,
         length_16: w.length.sixteenths(),
         height_16: w.height.sixteenths(),

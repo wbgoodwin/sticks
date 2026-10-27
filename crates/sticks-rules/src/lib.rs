@@ -8,6 +8,7 @@ pub mod floor;
 pub mod joints;
 pub mod layout;
 pub mod model;
+pub mod plates;
 pub mod platform;
 pub mod porch;
 pub mod roof;
@@ -20,6 +21,9 @@ pub use deck::{frame_deck, DeckHeights, FramedDeck};
 pub use floor::{frame_floor, Bay, FramedFloor, Pier, PlacedSheet};
 pub use layout::{LayoutMark, Placed, Rect, Splice};
 pub use model::{bounds, model, wall_ids, OtherKind, Solid, SolidKind};
+pub use plates::{
+    plate_layout, plate_letter, PlateBoard, PlateLayout, PlateMark, PlateOpening, PlateSplice,
+};
 pub use porch::{frame_porch, FramedPorch, FramedPorchDeck, PorchDeckHeights, PorchHeights};
 pub use roof::{
     frame_roof, gable_studs, wall_heights, FramedRoof, RafterDetail, RafterTop, Ridge, RoofPlane,

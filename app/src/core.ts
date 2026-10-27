@@ -73,8 +73,36 @@ export interface WallView {
   marks: MarkView[];
   splices: SpliceView[];
   openings: OpeningView[];
+  /** What to mark on the plates; null when the wall can't be framed. */
+  plates: PlatesView | null;
   warnings: string[];
   error: string | null;
+}
+
+/** A board beside a line on the plates, with the letter written beside it: X, K, J or C. */
+export interface PlateBoardView {
+  label: string;
+  kind: MemberKind;
+  letter: string;
+}
+
+/** One line across the plates: a board's near edge from the layout end. */
+export interface PlateMarkView {
+  at_16: number;
+  at: string;
+  /** The same line along the top plate, longer than `at` when the top slopes. */
+  top_at_16: number;
+  top_at: string;
+  bottom: PlateBoardView | null;
+  top: PlateBoardView | null;
+}
+
+export interface PlatesView {
+  top_sloped: boolean;
+  marks: PlateMarkView[];
+  openings: { name: string; from_16: number; from: string; to_16: number; to: string; no_bottom_plate: boolean }[];
+  /** Joints, each along its own plate. */
+  splices: { kind: MemberKind; at_16: number; at: string }[];
 }
 
 /** The floor or roof framing in plan. */

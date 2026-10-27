@@ -31,6 +31,7 @@ import { accountsEnabled, email, finishSignIn, me, onAccountChange, signedIn, ty
 import { renderAccount, statusText } from "./account-ui";
 import { onSyncStatus, scheduleSync, setSyncEnabled, syncStatus, unlink } from "./sync";
 import { ensureStock, fromTemplate, load, loadFiled, normalize, save, saveFiled, TEMPLATES } from "./state";
+import { isPlate, platesHtml } from "./plates";
 import { HIDDEN_LAYERS, LAYERS, layerOf, Viewer, type Layer } from "./view3d";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -67,6 +68,7 @@ app.innerHTML = `
       <div class="sheet" hidden></div>
       <div class="layers" hidden></div>
       <button type="button" class="button reset-view" hidden>Reset view</button>
+      <button type="button" class="button plates-button" data-action="plates" hidden>Plate layout</button>
       <div class="info" hidden></div>
       <div class="banner" hidden></div>
       <div class="tooltip" hidden></div>
@@ -112,6 +114,17 @@ app.innerHTML = `
       <button type="button" class="icon-button" data-action="close-account" aria-label="Close">×</button>
     </header>
     <div class="account-body"></div>
+  </dialog>
+  <dialog class="settings plates" aria-labelledby="plates-title">
+    <header>
+      <div>
+        <h2 id="plates-title"></h2>
+        <p>Where each board goes, to mark on the plates before the wall goes together.</p>
+      </div>
+      <button type="button" class="button" data-action="plates-cuts">Find plates in cut list</button>
+      <button type="button" class="icon-button" data-action="close-plates" aria-label="Close">×</button>
+    </header>
+    <div class="plates-body"></div>
   </dialog>
   <dialog class="replace" aria-labelledby="replace-title">
     <form method="dialog">
@@ -176,6 +189,9 @@ const settings = $<HTMLDialogElement>("dialog.settings");
 const settingsBody = $<HTMLDivElement>(".settings-body");
 const replaceDialog = $<HTMLDialogElement>("dialog.replace");
 const accountDialog = $<HTMLDialogElement>("dialog.account");
+const platesDialog = $<HTMLDialogElement>("dialog.plates");
+const platesBody = $<HTMLDivElement>(".plates-body");
+const platesButton = $<HTMLButtonElement>(".plates-button");
 const accountBody = $<HTMLDivElement>(".account-body");
 const accountButton = $<HTMLButtonElement>(".account-button");
 const previewFrame = $<HTMLIFrameElement>(".print-preview iframe");
@@ -210,14 +226,17 @@ const viewer = new Viewer(drawingBox, {
       tooltip.hidden = true;
       return;
     }
-    showTooltip(`${solidTitle(solid)}${solid.size && solid.length ? FIND_HINT : ""}`, x, y);
+    const hint = isPlate(solid.kind) && wallPart(solid.part) ? PLATES_HINT : solid.size && solid.length ? FIND_HINT : "";
+    showTooltip(`${solidTitle(solid)}${hint}`, x, y);
   },
   pick: showInfo,
 });
 /** The solid last clicked in 3D, so a double-click can find it in the cut list. */
 let picked: SolidView | null = null;
 drawingBox.addEventListener("dblclick", (e) => {
-  if (view.kind === "3d" && picked && (e.target as Element).closest("canvas")) findInCutList([picked.label]);
+  if (view.kind !== "3d" || !picked || !(e.target as Element).closest("canvas")) return;
+  if (isPlate(picked.kind) && wallPart(picked.part)) openPlates(picked.part);
+  else findInCutList([picked.label]);
 });
 
 const panelContext: PanelContext = {
@@ -282,6 +301,30 @@ function update(): void {
   renderStage();
   renderPlan();
   liveHints();
+  if (platesDialog.open) renderPlates();
+}
+
+/** The wall whose plate layout is open. */
+let platesWall = "";
+
+/** Opens the plate layout for a wall: every stud, king, jack and cripple to mark on its plates. */
+function openPlates(id: string): void {
+  tooltip.hidden = true;
+  platesWall = id;
+  if (!platesDialog.open) platesDialog.showModal();
+  renderPlates();
+  platesBody.scrollTop = 0;
+}
+
+function renderPlates(): void {
+  const w = framed?.walls.find((v) => v.id === platesWall);
+  $<HTMLHeadingElement>("#plates-title").textContent = `${wallName(platesWall)} wall: plate layout`;
+  if (!w || !w.plates) {
+    platesBody.innerHTML = `<p class="plates-problem">${esc(w?.error ?? "This wall doesn't frame.")}</p>`;
+    return;
+  }
+  // The picture fits the card, less its padding, unless that's too small to read.
+  platesBody.innerHTML = platesHtml(w, project.rules.layout_from, platesBody.clientWidth - 48);
 }
 
 /** Text in the panel that depends on the framed result. */
@@ -351,6 +394,7 @@ function renderStage(): void {
   sheet.hidden = view.kind !== "sheet";
   layers.hidden = !is3d;
   resetView.hidden = !is3d;
+  platesButton.hidden = view.kind !== "wall";
   drawingBox.classList.toggle("plain", view.kind !== "wall");
   // Flat drawings keep their size when the lists are pulled up, and scroll.
   drawingBox.classList.toggle("flat", !is3d);
@@ -566,6 +610,12 @@ function highlight(group: string | null): void {
 }
 
 const FIND_HINT = `<span class="hint">Double-click to find it in the cut list</span>`;
+const PLATES_HINT = `<span class="hint">Double-click for where the studs go</span>`;
+
+/** Whether a 3D part is one of the walls, which have plates to lay out. */
+function wallPart(part: string): boolean {
+  return framed?.walls.some((w) => w.id === part) ?? false;
+}
 
 /** Opens the cut list on the boards these pieces come from. */
 function findInCutList(labels: string[]): void {
@@ -620,8 +670,12 @@ function showInfo(s: SolidView | null): void {
   info.innerHTML = `
     <header><strong>${esc(s.label)}</strong><button type="button" class="icon-button" aria-label="Close">×</button></header>
     <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
-    ${s.size && s.length ? `<button type="button" class="button find-in-cuts">Find in cut list</button>` : ""}
+    <div class="info-actions">
+      ${isPlate(s.kind) && wallPart(s.part) ? `<button type="button" class="button primary show-plates">Plate layout</button>` : ""}
+      ${s.size && s.length ? `<button type="button" class="button find-in-cuts">Find in cut list</button>` : ""}
+    </div>
   `;
+  info.querySelector(".show-plates")?.addEventListener("click", () => openPlates(s.part));
   info.querySelector(".find-in-cuts")?.addEventListener("click", () => findInCutList([s.label]));
   info.querySelector("button")!.addEventListener("click", () => {
     info.hidden = true;
@@ -660,18 +714,23 @@ svg.addEventListener("pointermove", (e) => {
   const plies = Number(target.dataset.plies ?? 1);
   const box = drawingBox.getBoundingClientRect();
   showTooltip(
-    `<strong>${esc(m.label)}</strong><span>${KIND_NAMES[m.kind]}${plies > 1 ? `, ${plies} plies` : ""}</span><span>${m.size} × ${m.length}</span>${FIND_HINT}`,
+    `<strong>${esc(m.label)}</strong><span>${KIND_NAMES[m.kind]}${plies > 1 ? `, ${plies} plies` : ""}</span><span>${m.size} × ${m.length}</span>${isPlate(m.kind) ? PLATES_HINT : FIND_HINT}`,
     e.clientX - box.left,
     e.clientY - box.top,
   );
   highlight(groupKey(m));
 });
-// Double-clicking a board finds it, every ply of it, in the cut list.
+// Double-clicking a board finds it, every ply of it, in the cut list. A
+// plate opens where the studs go on it instead.
 svg.addEventListener("dblclick", (e) => {
   const target = (e.target as Element).closest<SVGElement>(".member");
   if (!target || !shownWall) return;
   const m = shownWall.members.find((v) => v.label === target.dataset.label);
   if (!m) return;
+  if (isPlate(m.kind)) {
+    openPlates(shownWall.id);
+    return;
+  }
   const plies = shownWall.members.filter((v) => v.x_16 === m.x_16 && v.y_16 === m.y_16 && v.w_16 === m.w_16 && v.h_16 === m.h_16);
   findInCutList(plies.map((v) => v.label));
 });
@@ -1223,6 +1282,18 @@ app.addEventListener("click", (e) => {
     case "close-account":
       accountDialog.close();
       break;
+    case "plates":
+      if (view.kind === "wall") openPlates(view.id);
+      break;
+    case "plates-cuts": {
+      const w = framed?.walls.find((v) => v.id === platesWall);
+      platesDialog.close();
+      if (w) findInCutList(w.members.filter((m) => isPlate(m.kind)).map((m) => m.label));
+      break;
+    }
+    case "close-plates":
+      platesDialog.close();
+      break;
   }
 });
 document.addEventListener("keydown", (e) => {
@@ -1235,6 +1306,9 @@ settings.addEventListener("click", (e) => {
 });
 accountDialog.addEventListener("click", (e) => {
   if (e.target === accountDialog) accountDialog.close();
+});
+platesDialog.addEventListener("click", (e) => {
+  if (e.target === platesDialog) platesDialog.close();
 });
 
 fileInput.addEventListener("change", async () => {

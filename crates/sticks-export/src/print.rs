@@ -4,9 +4,10 @@
 use std::fmt::Write;
 
 use sticks_core::Project;
+use sticks_core::{LayoutStart, MemberKind};
 use sticks_cutlist::CutList;
 use sticks_hardware::HardwareList;
-use sticks_rules::FramedProject;
+use sticks_rules::{plate_layout, plate_letter, FramedProject, FramedWall, PlateBoard};
 
 use crate::svg::{
     deck_checks_svg, deck_notice, deck_plan_svg, deck_section_svg, decking_svg, floor_svg,
@@ -110,6 +111,11 @@ td.num, th.num {{ text-align: right; }}
 .board h3 {{ font-size: 10pt; margin: 0 0 2pt; }}
 .notice {{ color: #666; font-size: 8pt; margin-top: 12pt; }}
 .problem {{ color: #a33; }}
+table.plates {{ width: 100%; font-size: 9.5pt; }}
+table.plates td, table.plates th {{ padding: 1pt 10pt 1pt 0; }}
+table.plates td.at {{ font-weight: bold; width: 1%; white-space: nowrap; }}
+table.plates tr.ro td {{ background: #e8f2ec; }}
+table.plates .label {{ color: #777; font-size: 8pt; }}
 .owner {{ background: #fff8e6; border: 0.75pt solid #c9a86a; padding: 6pt 8pt; }}
 @media print {{ body {{ background: none; }} .page {{ margin: 0; }} }}
 </style>
@@ -266,39 +272,40 @@ td.num, th.num {{ text-align: right; }}
     };
     let _ = writeln!(out, "<p class=\"notice\">{}</p>\n</section>", esc(&notice));
 
-    let mut page = |svg: String| {
-        let _ = writeln!(out, "<section class=\"page\">\n{svg}</section>");
+    let mut page = |class: &str, body: String| {
+        let _ = writeln!(out, "<section class=\"{class}\">\n{body}</section>");
     };
     if let (Some(Ok(d)), Some(deck)) = (&framed.deck, &project.deck) {
-        page(deck_checks_svg(&project.name, deck, d));
-        page(deck_plan_svg(&project.name, deck, d, from));
-        page(deck_section_svg(&project.name, deck, d));
-        page(decking_svg(&project.name, deck, d));
+        page("page", deck_checks_svg(&project.name, deck, d));
+        page("page", deck_plan_svg(&project.name, deck, d, from));
+        page("page", deck_section_svg(&project.name, deck, d));
+        page("page", decking_svg(&project.name, deck, d));
     }
     for w in framed.walls.iter().flatten() {
-        page(wall_svg(&project.name, w, from));
+        page("page", wall_svg(&project.name, w, from));
+        page("page text", plates_html(&project.name, w, from));
     }
     if let Some(Ok(floor)) = &framed.floor {
-        page(floor_svg(&project.name, floor, from));
-        page(subfloor_svg(&project.name, floor));
+        page("page", floor_svg(&project.name, floor, from));
+        page("page", subfloor_svg(&project.name, floor));
     }
     if let Some(Ok(roof)) = &framed.roof {
-        page(roof_svg(&project.name, roof, from));
+        page("page", roof_svg(&project.name, roof, from));
         for r in &roof.rafters {
-            page(rafter_svg(&project.name, r));
+            page("page", rafter_svg(&project.name, r));
         }
     }
     if let Some(Ok(porch)) = &framed.porch {
-        page(porch_svg(&project.name, porch, from));
-        page(rafter_svg(&project.name, &porch.rafter));
+        page("page", porch_svg(&project.name, porch, from));
+        page("page", rafter_svg(&project.name, &porch.rafter));
         if let Some(svg) = porch_deck_svg(&project.name, porch, from) {
-            page(svg);
+            page("page", svg);
         }
     }
     if let Some(Ok(sheathing)) = &framed.sheathing {
         for roofs in [false, true] {
             if let Some(svg) = sheathing_svg(&project.name, sheathing, roofs) {
-                page(svg);
+                page("page", svg);
             }
         }
     }
@@ -359,6 +366,121 @@ td.num, th.num {{ text-align: right; }}
     out
 }
 
+/// A wall's plate layout: each line from the layout end and the board
+/// that goes on its far side, on the bottom plate and on the top.
+fn plates_html(project: &str, wall: &FramedWall, from: LayoutStart) -> String {
+    let p = plate_layout(wall, from);
+    let end = match from {
+        LayoutStart::Left => "left end",
+        LayoutStart::Right => "right end",
+    };
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "<h1>{}: {} wall plate layout</h1>",
+        esc(project),
+        esc(&wall.id)
+    );
+    let how = if p.top_sloped {
+        format!("Hook the tape on the {end} of each plate. The top plate follows the roof slope, so its marks are measured along it and come out longer than the bottom plate's: mark each plate on its own.")
+    } else {
+        format!("Lay the top plate on the bottom plate, ends flush at the {end}, and mark both at once.")
+    };
+    let _ = writeln!(
+        out,
+        "<p>{how} Square a line at each measurement and write the letter on the far side of it, away from the {end}, where the board stands: <strong>X</strong> stud, <strong>K</strong> king stud, <strong>J</strong> jack stud, <strong>C</strong> cripple.</p>"
+    );
+    let board = |b: &Option<PlateBoard>| match b {
+        Some(b) => format!(
+            "<strong>{}</strong> {} <span class=\"label\">{}</span>",
+            plate_letter(b.kind),
+            b.kind.name(),
+            esc(&b.label)
+        ),
+        None => "&mdash;".to_string(),
+    };
+    // Lines and rough opening edges, in order along the plate.
+    let mut rows: Vec<(sticks_core::Length, u8, String)> = Vec::new();
+    for m in &p.marks {
+        let row = if p.top_sloped {
+            let at = |b: &Option<PlateBoard>, l: sticks_core::Length| {
+                if b.is_some() {
+                    format!("{l:#}")
+                } else {
+                    String::new()
+                }
+            };
+            format!(
+                "<tr><td class=\"num at\">{}</td><td>{}</td><td class=\"num at\">{}</td><td>{}</td></tr>",
+                at(&m.bottom, m.at),
+                board(&m.bottom),
+                at(&m.top, m.top_at),
+                board(&m.top)
+            )
+        } else {
+            format!(
+                "<tr><td class=\"num at\">{:#}</td><td>{}</td><td>{}</td></tr>",
+                m.at,
+                board(&m.bottom),
+                board(&m.top)
+            )
+        };
+        rows.push((m.at, 1, row));
+    }
+    let span = if p.top_sloped { 3 } else { 2 };
+    for o in &p.openings {
+        let (start, end) = if o.no_bottom_plate {
+            (
+                " No bottom plate across it.",
+                " The bottom plate starts again.",
+            )
+        } else {
+            ("", "")
+        };
+        for (at, what, note) in [(o.from, "starts", start), (o.to, "ends", end)] {
+            rows.push((
+                at,
+                0,
+                format!(
+                    "<tr class=\"ro\"><td class=\"num at\">{at:#}</td><td colspan=\"{span}\"><strong>{}</strong> rough opening {what}.{note}</td></tr>",
+                    esc(&o.name)
+                ),
+            ));
+        }
+    }
+    rows.sort_by_key(|r| (r.0, r.1));
+    let head = if p.top_sloped {
+        format!("<tr><th class=\"num\">From {end}</th><th>Bottom plate</th><th class=\"num\">Along the slope</th><th>Top plate</th></tr>")
+    } else {
+        format!("<tr><th class=\"num\">From {end}</th><th>Bottom plate</th><th>Top plate</th></tr>")
+    };
+    let _ = writeln!(out, "<table class=\"plates\">\n{head}");
+    for (_, _, row) in rows {
+        let _ = writeln!(out, "{row}");
+    }
+    out.push_str("</table>\n");
+    if !p.splices.is_empty() {
+        let joints: Vec<String> = p
+            .splices
+            .iter()
+            .map(|s| {
+                let plate = match s.kind {
+                    MemberKind::BottomPlate => "Bottom plate",
+                    MemberKind::TopPlate => "Top plate",
+                    _ => "Cap plate",
+                };
+                format!("{plate} at {:#}", s.at)
+            })
+            .collect();
+        let _ = writeln!(
+            out,
+            "<p>Plate joints, each centered over a stud: {}.</p>",
+            esc(&joints.join("; "))
+        );
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,9 +508,12 @@ mod tests {
         let html = print_html(&p, &framed, &cl, &hw);
         assert!(html.contains("<h2>Hardware (Simpson Strong-Tie)</h2>"));
         assert!(html.contains("LRU26Z"));
-        // Cover, four walls, floor, subfloor, roof, rafter, porch, porch
+        // Cover, four walls and their plates, floor, subfloor, roof, rafter, porch, porch
         // rafter, deck, wall and roof sheathing, cut list.
-        assert_eq!(html.matches("<section class=\"page").count(), 15);
+        // Each wall's plate layout follows its drawing.
+        assert_eq!(html.matches("<section class=\"page").count(), 19);
+        assert!(html.contains("front wall plate layout</h1>"));
+        assert!(html.contains("<strong>J</strong> jack stud"));
         assert!(html.contains("wall sheathing</td>"));
         assert!(html.contains("<h2>Shopping list</h2>"));
         assert!(html.contains("3/4&quot; sheet"));
