@@ -2257,3 +2257,208 @@ dialog.settings.account {
   justify-content: center;
   font-variant-numeric: tabular-nums;
 }
+
+/* Plate layout: where each board goes on a wall's plates. */
+.plates-button {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  box-shadow: var(--shadow);
+}
+.plates-button[hidden] {
+  display: none;
+}
+.info-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.info-actions:empty {
+  display: none;
+}
+dialog.plates {
+  width: min(980px, calc(100vw - 32px));
+  height: min(820px, calc(100vh - 48px));
+}
+dialog.plates > header {
+  align-items: center;
+}
+.plates-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 24px 24px;
+}
+.plates-how p {
+  margin: 0 0 8px;
+  max-width: 72ch;
+  font-size: 13.5px;
+}
+.plates-sloped {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.plates-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 10px 0 14px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.plates-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.letter {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #3b2a14;
+  background: var(--stud);
+}
+.letter-K {
+  background: var(--king);
+}
+.letter-J {
+  background: var(--jack);
+}
+.letter-C {
+  background: var(--cripple);
+}
+.plates-strip {
+  overflow-x: auto;
+  margin: 0 -4px 14px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+.plates-svg {
+  display: block;
+}
+.plates-svg .plate {
+  fill: var(--plate);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+.plates-svg .plate-name {
+  fill: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.plate-mark rect {
+  fill: var(--stud);
+  stroke: var(--edge);
+  stroke-width: 0.5;
+}
+.plate-mark.letter-K rect {
+  fill: var(--king);
+}
+.plate-mark.letter-J rect {
+  fill: var(--jack);
+}
+.plate-mark.letter-C rect {
+  fill: var(--cripple);
+}
+.plate-mark line {
+  stroke: #24221e;
+  stroke-width: 1.5;
+}
+.plate-mark text {
+  fill: #3b2a14;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.plate-splice {
+  stroke: var(--danger);
+  stroke-width: 2;
+}
+.plate-ro line {
+  stroke: var(--accent);
+  stroke-width: 1.25;
+}
+.plate-ro text {
+  fill: var(--accent);
+  font-size: 12px;
+  text-anchor: middle;
+}
+.plate-origin {
+  fill: var(--text-3);
+  font-size: 12px;
+}
+.plates-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.plates-table th {
+  position: sticky;
+  top: -16px;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.plates-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.plates-table td:not(.at) {
+  white-space: nowrap;
+}
+.plates-table .at {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+.plates-table td.at {
+  font-size: 16px;
+  font-weight: 650;
+}
+.plates-table .plate-board {
+  margin-left: 8px;
+}
+.plates-table .plate-label {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.plates-table .none {
+  color: var(--text-3);
+  padding-left: 6px;
+}
+.plates-table tr.opening-row td {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.plates-table tr.opening-row td.at {
+  font-size: 14px;
+}
+
+.plates-body h3 {
+  margin: 18px 0 6px;
+  font-size: 13px;
+}
+.plates-splices {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13.5px;
+}
+.plates-problem {
+  color: var(--danger);
+}
