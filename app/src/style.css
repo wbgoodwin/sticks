@@ -2234,7 +2234,7 @@ dialog.settings.account {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  font-size: calc(12.5px * var(--zoom, 1));
+  font-size: 12.5px;
 }
 .checks-status {
   margin: 0 0 10px;

@@ -162,8 +162,9 @@ stock and prices. Everything redraws as you type:
 - **Floor, Subfloor, Roof, Rafter, Porch, Deck, Sheathing**: the printed
   framing plans, rafter details and sheet layouts.
 - **Zooming the flat drawings**: pinch, Cmd with + − 0, Cmd with the scroll
-  wheel, or the buttons in the corner. Zoomed in, scroll or drag the drawing to
-  move around. Each drawing keeps its own zoom.
+  wheel, or the buttons in the corner, from 50% to 800%. The boards grow and the
+  measurements keep their size. Zoomed in, scroll or drag the drawing to move
+  around. Each drawing keeps its own zoom.
 - **Shopping list and cut list** for the whole project, with the total when
   every stock length has a price, and the connectors and nails under it.
   Settings holds the hardware prices, nails or screws, and the high-wind
