@@ -161,6 +161,9 @@ stock and prices. Everything redraws as you type:
   measured from the layout end. Plate splices show in red.
 - **Floor, Subfloor, Roof, Rafter, Porch, Deck, Sheathing**: the printed
   framing plans, rafter details and sheet layouts.
+- **Zooming the flat drawings**: pinch, Cmd with + − 0, Cmd with the scroll
+  wheel, or the buttons in the corner. Zoomed in, scroll or drag the drawing to
+  move around. Each drawing keeps its own zoom.
 - **Shopping list and cut list** for the whole project, with the total when
   every stock length has a price, and the connectors and nails under it.
   Settings holds the hardware prices, nails or screws, and the high-wind

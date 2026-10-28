@@ -25,6 +25,7 @@ import { dollars, findInCuts, renderCuts, renderShopping } from "./cutlist";
 import { drawElevation, groupKey, KIND_NAMES, type DragOverlay, type Scale } from "./elevation";
 import { openSection, revealOpening, renderPanel, wallName, type PanelContext, type PanelTab } from "./panel";
 import { packetZoom } from "./packet-zoom";
+import { drawingZoom } from "./drawing-zoom";
 import { bounds, factsAt, movesUpAndDown, snap, type Item, type Spot } from "./snap";
 import { renderSettings } from "./settings";
 import { accountsEnabled, email, finishSignIn, me, onAccountChange, signedIn, type Me } from "./account";
@@ -64,13 +65,20 @@ app.innerHTML = `
       <nav class="views" aria-label="Views"></nav>
     </div>
     <div class="drawing">
-      <svg class="elevation" role="img" aria-label="Wall elevation"></svg>
-      <div class="sheet" hidden></div>
+      <div class="scroll">
+        <svg class="elevation" role="img" aria-label="Wall elevation"></svg>
+        <div class="sheet" hidden></div>
+      </div>
       <div class="layers" hidden></div>
       <button type="button" class="button reset-view" hidden>Reset view</button>
       <button type="button" class="button plates-button" data-action="plates" hidden>Plate layout</button>
       <div class="info" hidden></div>
       <div class="banner" hidden></div>
+      <div class="zoom drawing-zoom" role="group" aria-label="Zoom" hidden>
+        <button type="button" class="button" data-action="drawing-zoom-out" title="Zoom out (⌘−)" aria-label="Zoom out">−</button>
+        <button type="button" class="button zoom-level" data-action="drawing-zoom-reset" title="Fit the drawing (⌘0). Zoomed in, drag it to move around.">100%</button>
+        <button type="button" class="button" data-action="drawing-zoom-in" title="Zoom in (⌘+)" aria-label="Zoom in">+</button>
+      </div>
       <div class="tooltip" hidden></div>
       <div class="update" role="status" hidden></div>
     </div>
@@ -162,6 +170,8 @@ const $ = <T extends Element>(selector: string) => app.querySelector<T>(selector
 const panel = $<HTMLElement>(".panel");
 const views = $<HTMLElement>(".views");
 const drawingBox = $<HTMLDivElement>(".drawing");
+/** What a flat drawing scrolls in, under the stage's buttons and cards. */
+const scroller = $<HTMLDivElement>(".drawing .scroll");
 /**
  * The shortest a flat drawing gets. Below it the drawing scrolls instead of
  * shrinking, so pulling the lists up doesn't change how the wall looks.
@@ -195,7 +205,14 @@ const platesButton = $<HTMLButtonElement>(".plates-button");
 const accountBody = $<HTMLDivElement>(".account-body");
 const accountButton = $<HTMLButtonElement>(".account-button");
 const previewFrame = $<HTMLIFrameElement>(".print-preview iframe");
-const zoom = packetZoom(previewFrame, $<HTMLButtonElement>(".zoom-level"), () => !preview.hidden);
+const zoom = packetZoom(previewFrame, $<HTMLButtonElement>(".print-bar .zoom-level"), () => !preview.hidden);
+const drawingZoomBar = $<HTMLDivElement>(".drawing-zoom");
+const flatZoom = drawingZoom(
+  scroller,
+  $<HTMLButtonElement>(".drawing-zoom .zoom-level"),
+  () => view.kind !== "3d" && preview.hidden === true,
+  () => sizeFlat(),
+);
 const ownerCheck = $<HTMLLabelElement>(".owner-check");
 const ownerBox = $<HTMLInputElement>(".owner-check input");
 const packetButtons = [...app.querySelectorAll<HTMLButtonElement>('[data-action="print-now"], [data-action="download-packet"]')];
@@ -395,8 +412,11 @@ function renderStage(): void {
   drawingBox.classList.toggle("plain", view.kind !== "wall");
   // Flat drawings keep their size when the lists are pulled up, and scroll.
   drawingBox.classList.toggle("flat", !is3d);
-  if (is3d) drawingBox.scrollTop = 0;
-  if (!is3d) info.hidden = true;
+  drawingZoomBar.hidden = is3d;
+  if (view.kind !== "3d") {
+    info.hidden = true;
+    flatZoom.view(`${view.kind}:${view.id}`);
+  }
 
   if (view.kind === "3d") {
     const m = model(project);
@@ -418,6 +438,7 @@ function renderStage(): void {
     }
     shownWall = w;
     drawWall();
+    flatZoom.drawn();
     renderSchedule(w.members, w.warnings, []);
     stats.textContent = `${w.members.length} pieces · ${w.members.filter((m) => m.kind === "stud").length} studs`;
   } else {
@@ -436,6 +457,8 @@ function renderStage(): void {
       showProblem(message(e));
       return;
     }
+    sizeSheet();
+    flatZoom.drawn();
     if (part && "members" in part) {
       renderSchedule(part.members, [...part.warnings, ...(d.part === "deck" ? failedChecks(framed) : [])], []);
       stats.textContent = `${part.members.length} pieces`;
@@ -483,11 +506,34 @@ function skippedNotes(parts: string[]): string[] {
 /** How the shown wall was last drawn, to turn the pointer back into lengths. */
 let scale: Scale | null = null;
 
+/** Sizes the shown flat drawing to the stage and its zoom. */
+function sizeFlat(): void {
+  if (view.kind === "wall") drawWall();
+  else if (view.kind === "sheet") sizeSheet();
+}
+
+/** The stage's size for a flat drawing at 100%, before it scrolls. */
+function flatSize(): { width: number; height: number } {
+  return { width: scroller.clientWidth, height: Math.max(scroller.clientHeight, MIN_DRAWING_HEIGHT) };
+}
+
+/** A sheet sits in a margin; zoomed, the whole of it grows. */
+function sizeSheet(): void {
+  const { width, height } = flatSize();
+  const z = flatZoom.value;
+  sheet.style.width = `${Math.max(0, width - 40) * z}px`;
+  sheet.style.height = `${Math.max(0, height - 40) * z}px`;
+  sheet.style.setProperty("--zoom", String(z));
+}
+
 function drawWall(drag?: DragOverlay): void {
   if (!shownWall || view.kind !== "wall") return;
-  const width = drawingBox.clientWidth;
-  const height = Math.max(drawingBox.clientHeight, MIN_DRAWING_HEIGHT);
-  svg.style.height = `${height}px`;
+  // Drawn at the stage's size and shown bigger, so zooming in magnifies the
+  // labels with the boards.
+  const { width, height } = flatSize();
+  const z = flatZoom.value;
+  svg.style.width = `${width * z}px`;
+  svg.style.height = `${height * z}px`;
   const w = shownWall;
   const items = openingItems(w);
   const notes = items ? items.map((o, i) => factsAt(items, i, o, w.length_16).map((f) => f.text)) : undefined;
@@ -629,8 +675,7 @@ function showTooltip(html: string, x: number, y: number): void {
   tooltip.hidden = false;
   const box = drawingBox.getBoundingClientRect();
   const left = Math.max(8, Math.min(x + 14, box.width - tooltip.offsetWidth - 8));
-  // The tooltip scrolls with a flat drawing, so it's placed in scrolled terms.
-  const top = Math.max(8, y - tooltip.offsetHeight - 10) + drawingBox.scrollTop;
+  const top = Math.max(8, y - tooltip.offsetHeight - 10);
   tooltip.style.transform = `translate(${left}px, ${top}px)`;
 }
 
@@ -869,10 +914,12 @@ svg.addEventListener("pointermove", (e) => {
     highlight(null);
   }
   if (Math.abs(dy) >= VERTICAL_START) d.vertical = true;
-  const raw = { x: d.start.x + (dx / scale.s) * 16, y: d.start.y - (dy / scale.s) * 16 };
+  // Screen pixels to an inch, zoom and all.
+  const px = scale.s * flatZoom.value;
+  const raw = { x: d.start.x + (dx / px) * 16, y: d.start.y - (dy / px) * 16 };
   // Alt places it to the sixteenth; otherwise it pulls to good spots and whole inches.
   const free = e.altKey;
-  const spot = snap(d.items, d.index, raw, d.length, free ? 0 : (SNAP_REACH / scale.s) * 16, free ? 1 : 16);
+  const spot = snap(d.items, d.index, raw, d.length, free ? 0 : (SNAP_REACH / px) * 16, free ? 1 : 16);
   d.want = d.vertical ? spot : { x: spot.x, y: d.start.y };
   const box = drawingBox.getBoundingClientRect();
   d.at = { x: e.clientX - box.left, y: e.clientY - box.top };
@@ -996,7 +1043,7 @@ function revealInPanel(wallId: string, opening: OpeningJson): void {
   card.classList.add("flash");
 }
 
-new ResizeObserver(() => drawWall()).observe(drawingBox);
+new ResizeObserver(() => sizeFlat()).observe(drawingBox);
 
 // Layer toggles over the 3D view.
 layers.append(
@@ -1308,6 +1355,15 @@ app.addEventListener("click", (e) => {
       break;
     case "zoom-reset":
       zoom.set(1);
+      break;
+    case "drawing-zoom-in":
+      flatZoom.step(1);
+      break;
+    case "drawing-zoom-out":
+      flatZoom.step(-1);
+      break;
+    case "drawing-zoom-reset":
+      flatZoom.set(1);
       break;
     case "close-preview":
       preview.hidden = true;
