@@ -517,28 +517,57 @@ function flatSize(): { width: number; height: number } {
   return { width: scroller.clientWidth, height: Math.max(scroller.clientHeight, MIN_DRAWING_HEIGHT) };
 }
 
-/** A sheet sits in a margin; zoomed, the whole of it grows. */
+/** Where a drawing smaller than the stage sits: in the middle. */
+function centered(size: number, room: number, margin = 0): number {
+  return Math.max(margin, (room - size) / 2);
+}
+
+/**
+ * A sheet sits in a margin and grows with the zoom, while its words and
+ * numbers keep their size on screen. Zoomed out they shrink with the page,
+ * which is laid out for its own size and would crowd.
+ */
 function sizeSheet(): void {
   const { width, height } = flatSize();
   const z = flatZoom.value;
-  sheet.style.width = `${Math.max(0, width - 40) * z}px`;
-  sheet.style.height = `${Math.max(0, height - 40) * z}px`;
+  const w = Math.max(0, width - 40) * z;
+  const h = Math.max(0, height - 40) * z;
+  sheet.style.width = `${w}px`;
+  sheet.style.height = `${h}px`;
+  sheet.style.marginLeft = `${centered(w, scroller.clientWidth, 20)}px`;
+  sheet.style.marginTop = `${centered(h, scroller.clientHeight, 20)}px`;
   sheet.style.setProperty("--zoom", String(z));
+  for (const text of sheet.querySelectorAll<SVGTextElement>("svg text")) {
+    // The sheet's own size, read once at 100%.
+    if (!text.dataset.size) {
+      text.style.fontSize = "";
+      text.style.strokeWidth = "";
+      const css = getComputedStyle(text);
+      text.dataset.size = String(parseFloat(css.fontSize) || 0);
+      text.dataset.stroke = String(parseFloat(css.strokeWidth) || 0);
+    }
+    const size = Number(text.dataset.size);
+    const stroke = Number(text.dataset.stroke);
+    const k = Math.max(1, z);
+    if (size) text.style.fontSize = `${size / k}px`;
+    if (stroke) text.style.strokeWidth = `${stroke / k}px`;
+  }
 }
 
 function drawWall(drag?: DragOverlay): void {
   if (!shownWall || view.kind !== "wall") return;
-  // Drawn at the stage's size and shown bigger, so zooming in magnifies the
-  // labels with the boards.
+  // Zoomed, the boards are drawn bigger or smaller and the labels aren't.
   const { width, height } = flatSize();
-  const z = flatZoom.value;
-  svg.style.width = `${width * z}px`;
-  svg.style.height = `${height * z}px`;
   const w = shownWall;
   const items = openingItems(w);
   const notes = items ? items.map((o, i) => factsAt(items, i, o, w.length_16).map((f) => f.text)) : undefined;
   const plate = selected?.wall === w.id ? selected.plate : undefined;
-  scale = drawElevation(svg, w, { layoutFrom: project.rules.layout_from, notes, drag, plate }, width, height);
+  const zoom = flatZoom.value;
+  scale = drawElevation(svg, w, { layoutFrom: project.rules.layout_from, notes, drag, plate, zoom }, width, height);
+  svg.style.width = `${scale.width}px`;
+  svg.style.height = `${scale.height}px`;
+  svg.style.left = `${centered(scale.width, scroller.clientWidth)}px`;
+  svg.style.top = `${centered(scale.height, scroller.clientHeight)}px`;
   showSelected();
 }
 
@@ -914,12 +943,10 @@ svg.addEventListener("pointermove", (e) => {
     highlight(null);
   }
   if (Math.abs(dy) >= VERTICAL_START) d.vertical = true;
-  // Screen pixels to an inch, zoom and all.
-  const px = scale.s * flatZoom.value;
-  const raw = { x: d.start.x + (dx / px) * 16, y: d.start.y - (dy / px) * 16 };
+  const raw = { x: d.start.x + (dx / scale.s) * 16, y: d.start.y - (dy / scale.s) * 16 };
   // Alt places it to the sixteenth; otherwise it pulls to good spots and whole inches.
   const free = e.altKey;
-  const spot = snap(d.items, d.index, raw, d.length, free ? 0 : (SNAP_REACH / px) * 16, free ? 1 : 16);
+  const spot = snap(d.items, d.index, raw, d.length, free ? 0 : (SNAP_REACH / scale.s) * 16, free ? 1 : 16);
   d.want = d.vertical ? spot : { x: spot.x, y: d.start.y };
   const box = drawingBox.getBoundingClientRect();
   d.at = { x: e.clientX - box.left, y: e.clientY - box.top };

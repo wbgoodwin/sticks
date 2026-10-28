@@ -11,6 +11,11 @@ export interface DrawOptions {
   drag?: DragOverlay;
   /** A plate picked out: its marks replace the stud row, kings and jacks included. */
   plate?: "bottom_plate" | "top_plate";
+  /**
+   * How much bigger than fitting `width` by `height` to draw the wall. The
+   * labels and the room for them stay the same size.
+   */
+  zoom?: number;
 }
 
 /** What to show while an opening is dragged. */
@@ -27,6 +32,9 @@ export interface DragOverlay {
 export interface Scale {
   /** Pixels per inch. */
   s: number;
+  /** The drawing's size, which zoomed isn't the size it was asked to fit. */
+  width: number;
+  height: number;
   x16(px: number): number;
   y16(py: number): number;
 }
@@ -123,14 +131,20 @@ export function drawElevation(
   width: number,
   height: number,
 ): Scale {
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.replaceChildren();
   const L = wall.length_16 / 16;
   const H = wall.height_16 / 16;
+  const padY = PAD.top + padBottom(wall.openings.length > 0);
+  const zoom = options.zoom ?? 1;
+  const s = Math.max(0.1, Math.min((width - PAD.left - PAD.right) / L, (height - padY) / H) * zoom);
+  // Zoomed out, the drawing is just the wall and its labels; zoomed in, at
+  // least the stage.
+  const fill = zoom >= 1;
+  width = Math.max(L * s + PAD.left + PAD.right, fill ? width : 0);
+  height = Math.max(H * s + padY, fill ? height : 0);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   const availW = width - PAD.left - PAD.right;
-
-  const availH = height - PAD.top - padBottom(wall.openings.length > 0);
-  const s = Math.max(0.1, Math.min(availW / L, availH / H));
+  const availH = height - padY;
   const x0 = PAD.left + (availW - L * s) / 2;
   const yb = PAD.top + (availH - H * s) / 2 + H * s;
   const X = (x16: number) => x0 + (x16 / 16) * s;
@@ -343,6 +357,8 @@ export function drawElevation(
 
   return {
     s,
+    width,
+    height,
     x16: (px) => ((px - x0) / s) * 16,
     y16: (py) => ((yb - py) / s) * 16,
   };

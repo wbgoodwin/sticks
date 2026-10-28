@@ -4,10 +4,10 @@
 // dragging it moves it around.
 
 const KEY = "sticks.drawingZoom";
-/** 100% is the drawing fitted to the stage, so there's nothing smaller to show. */
-const MIN = 1;
+/** 100% is the drawing fitted to the stage. */
+const MIN = 0.5;
 const MAX = 8;
-const STEPS = [1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8];
+const STEPS = [0.5, 0.67, 0.75, 0.9, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8];
 /** Pixels the pointer must travel before a press becomes a pan. */
 const PAN_START = 4;
 
@@ -49,7 +49,7 @@ export function drawingZoom(
 
   const show = () => {
     label.textContent = `${Math.round(zoom * 100)}%`;
-    scroller.classList.toggle("zoomed", zoom > 1);
+    scroller.classList.toggle("zoomed", zoom !== 1);
   };
 
   const set = (z: number, x?: number, y?: number) => {
