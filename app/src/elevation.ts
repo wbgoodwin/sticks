@@ -9,6 +9,8 @@ export interface DrawOptions {
   /** What's good about each opening's spot, such as "Centered on the wall". */
   notes?: string[][];
   drag?: DragOverlay;
+  /** A plate picked out: its marks replace the stud row, kings and jacks included. */
+  plate?: "bottom_plate" | "top_plate";
 }
 
 /** What to show while an opening is dragged. */
@@ -273,22 +275,33 @@ export function drawElevation(
     svg.append(dimension(right, Y(0), right, Y(wall.right_height_16), formatLength(wall.right_height_16), "v"));
   }
 
-  // Stud positions along the bottom plate.
-  const marks = el("g", { class: "marks" });
-  const studs = [...wall.marks]
-    .sort((a, b) => a.at_16 - b.at_16)
-    .flatMap((m) => {
-      if (m.kind === "king_stud" || m.kind === "jack_stud") return [];
-      const member = wall.members.find((v) => v.label === m.label);
-      if (!member) return [];
-      return [{ m, x: X(options.layoutFrom === "left" ? member.x_16 : member.x_16 + member.w_16) }];
-    });
+  // Stud positions along the bottom plate. With a plate picked out, every
+  // board on that plate instead, each with its letter: X, K, J or C.
+  const marks = el("g", { class: options.plate ? "marks plate-marks" : "marks" });
+  const near = (label: string) => {
+    const member = wall.members.find((v) => v.label === label);
+    return member ? X(options.layoutFrom === "left" ? member.x_16 : member.x_16 + member.w_16) : null;
+  };
+  const studs = options.plate
+    ? (wall.plates?.marks ?? []).flatMap((m) => {
+        const top = options.plate === "top_plate";
+        const b = top ? m.top : m.bottom;
+        const x = b && near(b.label);
+        return b && x !== null ? [{ label: b.label, text: `${b.letter}  ${top ? m.top_at : m.at}`, x }] : [];
+      })
+    : [...wall.marks]
+        .sort((a, b) => a.at_16 - b.at_16)
+        .flatMap((m) => {
+          if (m.kind === "king_stud" || m.kind === "jack_stud") return [];
+          const x = near(m.label);
+          return x === null ? [] : [{ label: m.label, text: m.at, x }];
+        });
   const at = spreadLabels(studs.map((v) => v.x));
   const ty = yb + 16;
-  studs.forEach(({ m, x }, i) => {
+  studs.forEach(({ label, text, x }, i) => {
     marks.append(
       el("polyline", { class: "tick", points: `${x},${yb + 3} ${x},${ty - 8} ${at[i]},${ty - 3}` }),
-      upLabel(at[i], ty, m.at, { "data-label": m.label }),
+      upLabel(at[i], ty, text, { "data-label": label }),
     );
   });
 
@@ -324,9 +337,7 @@ export function drawElevation(
         y: height - 12,
         "text-anchor": options.layoutFrom === "left" ? "start" : "end",
       },
-      options.layoutFrom === "left"
-        ? `Layout measured from this end →${wall.openings.length ? "   Brackets: rough openings" : ""}`
-        : `${wall.openings.length ? "Brackets: rough openings   " : ""}← Layout measured from this end`,
+      originNote(wall, options),
     ),
   );
 
@@ -335,6 +346,19 @@ export function drawElevation(
     x16: (px) => ((px - x0) / s) * 16,
     y16: (py) => ((yb - py) / s) * 16,
   };
+}
+
+/** The note under the drawing: where the layout starts, and what the marks are. */
+function originNote(wall: WallView, options: DrawOptions): string {
+  const left = options.layoutFrom === "left";
+  const what = options.plate
+    ? `${options.plate === "top_plate" ? "Top" : "Bottom"} plate marks${options.plate === "top_plate" && wall.plates?.top_sloped ? ", along its slope" : ""}: X stud, K king, J jack, C cripple`
+    : wall.openings.length
+      ? "Brackets: rough openings"
+      : "";
+  const arrow = left ? "Layout measured from this end →" : "← Layout measured from this end";
+  if (!what) return arrow;
+  return left ? `${arrow}   ${what}` : `${what}   ${arrow}`;
 }
 
 /** A few words for a note, to fit inside the opening. */

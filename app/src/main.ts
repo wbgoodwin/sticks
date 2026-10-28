@@ -226,17 +226,14 @@ const viewer = new Viewer(drawingBox, {
       tooltip.hidden = true;
       return;
     }
-    const hint = isPlate(solid.kind) && wallPart(solid.part) ? PLATES_HINT : solid.size && solid.length ? FIND_HINT : "";
-    showTooltip(`${solidTitle(solid)}${hint}`, x, y);
+    showTooltip(`${solidTitle(solid)}${solid.size && solid.length ? FIND_HINT : ""}`, x, y);
   },
   pick: showInfo,
 });
 /** The solid last clicked in 3D, so a double-click can find it in the cut list. */
 let picked: SolidView | null = null;
 drawingBox.addEventListener("dblclick", (e) => {
-  if (view.kind !== "3d" || !picked || !(e.target as Element).closest("canvas")) return;
-  if (isPlate(picked.kind) && wallPart(picked.part)) openPlates(picked.part);
-  else findInCutList([picked.label]);
+  if (view.kind === "3d" && picked && (e.target as Element).closest("canvas")) findInCutList([picked.label]);
 });
 
 const panelContext: PanelContext = {
@@ -494,7 +491,9 @@ function drawWall(drag?: DragOverlay): void {
   const w = shownWall;
   const items = openingItems(w);
   const notes = items ? items.map((o, i) => factsAt(items, i, o, w.length_16).map((f) => f.text)) : undefined;
-  scale = drawElevation(svg, w, { layoutFrom: project.rules.layout_from, notes, drag }, width, height);
+  const plate = selected?.wall === w.id ? selected.plate : undefined;
+  scale = drawElevation(svg, w, { layoutFrom: project.rules.layout_from, notes, drag, plate }, width, height);
+  showSelected();
 }
 
 /** The shown wall's openings with their kinds, or null if the project and the frame disagree. */
@@ -610,7 +609,7 @@ function highlight(group: string | null): void {
 }
 
 const FIND_HINT = `<span class="hint">Double-click to find it in the cut list</span>`;
-const PLATES_HINT = `<span class="hint">Double-click for where the studs go</span>`;
+const PLATES_HINT = `<span class="hint">Double-click to find it in the cut list and mark its studs</span>`;
 
 /** Whether a 3D part is one of the walls, which have plates to lay out. */
 function wallPart(part: string): boolean {
@@ -720,19 +719,64 @@ svg.addEventListener("pointermove", (e) => {
   );
   highlight(groupKey(m));
 });
-// Double-clicking a board finds it, every ply of it, in the cut list. A
-// plate opens where the studs go on it instead.
+/**
+ * The board last double-clicked in a wall drawing, kept picked out until a
+ * click on nothing or Escape. A plate also shows its marks under the wall.
+ */
+let selected: { wall: string; labels: string[]; plate?: "bottom_plate" | "top_plate" } | null = null;
+
+/** Picks out the selected boards, and for a plate the boards standing on it. */
+function showSelected(): void {
+  const on = selected !== null && shownWall?.id === selected.wall;
+  const labels = new Set(on ? selected!.labels : []);
+  const related = new Set<string>();
+  if (on && selected!.plate) {
+    const top = selected!.plate === "top_plate";
+    for (const m of shownWall!.plates?.marks ?? []) {
+      const b = top ? m.top : m.bottom;
+      if (b) related.add(b.label);
+    }
+  }
+  for (const node of svg.querySelectorAll<SVGElement>(".member")) {
+    node.classList.toggle("selected", labels.has(node.dataset.label ?? ""));
+    node.classList.toggle("related", related.has(node.dataset.label ?? ""));
+  }
+  svg.classList.toggle("selecting", labels.size > 0);
+}
+
+function clearSelected(): void {
+  if (!selected) return;
+  const plate = selected.plate;
+  selected = null;
+  // Only a plate changed the marks row.
+  if (plate) drawWall();
+  else showSelected();
+}
+
+// Double-clicking a board picks it out and finds it, every ply of it, in the
+// cut list. A plate's whole run is picked out, with its stud marks.
 svg.addEventListener("dblclick", (e) => {
   const target = (e.target as Element).closest<SVGElement>(".member");
   if (!target || !shownWall) return;
   const m = shownWall.members.find((v) => v.label === target.dataset.label);
   if (!m) return;
-  if (isPlate(m.kind)) {
-    openPlates(shownWall.id);
-    return;
-  }
-  const plies = shownWall.members.filter((v) => v.x_16 === m.x_16 && v.y_16 === m.y_16 && v.w_16 === m.w_16 && v.h_16 === m.h_16);
-  findInCutList(plies.map((v) => v.label));
+  const plies = isPlate(m.kind)
+    ? shownWall.members.filter((v) => v.kind === m.kind)
+    : shownWall.members.filter((v) => v.x_16 === m.x_16 && v.y_16 === m.y_16 && v.w_16 === m.w_16 && v.h_16 === m.h_16);
+  const plate = !isPlate(m.kind) ? undefined : m.kind === "bottom_plate" ? "bottom_plate" : "top_plate";
+  const redraw = plate !== selected?.plate;
+  selected = { wall: shownWall.id, labels: plies.map((v) => v.label), plate };
+  if (redraw) drawWall();
+  else showSelected();
+  findInCutList(isPlate(m.kind) ? [m.label] : plies.map((v) => v.label));
+});
+// A click on nothing lets the picked board go.
+svg.addEventListener("click", (e) => {
+  const t = e.target as Element;
+  if (!t.closest(".member") && !t.closest(".opening-handle")) clearSelected();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !dragging && !document.querySelector("dialog[open]")) clearSelected();
 });
 svg.addEventListener("pointerleave", () => {
   if (dragging) return;

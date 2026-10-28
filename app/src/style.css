@@ -1115,6 +1115,17 @@ dialog.settings header p {
   stroke: var(--accent);
   stroke-width: 2;
 }
+/* A double-clicked board stays picked out; a plate keeps the boards on it. */
+.selecting:not(.highlighting) .member:not(.selected):not(.related) {
+  opacity: 0.3;
+}
+.member.selected {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+.plate-marks .mark-text {
+  fill: var(--accent);
+}
 .kind-bottom_plate,
 .kind-top_plate,
 .kind-cap_plate {
