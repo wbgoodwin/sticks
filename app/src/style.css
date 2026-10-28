@@ -878,8 +878,53 @@ dialog.settings header p {
   background-size: 24px 24px;
   overflow: hidden;
 }
-.drawing.flat {
-  overflow-y: auto;
+/* Flat drawings scroll in here, under the stage's buttons and cards. */
+.drawing .scroll {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.drawing.flat .scroll {
+  overflow: auto;
+}
+.drawing .scroll.panning {
+  cursor: grabbing;
+  user-select: none;
+}
+.drawing .scroll.panning * {
+  cursor: grabbing !important;
+}
+.drawing-zoom {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: inline-flex;
+  box-shadow: var(--shadow);
+  border-radius: 8px;
+}
+.drawing-zoom[hidden] {
+  display: none;
+}
+.drawing-zoom .button {
+  border-radius: 0;
+  margin-left: -1px;
+  padding: 0 10px;
+}
+.drawing-zoom .button:first-child {
+  border-radius: 8px 0 0 8px;
+  margin-left: 0;
+}
+.drawing-zoom .button:last-child {
+  border-radius: 0 8px 8px 0;
+}
+.drawing-zoom .zoom-level {
+  min-width: 58px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+/* The update card sits above the zoom buttons. */
+.drawing.flat .update {
+  bottom: 56px;
 }
 .elevation {
   position: absolute;
@@ -906,11 +951,9 @@ dialog.settings header p {
   display: block;
   touch-action: none;
 }
+/* Sized in main.ts (sizeSheet): the stage less this margin, times the zoom. */
 .sheet {
-  position: absolute;
-  inset: 20px;
-  /* MIN_DRAWING_HEIGHT in main.ts, less the inset. */
-  min-height: 520px;
+  margin: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -921,7 +964,7 @@ dialog.settings header p {
 .sheet svg {
   width: 100%;
   height: 100%;
-  max-width: calc((100vh) * 11 / 8.5);
+  max-width: calc((100vh) * 11 / 8.5 * var(--zoom, 1));
   background: #fff;
   border-radius: 4px;
   box-shadow: var(--shadow);
@@ -2184,14 +2227,14 @@ dialog.settings.account {
 .sheet .checks {
   align-self: stretch;
   width: 100%;
-  max-width: 1000px;
+  max-width: calc(1000px * var(--zoom, 1));
   overflow: auto;
   padding: 16px 20px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--zoom, 1));
 }
 .checks-status {
   margin: 0 0 10px;
