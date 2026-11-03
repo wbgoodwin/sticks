@@ -57,6 +57,9 @@ pub struct Solid {
     pub v: [f64; 3],
     /// How far the profile is pushed along `u × v`.
     pub depth: f64,
+    /// Code checks the member fails; empty when it passes or isn't a member.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fails: Vec<String>,
 }
 
 /// Every member of `framed` placed in the building, plus the piers,
@@ -172,6 +175,7 @@ fn deck_solids(out: &mut Vec<Solid>, deck: &FramedDeck) {
             u: [1.0, 0.0, 0.0],
             v: [0.0, 1.0, 0.0],
             depth: pt - bottom,
+            fails: Vec::new(),
         });
     }
 }
@@ -209,6 +213,7 @@ fn member_solid(p: &Placed, part: &str) -> Solid {
         u: [1.0, 0.0, 0.0],
         v: [0.0, 1.0, 0.0],
         depth: 0.0,
+        fails: p.fails.clone(),
     }
 }
 
@@ -303,6 +308,7 @@ fn floor_solids(out: &mut Vec<Solid>, floor: &FramedFloor, subfloor: f64, joist:
             u: [1.0, 0.0, 0.0],
             v: [0.0, 1.0, 0.0],
             depth: subfloor,
+            fails: Vec::new(),
         });
     }
     pier_solids(out, &floor.piers, pier_top, "floor");
@@ -325,6 +331,7 @@ fn pier_solids(out: &mut Vec<Solid>, piers: &[Pier], top: f64, part: &str) {
             u: [1.0, 0.0, 0.0],
             v: [0.0, 1.0, 0.0],
             depth: PIER_DROP,
+            fails: Vec::new(),
         });
     }
 }
@@ -544,6 +551,7 @@ fn sheathing_solids(
                 u,
                 v,
                 depth: t,
+                fails: Vec::new(),
             });
         }
     }

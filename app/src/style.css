@@ -2520,3 +2520,31 @@ dialog.plates > header {
 .plates-problem {
   color: var(--danger);
 }
+
+/* Members that fail a code check, and where the app says so. */
+.views button.fails {
+  color: var(--danger);
+  font-weight: 600;
+}
+.views button.fails[aria-pressed="true"] {
+  background: var(--danger-soft);
+}
+.member.fails {
+  fill: var(--danger-soft);
+  stroke: var(--danger);
+  stroke-width: 1.5;
+}
+#members tbody tr.fails td {
+  color: var(--danger);
+}
+.info.fails header strong {
+  color: var(--danger);
+}
+.field-hint.span-check.fails {
+  color: var(--danger);
+  font-weight: 600;
+}
+.solid-fails {
+  color: var(--danger);
+  font-weight: 600;
+}

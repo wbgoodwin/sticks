@@ -13,6 +13,7 @@ pub mod platform;
 pub mod porch;
 pub mod roof;
 pub mod sheathing;
+pub mod spans;
 pub mod wall;
 
 pub use building::{frame_project, hardware_settings, side_plan_y, FramedProject, Section, SIDES};

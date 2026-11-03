@@ -218,6 +218,80 @@ pub struct Roof {
     /// Default 2x4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collar_tie: Option<Nominal>,
+    /// Species of the rafters (No. 2 grade), for the span tables. Also
+    /// covers the porch rafters. Default southern pine.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub species: FramingSpecies,
+    /// Ground snow load where the building stands, pounds per square foot.
+    /// Ask the building department; Fairfax County, Virginia uses 25.
+    /// Default 30, the lightest snow the code's rafter tables carry.
+    #[serde(
+        default = "default_ground_snow",
+        skip_serializing_if = "is_default_ground_snow"
+    )]
+    pub ground_snow_psf: u32,
+    /// Weight of the roof itself, pounds per square foot: 10 for asphalt
+    /// shingles or metal, 20 for heavier roofing. Default 10.
+    #[serde(
+        default = "default_roof_dead",
+        skip_serializing_if = "is_default_roof_dead"
+    )]
+    pub dead_psf: u32,
+    /// Whether a ceiling is fastened to the underside of the rafters, which
+    /// holds them to a stiffer deflection limit. Default no.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub ceiling: bool,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// Ground snow a roof is checked for when the project doesn't say.
+pub const DEFAULT_GROUND_SNOW_PSF: u32 = 30;
+/// Roof dead load when the project doesn't say.
+pub const DEFAULT_ROOF_DEAD_PSF: u32 = 10;
+
+fn default_ground_snow() -> u32 {
+    DEFAULT_GROUND_SNOW_PSF
+}
+
+fn is_default_ground_snow(v: &u32) -> bool {
+    *v == DEFAULT_GROUND_SNOW_PSF
+}
+
+fn default_roof_dead() -> u32 {
+    DEFAULT_ROOF_DEAD_PSF
+}
+
+fn is_default_roof_dead(v: &u32) -> bool {
+    *v == DEFAULT_ROOF_DEAD_PSF
+}
+
+/// Species of framing lumber in the code's joist and rafter span tables
+/// (IRC R802.4.1), all No. 2 grade.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FramingSpecies {
+    /// Southern yellow pine, the usual pressure-treated and framing lumber
+    /// in the Southeast and Mid-Atlantic.
+    #[default]
+    SouthernPine,
+    /// Spruce-pine-fir, the usual kiln-dried "SPF" stud and framing stock.
+    SprucePineFir,
+    DouglasFirLarch,
+    HemFir,
+}
+
+impl FramingSpecies {
+    pub fn name(self) -> &'static str {
+        match self {
+            FramingSpecies::SouthernPine => "southern pine",
+            FramingSpecies::SprucePineFir => "spruce-pine-fir",
+            FramingSpecies::DouglasFirLarch => "Douglas fir-larch",
+            FramingSpecies::HemFir => "hem-fir",
+        }
+    }
 }
 
 fn default_rafter() -> Nominal {

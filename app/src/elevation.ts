@@ -206,7 +206,7 @@ export function drawElevation(
     if (drawn.has(spot)) continue;
     drawn.add(spot);
     const data = {
-      class: `member kind-${m.kind}`,
+      class: `member kind-${m.kind}${m.fails.length > 0 ? " fails" : ""}`,
       "data-label": m.label,
       "data-group": groupKey(m),
       "data-plies": plies.get(spot) ?? 1,

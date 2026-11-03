@@ -9,13 +9,14 @@ use sticks_core::{
 };
 use sticks_rules::code::beam_name;
 use sticks_rules::{
-    FramedDeck, FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark,
-    Placed, RafterDetail, RafterTop, SheathedFace, Splice,
+    CodeCheck, FramedDeck, FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall,
+    LayoutMark, Placed, RafterDetail, RafterTop, SheathedFace, Splice,
 };
 
-/// Printed on every drawing: the tool frames what it's told and checks nothing.
+/// Printed on every drawing: the tool frames what it's told, and its checks
+/// aren't an engineer's.
 pub const NOTICE: &str =
-    "Member sizes are chosen by the user and unverified. Sticks does not size members or check spans.";
+    "Member sizes are chosen by the user. Sticks checks rafter spans against the IRC tables but is not an engineer; confirm sizes with your building department.";
 
 const PAGE_W: f64 = 792.0;
 const PAGE_H: f64 = 612.0;
@@ -145,6 +146,8 @@ impl Doc {
 .box {{ fill: #fff8e6; stroke: #c9a86a; stroke-width: 0.8; }}
 .box-title {{ font-size: 9px; font-weight: bold; fill: #111; }}
 .sheet {{ fill: #f6f1e4; stroke: #222; stroke-width: 0.6; }}
+.m.fails {{ fill: #f4b9b2; stroke: #b3261e; stroke-width: 1.2; }}
+.fails-text {{ font-size: 7.5px; font-weight: bold; fill: #b3261e; }}
 </style>
 <rect width="{PAGE_W}" height="{PAGE_H}" fill="#fff"/>
 "##,
@@ -299,8 +302,10 @@ fn members(doc: &mut Doc, f: &Frame, members: &[Placed], labels: bool) {
             continue;
         }
         drawn.push(p.rect);
-        doc.polygon(&shape(f, p), &format!("m {}", class(p.member.kind)));
+        let fails = if p.fails.is_empty() { "" } else { " fails" };
+        doc.polygon(&shape(f, p), &format!("m {}{fails}", class(p.member.kind)));
     }
+    fails_note(doc, members);
     if !labels {
         return;
     }
@@ -324,6 +329,32 @@ fn members(doc: &mut Doc, f: &Frame, members: &[Placed], labels: bool) {
             doc.text(cx, cy + 1.6, "label", "middle", text);
         }
     }
+}
+
+/// Along the foot of the page, over the notice: what the red members fail.
+fn fails_note(doc: &mut Doc, members: &[Placed]) {
+    let mut notes: Vec<&String> = Vec::new();
+    for n in members.iter().flat_map(|p| &p.fails) {
+        if !notes.contains(&n) {
+            notes.push(n);
+        }
+    }
+    let Some(first) = notes.first() else {
+        return;
+    };
+    let count = members.iter().filter(|p| !p.fails.is_empty()).count();
+    let more = if notes.len() > 1 {
+        format!(" (and {} more; see the code checks)", notes.len() - 1)
+    } else {
+        String::new()
+    };
+    doc.text(
+        MARGIN,
+        PAGE_H - MARGIN + 3.0,
+        "fails-text",
+        "start",
+        &format!("Red: {count} members fail a code check. {first}{more}"),
+    );
 }
 
 fn half(l: Length) -> Length {
@@ -1101,7 +1132,7 @@ pub fn sheathing_svg(project: &str, sheathing: &FramedSheathing, roofs: bool) ->
 
 /// One rafter in profile with every cut dimensioned, upper end on the
 /// left, laid flat as it sits on the sawhorses.
-pub fn rafter_svg(project: &str, r: &RafterDetail) -> String {
+pub fn rafter_svg(project: &str, r: &RafterDetail, check: Option<&CodeCheck>) -> String {
     let title = format!("{project}: {} detail", r.name);
     let mut doc = Doc::new(&title);
     let degrees = format!(
@@ -1136,6 +1167,23 @@ pub fn rafter_svg(project: &str, r: &RafterDetail) -> String {
             ),
         ],
     );
+    let fails = check.is_some_and(|c| !c.ok);
+    if let Some(c) = check {
+        doc.text(
+            MARGIN,
+            MARGIN + 53.0,
+            if c.ok { "ok" } else { "fails-text" },
+            "start",
+            &format!(
+                "{} span {} clear between supports; the table allows {} ({}). {}",
+                if c.ok { "OK:" } else { "FAILS:" },
+                r.span,
+                c.allowed,
+                c.source,
+                if c.ok { "" } else { "Drawn red." }
+            ),
+        );
+    }
     let theta = (r.pitch.rise.as_inches_f64() / 12.0).atan();
     let (sin, cos, tan) = (theta.sin(), theta.cos(), theta.tan());
     let len = r.length.as_inches_f64();
@@ -1162,7 +1210,7 @@ pub fn rafter_svg(project: &str, r: &RafterDetail) -> String {
     outline.push(pt(len, 0.0));
     outline.push(pt(len - lean, depth));
     outline.push(pt(-lean, depth));
-    doc.polygon(&outline, "m rafter");
+    doc.polygon(&outline, if fails { "m rafter fails" } else { "m rafter" });
 
     let base = f.y0 + 14.0;
     let names: &[&str] = if r.heels.len() == 2 {
@@ -1802,22 +1850,69 @@ pub fn deck_checks_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
             deck.live_psf
         )],
     );
+    let mut y = checks_table(&mut doc, &d.checks, "This deck", MARGIN + 52.0);
+    y += 8.0;
+    doc.text(MARGIN, y, "cell-head", "start", "General notes");
+    y += 10.0;
+    for note in deck_general_notes(deck) {
+        for (i, line) in wrap(&note, 190).iter().enumerate() {
+            let text = if i == 0 {
+                format!("- {line}")
+            } else {
+                format!("  {line}")
+            };
+            doc.text(MARGIN, y, "cell", "start", &text);
+            y += 8.5;
+        }
+    }
+    builder_box(&mut doc, y);
+    doc.finish()
+}
+
+/// The building's code checks: its rafters against the span tables, and
+/// what they were checked for.
+pub fn building_checks_svg(project: &str, loads: &str, checks: &[CodeCheck]) -> String {
+    let title = format!("{project}: code checks");
+    let mut doc = Doc::new(&title);
+    let passed = checks.iter().filter(|c| c.ok).count();
+    let failed = checks.len() - passed;
+    doc.header(
+        &title,
+        &[
+            format!(
+                "{passed} of {} checks pass against the 2021 IRC span tables (adopted by the 2021 Virginia Residential Code). Checked for {loads}.",
+                checks.len()
+            ),
+            if failed > 0 {
+                "Members that fail are drawn red on the framing plans. Spans are the clear level distance between the faces of the supports.".to_string()
+            } else {
+                "Spans are the clear level distance between the faces of the supports.".to_string()
+            },
+        ],
+    );
+    let y = checks_table(&mut doc, checks, "This design", MARGIN + 52.0);
+    builder_box(&mut doc, y + 8.0);
+    doc.finish()
+}
+
+/// A table of checks, one row each with a pass or fail mark, starting at
+/// `y`. Returns where it ends.
+fn checks_table(doc: &mut Doc, checks: &[CodeCheck], design: &str, mut y: f64) -> f64 {
     // Columns: result, item, design, allowed, source.
     let cols = [
         (MARGIN, 28.0, ""),
         (MARGIN + 28.0, 120.0, "Check"),
-        (MARGIN + 148.0, 170.0, "This deck"),
+        (MARGIN + 148.0, 170.0, design),
         (MARGIN + 318.0, 210.0, "Allowed or required"),
         (MARGIN + 528.0, 192.0, "Source"),
     ];
-    let mut y = MARGIN + 52.0;
     for (x, _, head) in cols {
         doc.text(x, y, "cell-head", "start", head);
     }
     y += 4.0;
     doc.line(MARGIN, y, PAGE_W - MARGIN, y, "rule");
     y += 9.0;
-    for c in &d.checks {
+    for c in checks {
         let cells = [&c.item, &c.actual, &c.allowed, &c.source];
         let wrapped: Vec<Vec<String>> = cells
             .iter()
@@ -1841,21 +1936,11 @@ pub fn deck_checks_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
         doc.line(MARGIN, y - 6.0, PAGE_W - MARGIN, y - 6.0, "rule");
         y += 3.0;
     }
-    y += 8.0;
-    doc.text(MARGIN, y, "cell-head", "start", "General notes");
-    y += 10.0;
-    for note in deck_general_notes(deck) {
-        for (i, line) in wrap(&note, 190).iter().enumerate() {
-            let text = if i == 0 {
-                format!("- {line}")
-            } else {
-                format!("  {line}")
-            };
-            doc.text(MARGIN, y, "cell", "start", &text);
-            y += 8.5;
-        }
-    }
-    // The builder's acknowledgement.
+    y
+}
+
+/// The builder's acknowledgement, under whatever's above `y`.
+fn builder_box(doc: &mut Doc, y: f64) {
     let box_y = (y + 8.0).min(PAGE_H - MARGIN - 70.0);
     doc.polygon(
         &[
@@ -1887,7 +1972,6 @@ pub fn deck_checks_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
         "start",
         "I have reviewed these plans and will confirm them with my building department.   Signed ______________________________   Date ____________",
     );
-    doc.finish()
 }
 
 #[cfg(test)]
@@ -1964,7 +2048,9 @@ mod tests {
 
         let roof = framed.roof.as_ref().unwrap().as_ref().unwrap();
         assert!(roof_svg(&p.name, roof, p.rules.layout_from).contains("R01"));
-        let svg = rafter_svg(&p.name, &roof.rafters[0]);
+        let check = framed.rafter_check(&roof.rafters[0]);
+        assert!(check.is_some());
+        let svg = rafter_svg(&p.name, &roof.rafters[0], check);
         assert!(svg.contains(&esc("front heel at 15-11/16\"")), "{svg}");
 
         let porch = framed.porch.as_ref().unwrap().as_ref().unwrap();
@@ -1973,7 +2059,7 @@ mod tests {
             svg.contains("porch framing") && svg.contains(">P1<"),
             "{svg}"
         );
-        assert!(rafter_svg(&p.name, &porch.rafter).contains("porch rafter"));
+        assert!(rafter_svg(&p.name, &porch.rafter, None).contains("porch rafter"));
         let svg = porch_deck_svg(&p.name, porch, p.rules.layout_from).unwrap();
         assert_eq!(svg.matches("class=\"pier\"").count(), 4);
 

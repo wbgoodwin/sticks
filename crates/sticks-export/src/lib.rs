@@ -10,9 +10,9 @@ use sticks_hardware::HardwareList;
 pub use print::print_html;
 
 pub use svg::{
-    deck_checks_svg, deck_general_notes, deck_notice, deck_plan_svg, deck_section_svg, decking_svg,
-    floor_svg, porch_deck_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg,
-    wall_svg, NOTICE,
+    building_checks_svg, deck_checks_svg, deck_general_notes, deck_notice, deck_plan_svg,
+    deck_section_svg, decking_svg, floor_svg, porch_deck_svg, porch_svg, rafter_svg, roof_svg,
+    sheathing_svg, subfloor_svg, wall_svg, NOTICE,
 };
 
 /// The shopping list: one row per size and stock length.

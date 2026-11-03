@@ -38,6 +38,8 @@ export interface MemberView {
   h_16: number;
   /** Corners as [x, y] for sloped members; empty when the rectangle is the shape. */
   outline_16: [number, number][];
+  /** Code checks the member fails; empty when it passes. */
+  fails: string[];
 }
 
 /** A plate joint, centered on a stud. */
@@ -140,9 +142,13 @@ export interface FrameView {
   /** A deck on its own, with its sizes checked against its code. */
   deck: DeckView | null;
   drawings: DrawingView[];
+  /** The building's rafters checked against the span tables. */
+  checks: CodeCheckView[];
+  /** What they were checked for, like `southern pine No. 2, 30 psf ground snow, ...`. */
+  checked_for: string;
 }
 
-/** One size checked against the deck's code. */
+/** One size checked against a code table. */
 export interface CodeCheckView {
   /** Like `Joist span`. */
   item: string;
@@ -151,6 +157,8 @@ export interface CodeCheckView {
   ok: boolean;
   /** Like `Fairfax Table 2, southern pine 2x8 at 16" o.c.`. */
   source: string;
+  /** Labels of the members it covers, like `roof-R01`. */
+  members?: string[];
 }
 
 export interface DeckView extends PlanView {
@@ -177,6 +185,8 @@ export interface SolidView {
   u: [number, number, number];
   v: [number, number, number];
   depth: number;
+  /** Code checks the member fails; empty when it passes. */
+  fails: string[];
 }
 
 export interface ModelView {
@@ -356,7 +366,17 @@ export interface RoofJson {
   /** Gable only. */
   ridge?: string;
   collar_tie?: string;
+  /** Rafter lumber for the span tables, No. 2. Default southern pine. */
+  species?: FramingSpecies;
+  /** Ground snow load, psf. Default 30; Fairfax County uses 25. */
+  ground_snow_psf?: number;
+  /** Roofing weight, psf: 10 for shingles or metal, 20 for heavier. Default 10. */
+  dead_psf?: number;
+  /** A ceiling fastened under the rafters. Default no. */
+  ceiling?: boolean;
 }
+
+export type FramingSpecies = "southern_pine" | "spruce_pine_fir" | "douglas_fir_larch" | "hem_fir";
 
 /** A porch roof on posts off the front wall. */
 export interface PorchJson {

@@ -33,6 +33,10 @@ pub struct Placed {
     /// (sloped plates, studs with an angled top). Empty when `rect` is the shape.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub outline: Vec<(Length, Length)>,
+    /// Code checks the member fails, as notes, like `rafter span 13' 5" is
+    /// over the 11' 2" allowed`. Drawings and the 3D view mark it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fails: Vec<String>,
 }
 
 /// A measurement for build day: where a member's near edge lands, measured
@@ -69,6 +73,7 @@ pub fn placed(
         },
         rect,
         outline: Vec::new(),
+        fails: Vec::new(),
     }
 }
 

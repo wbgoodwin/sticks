@@ -150,6 +150,11 @@ fn frame(project: &Project, only: Option<&str>) -> Result<(), String> {
         print!("{}", text::porch(porch, from));
         shown = true;
     }
+    if !f.checks.is_empty() && (want("roof") || want("porch")) {
+        let mut out = String::new();
+        text::code_checks(&mut out, &f.checks);
+        println!("Building code checks:\n{out}");
+    }
     if let Some(Ok(s)) = f.sheathing.as_ref().filter(|_| want("sheathing")) {
         print!("{}", text::sheathing(s));
         shown = true;
@@ -230,7 +235,7 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             } else {
                 format!("rafter-{}.svg", i + 1)
             };
-            files.push((file, sticks_export::rafter_svg(name, r)));
+            files.push((file, sticks_export::rafter_svg(name, r, f.rafter_check(r))));
         }
     }
     if let Some(Ok(porch)) = &f.porch {
@@ -240,7 +245,7 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
         ));
         files.push((
             "porch-rafter.svg".to_string(),
-            sticks_export::rafter_svg(name, &porch.rafter),
+            sticks_export::rafter_svg(name, &porch.rafter, f.rafter_check(&porch.rafter)),
         ));
         if let Some(svg) = sticks_export::porch_deck_svg(name, porch, from) {
             files.push(("deck.svg".to_string(), svg));

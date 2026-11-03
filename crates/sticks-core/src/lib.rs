@@ -13,8 +13,8 @@ pub use lumber::{
 };
 pub use project::{
     BeamStyle, Building, CornerStyle, Deck, DeckCode, DeckSupport, DeckingMaterial, Fastening,
-    Floor, FloorSupport, Hardware, LayoutStart, Opening, OpeningKind, Pitch, Porch, PorchDeck,
-    Project, ProjectError, Roof, RoofKind, Rules, Sheathing, SheetStock, Species, Stock, Wall,
-    WallEnd,
+    Floor, FloorSupport, FramingSpecies, Hardware, LayoutStart, Opening, OpeningKind, Pitch, Porch,
+    PorchDeck, Project, ProjectError, Roof, RoofKind, Rules, Sheathing, SheetStock, Species, Stock,
+    Wall, WallEnd, DEFAULT_GROUND_SNOW_PSF, DEFAULT_ROOF_DEAD_PSF,
 };
 pub use units::{Length, ParseLengthError};
