@@ -887,6 +887,10 @@ dialog.settings header p {
 .drawing.flat .scroll {
   overflow: auto;
 }
+/* In 3D the empty scroll box sits over the canvas: let the pointer through to it. */
+.drawing:not(.flat) .scroll {
+  pointer-events: none;
+}
 .drawing .scroll.panning {
   cursor: grabbing;
   user-select: none;
