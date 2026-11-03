@@ -31,6 +31,9 @@ export function layerOf(s: SolidView): Layer {
   return "walls";
 }
 
+/** Members that fail a code check. */
+const FAILS = 0xd2453a;
+
 const WOOD: Partial<Record<SolidKind, number>> = {
   bottom_plate: 0xc9965a,
   top_plate: 0xc9965a,
@@ -207,15 +210,21 @@ export class Viewer {
     }
   }
 
-  private material(kind: SolidKind, state: "plain" | "hover" | "selected"): THREE.MeshStandardMaterial {
-    const key = `${kind}|${state}`;
+  /** A solid's look: its wood, or red when it fails a code check. */
+  private materialFor(s: SolidView, state: "plain" | "hover" | "selected"): THREE.MeshStandardMaterial {
+    return this.material(s.kind, state, s.fails.length > 0);
+  }
+
+  private material(kind: SolidKind, state: "plain" | "hover" | "selected", fails = false): THREE.MeshStandardMaterial {
+    const key = `${kind}|${state}|${fails}`;
     let m = this.materials.get(key);
     if (!m) {
       m = new THREE.MeshStandardMaterial({
-        color: WOOD[kind] ?? 0xd9b98a,
+        color: fails ? FAILS : (WOOD[kind] ?? 0xd9b98a),
         roughness: kind === "pier" ? 0.95 : 0.8,
         metalness: 0,
       });
+      if (fails) m.emissive.set(FAILS).multiplyScalar(0.2);
       if (state === "hover") m.emissive.set(0x2f6b4f).multiplyScalar(0.25);
       if (state === "selected") {
         m.color.set(0x6fbf95);
@@ -233,7 +242,7 @@ export class Viewer {
     const v = new THREE.Vector3(...s.v);
     const n = new THREE.Vector3().crossVectors(u, v);
     geometry.applyMatrix4(new THREE.Matrix4().makeBasis(u, v, n).setPosition(...s.origin));
-    const mesh = new THREE.Mesh(geometry, this.material(s.kind, "plain"));
+    const mesh = new THREE.Mesh(geometry, this.materialFor(s, "plain"));
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.userData.solid = s;
@@ -242,17 +251,17 @@ export class Viewer {
   }
 
   private select(mesh: THREE.Mesh | null): void {
-    if (this.selected) this.selected.material = this.material(this.selected.userData.solid.kind, "plain");
+    if (this.selected) this.selected.material = this.materialFor(this.selected.userData.solid, "plain");
     this.selected = mesh;
-    if (mesh) mesh.material = this.material(mesh.userData.solid.kind, "selected");
+    if (mesh) mesh.material = this.materialFor(mesh.userData.solid, "selected");
   }
 
   private setHover(mesh: THREE.Mesh | null): void {
     if (this.hovered && this.hovered !== this.selected) {
-      this.hovered.material = this.material(this.hovered.userData.solid.kind, "plain");
+      this.hovered.material = this.materialFor(this.hovered.userData.solid, "plain");
     }
     this.hovered = mesh;
-    if (mesh && mesh !== this.selected) mesh.material = this.material(mesh.userData.solid.kind, "hover");
+    if (mesh && mesh !== this.selected) mesh.material = this.materialFor(mesh.userData.solid, "hover");
     this.canvas.style.cursor = mesh ? "pointer" : "";
   }
 

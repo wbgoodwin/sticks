@@ -7,8 +7,8 @@ use sticks_core::{Cut, LayoutStart};
 use sticks_cutlist::CutList;
 use sticks_hardware::HardwareList;
 use sticks_rules::{
-    FramedDeck, FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall, LayoutMark,
-    Placed, RafterDetail, Splice,
+    CodeCheck, FramedDeck, FramedFloor, FramedPorch, FramedRoof, FramedSheathing, FramedWall,
+    LayoutMark, Placed, RafterDetail, Splice,
 };
 
 fn members(out: &mut String, members: &[Placed]) {
@@ -150,7 +150,14 @@ pub fn deck(d: &FramedDeck, from: LayoutStart) -> String {
     splices(&mut out, &d.splices);
     let _ = writeln!(out);
     let _ = writeln!(out, "  Code checks:");
-    for c in &d.checks {
+    code_checks(&mut out, &d.checks);
+    notes(&mut out, &d.warnings);
+    out
+}
+
+/// Each check on its own line, failures marked.
+pub fn code_checks(out: &mut String, checks: &[CodeCheck]) {
+    for c in checks {
         let _ = writeln!(
             out,
             "  {} {}: {} (allowed: {}) [{}]",
@@ -161,8 +168,6 @@ pub fn deck(d: &FramedDeck, from: LayoutStart) -> String {
             c.source
         );
     }
-    notes(&mut out, &d.warnings);
-    out
 }
 
 fn rafter(out: &mut String, d: &RafterDetail) {

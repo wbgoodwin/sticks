@@ -70,6 +70,9 @@ pub struct RafterDetail {
     pub plumb_tenths_of_degree: i32,
     /// Level run from end to end.
     pub run: Length,
+    /// Clear level span between the faces of its supports, which the span
+    /// tables limit.
+    pub span: Length,
     /// The rafter's depth measured plumb.
     pub plumb_depth: Length,
     /// Level seat cut, the full depth of what it sits on.
@@ -311,6 +314,7 @@ fn rafter(name: &str, count: usize, roof: &Roof, seat: Length, run: Length) -> R
         pitch,
         plumb_tenths_of_degree: tenths_of_degree(pitch.rise, Pitch::RUN),
         run,
+        span: Length::ZERO,
         plumb_depth: pitch.slope_length(roof.rafter.actual_width()),
         seat,
         heel: pitch.rise_over(seat),
@@ -350,6 +354,7 @@ fn lean_to(
         pitch.slope_length(roof.front_overhang + wall_depth),
         pitch.slope_length(roof.front_overhang + depth),
     ];
+    d.span = depth - wall_depth * 2;
     d.upper_overhang = roof.front_overhang;
     d.overhang = roof.back_overhang;
     let cuts = birdsmouths(&d);
@@ -441,6 +446,8 @@ fn gable(
         );
         d.heels = vec![pitch.slope_length(reach)];
         d.top = RafterTop::Ridge;
+        // From the eave wall's inside face to the ridge board's face.
+        d.span = reach - wall_depth;
         d.overhang = overhang;
         details.push(d);
         if same {

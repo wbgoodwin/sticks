@@ -8,7 +8,7 @@ import {
   printPacket,
   projectFromToml,
   projectToToml,
-  type DeckView,
+  type CodeCheckView,
   type FrameView,
   type HardwareView,
   type MemberView,
@@ -346,6 +346,19 @@ function liveHints(): void {
   const back = framed?.walls.find((w) => w.id === "back");
   const hint = panel.querySelector<HTMLElement>('[data-live="back-height"]');
   if (hint) hint.textContent = back && !back.error && project.roof && project.roof.kind !== "gable" ? `The back wall comes out ${formatLength(back.left_height_16)}` : "";
+  // The roof's own rafters, not the porch's.
+  const span = panel.querySelector<HTMLElement>('[data-live="rafter-span"]');
+  if (span) {
+    const checks = (framed?.checks ?? []).filter((c) => !c.item.startsWith("Porch"));
+    const failing = checks.filter((c) => !c.ok);
+    span.classList.toggle("fails", failing.length > 0);
+    span.textContent =
+      checks.length === 0
+        ? ""
+        : failing.length > 0
+          ? failing.map((c) => `Too long for code: ${c.actual}; allowed ${c.allowed}.`).join(" ")
+          : `Rafter span ${checks.map((c) => c.actual.split(", ").pop()).join(", ")}; allowed ${checks[0].allowed}.`;
+  }
 }
 
 function renderViews(): void {
@@ -378,8 +391,13 @@ function renderViews(): void {
       }),
     );
   }
+  const failing = (framed?.checks ?? []).filter((c) => !c.ok).length;
   for (const b of views.querySelectorAll<HTMLButtonElement>("button")) {
     b.setAttribute("aria-pressed", String(b.dataset.view === viewKey(view)));
+    if (b.dataset.view === "sheet:checks") {
+      b.classList.toggle("fails", failing > 0);
+      b.textContent = failing > 0 ? `Code checks · ${failing} failing` : "Code checks";
+    }
   }
 }
 
@@ -452,7 +470,16 @@ function renderStage(): void {
     }
     try {
       // The checks read better as a table than as a shrunken sheet; the sheet prints.
-      sheet.innerHTML = id === "deck-checks" && framed.deck ? checksTable(framed.deck) : drawing(project, id);
+      sheet.innerHTML =
+        id === "deck-checks" && framed.deck
+          ? checksTable(framed.deck.checks, framed.deck.code, "This deck", framed.deck.notice)
+          : id === "checks"
+            ? checksTable(framed.checks, "the 2021 IRC rafter span tables", "This design", [
+                `Checked for ${framed.checked_for}; change these under Roof in the Building tab.`,
+                "Spans are the clear level distance between the faces of the supports. Members that fail are red in the 3D view and on the roof and porch plans.",
+                "Sticks isn't an engineer or a building official. Confirm sizes with your building department before you build.",
+              ])
+            : drawing(project, id);
     } catch (e) {
       showProblem(message(e));
       return;
@@ -460,7 +487,7 @@ function renderStage(): void {
     sizeSheet();
     flatZoom.drawn();
     if (part && "members" in part) {
-      renderSchedule(part.members, [...part.warnings, ...(d.part === "deck" ? failedChecks(framed) : [])], []);
+      renderSchedule(part.members, [...part.warnings, ...failedChecks(framed, d.part)], []);
       stats.textContent = `${part.members.length} pieces`;
     } else {
       renderSchedule([], part?.warnings ?? [], []);
@@ -477,26 +504,34 @@ function planWarnings(f: FrameView): string[] {
   return [...[f.floor, f.roof, f.porch, f.sheathing, f.deck].flatMap((p) => p?.warnings ?? []), ...failedChecks(f)];
 }
 
-/** The deck's code checks, for reading on screen. */
-function checksTable(d: DeckView): string {
-  const failed = d.checks.filter((c) => !c.ok).length;
-  const rows = d.checks
+/** Code checks, for reading on screen. */
+function checksTable(checks: CodeCheckView[], against: string, design: string, notes: string[]): string {
+  const failed = checks.filter((c) => !c.ok).length;
+  const rows = checks
     .map(
       (c) =>
         `<tr class="${c.ok ? "" : "failed"}"><td class="mark">${c.ok ? "OK" : "Fails"}</td><th scope="row">${esc(c.item)}</th><td>${esc(c.actual)}</td><td>${esc(c.allowed)}</td><td class="source">${esc(c.source)}</td></tr>`,
     )
     .join("");
-  const status = failed ? `${failed} of ${d.checks.length} checks fail` : `All ${d.checks.length} checks pass`;
+  const status = failed ? `${failed} of ${checks.length} checks fail` : `All ${checks.length} checks pass`;
   return `<div class="checks">
-    <p class="checks-status ${failed ? "failed" : ""}"><strong>${status}</strong> against ${esc(d.code)}.</p>
-    <table><thead><tr><th></th><th>Check</th><th>This deck</th><th>Allowed or required</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>
-    <p class="checks-notice">${d.notice.map(esc).join(" ")}</p>
+    <p class="checks-status ${failed ? "failed" : ""}"><strong>${status}</strong> against ${esc(against)}.</p>
+    <table><thead><tr><th></th><th>Check</th><th>${esc(design)}</th><th>Allowed or required</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>
+    ${notes.map((n) => `<p class="checks-notice">${esc(n)}</p>`).join("")}
   </div>`;
 }
 
-/** The deck's sizes its code doesn't allow, as notes. */
-function failedChecks(f: FrameView): string[] {
-  return (f.deck?.checks ?? []).filter((c) => !c.ok).map((c) => `Code check failed, ${c.item.toLowerCase()}: ${c.actual}; ${c.allowed} (${c.source})`);
+/** Sizes the code doesn't allow, as notes: the deck's, the building's, or (no part) both. */
+function failedChecks(f: FrameView, part?: string): string[] {
+  const checks =
+    part === undefined
+      ? [...(f.deck?.checks ?? []), ...f.checks]
+      : part === "deck"
+        ? (f.deck?.checks ?? [])
+        : part === "roof" || part === "porch"
+          ? f.checks
+          : [];
+  return checks.filter((c) => !c.ok).map((c) => `Code check failed, ${c.item.toLowerCase()}: ${c.actual}; allowed ${c.allowed} (${c.source})`);
 }
 
 function skippedNotes(parts: string[]): string[] {
@@ -634,12 +669,14 @@ function capitalize(text: string): string {
 }
 
 function renderSchedule(members: MemberView[], notes: string[], extra: string[]): void {
-  const groups = new Map<string, { member: MemberView; count: number }>();
+  const groups = new Map<string, { member: MemberView; count: number; fails: boolean }>();
   for (const m of members) {
     const key = groupKey(m);
     const g = groups.get(key);
-    if (g) g.count++;
-    else groups.set(key, { member: m, count: 1 });
+    if (g) {
+      g.count++;
+      g.fails ||= m.fails.length > 0;
+    } else groups.set(key, { member: m, count: 1, fails: m.fails.length > 0 });
   }
   const order = Object.keys(KIND_NAMES);
   const rows = [...groups.entries()].sort(
@@ -648,9 +685,13 @@ function renderSchedule(members: MemberView[], notes: string[], extra: string[])
       b.member.length_16 - a.member.length_16,
   );
   tbody.replaceChildren(
-    ...rows.map(([key, { member, count }]) => {
+    ...rows.map(([key, { member, count, fails }]) => {
       const tr = document.createElement("tr");
       tr.dataset.group = key;
+      if (fails) {
+        tr.classList.add("fails");
+        tr.title = "Fails a code check";
+      }
       tr.innerHTML = `<td>${count}</td><td><span class="swatch kind-${member.kind}"></span>${KIND_NAMES[member.kind]}</td><td>${member.size}</td><td class="num">${member.length}</td>`;
       tr.addEventListener("mouseenter", () => highlight(key));
       tr.addEventListener("mouseleave", () => highlight(null));
@@ -727,7 +768,8 @@ function partName(part: string): string {
 
 function solidTitle(s: SolidView): string {
   const size = s.size && s.length ? `<span>${s.size} × ${s.length}</span>` : "";
-  return `<strong>${esc(s.label)}</strong><span>${kindName(s)}, ${partName(s.part)}</span>${size}`;
+  const fails = s.fails.length > 0 ? `<span class="solid-fails">Fails a code check</span>` : "";
+  return `<strong>${esc(s.label)}</strong><span>${kindName(s)}, ${partName(s.part)}</span>${size}${fails}`;
 }
 
 function showInfo(s: SolidView | null): void {
@@ -740,14 +782,19 @@ function showInfo(s: SolidView | null): void {
   if (s.size && s.length) rows.push(["Board", `${s.size} × ${s.length}`]);
   for (const [i, c] of s.cuts.entries()) rows.push([i === 0 ? "Cuts" : "", c]);
   if (s.size && s.cuts.length === 0) rows.push(["Cuts", "square both ends"]);
+  for (const [i, f] of s.fails.entries()) rows.push([i === 0 ? "Fails" : "", f]);
+  const checks = s.fails.length > 0 && framed?.drawings.some((d) => d.id === "checks");
+  info.classList.toggle("fails", s.fails.length > 0);
   info.innerHTML = `
     <header><strong>${esc(s.label)}</strong><button type="button" class="icon-button" aria-label="Close">×</button></header>
     <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
     <div class="info-actions">
       ${isPlate(s.kind) && wallPart(s.part) ? `<button type="button" class="button primary show-plates">Plate layout</button>` : ""}
       ${s.size && s.length ? `<button type="button" class="button find-in-cuts">Find in cut list</button>` : ""}
+      ${checks ? `<button type="button" class="button show-checks">Code checks</button>` : ""}
     </div>
   `;
+  info.querySelector(".show-checks")?.addEventListener("click", () => setView({ kind: "sheet", id: "checks" }));
   info.querySelector(".show-plates")?.addEventListener("click", () => openPlates(s.part));
   info.querySelector(".find-in-cuts")?.addEventListener("click", () => findInCutList([s.label]));
   info.querySelector("button")!.addEventListener("click", () => {

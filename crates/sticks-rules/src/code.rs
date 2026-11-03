@@ -44,15 +44,27 @@ pub struct CodeCheck {
     pub ok: bool,
     /// Where the limit comes from, like `R507.6, southern pine 2x8 at 16" o.c.`.
     pub source: String,
+    /// Labels of the members the check covers, like `roof-R01`, so drawings
+    /// and the 3D view can point at them when it fails. Empty for checks
+    /// about the design as a whole.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
 }
 
-fn check(item: &str, actual: String, allowed: String, ok: bool, source: String) -> CodeCheck {
+pub(crate) fn check(
+    item: &str,
+    actual: String,
+    allowed: String,
+    ok: bool,
+    source: String,
+) -> CodeCheck {
     CodeCheck {
         item: item.to_string(),
         actual,
         allowed,
         ok,
         source,
+        members: Vec::new(),
     }
 }
 

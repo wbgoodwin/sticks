@@ -14,12 +14,14 @@ use sticks_core::{
     Project, RoofKind, SheetPiece, Wall, WallEnd,
 };
 
+use crate::code::CodeCheck;
 use crate::deck::{frame_deck, FramedDeck};
 use crate::floor::{frame_floor, FramedFloor};
 use crate::layout::{LayoutMark, Placed};
 use crate::porch::{frame_porch, FramedPorch};
-use crate::roof::{frame_roof, gable_studs, wall_heights, FramedRoof, RoofPlane};
+use crate::roof::{frame_roof, gable_studs, wall_heights, FramedRoof, RafterDetail, RoofPlane};
 use crate::sheathing::{frame_sheathing, FramedSheathing, SheathedFace, WallFace};
+use crate::spans::{check_rafter, mark, rafter_item, RafterLoads};
 use crate::wall::{frame_wall, frame_wall_shaped, FramedWall, WallShape};
 use crate::FramingError;
 
@@ -38,6 +40,9 @@ pub struct FramedProject {
     pub porch: Option<Result<FramedPorch, FramingError>>,
     pub sheathing: Option<Result<FramedSheathing, FramingError>>,
     pub deck: Option<Result<FramedDeck, FramingError>>,
+    /// The building's members checked against the code's span tables: for
+    /// now the roof and porch rafters. A free-standing deck carries its own.
+    pub checks: Vec<CodeCheck>,
 }
 
 /// One stage of the build that can come off the shopping list on its own,
@@ -198,6 +203,12 @@ impl FramedProject {
             .collect()
     }
 
+    /// The span check on a set of rafters, if it was checked.
+    pub fn rafter_check(&self, d: &RafterDetail) -> Option<&CodeCheck> {
+        let item = rafter_item(d);
+        self.checks.iter().find(|c| c.item == item)
+    }
+
     /// The parts that didn't frame.
     pub fn errors(&self) -> Vec<&FramingError> {
         let walls = self.walls.iter().filter_map(|w| w.as_ref().err());
@@ -248,6 +259,7 @@ pub fn frame_project(project: &Project) -> Result<FramedProject, FramingError> {
             porch: None,
             sheathing: None,
             deck,
+            checks: Vec::new(),
         });
     };
 
@@ -423,7 +435,7 @@ pub fn frame_project(project: &Project) -> Result<FramedProject, FramingError> {
         (Some(Ok(_)), Some(f)) => -(f.subfloor + f.joist.actual_width()),
         _ => Length::ZERO,
     };
-    let porch = project.porch.as_ref().map(|p| {
+    let mut porch = project.porch.as_ref().map(|p| {
         frame_porch(
             p,
             building,
@@ -433,6 +445,8 @@ pub fn frame_project(project: &Project) -> Result<FramedProject, FramingError> {
             stock,
         )
     });
+    let mut roof = roof;
+    let checks = span_checks(project, roof.as_mut(), porch.as_mut());
 
     let sheathing = project.sheathing.as_ref().map(|s| {
         let planes: Vec<&RoofPlane> = match &roof {
@@ -461,7 +475,58 @@ pub fn frame_project(project: &Project) -> Result<FramedProject, FramingError> {
         porch,
         sheathing,
         deck,
+        checks,
     })
+}
+
+/// Checks the roof's and porch's rafters against the span tables, and marks
+/// the members of every check that fails.
+fn span_checks(
+    project: &Project,
+    roof: Option<&mut Result<FramedRoof, FramingError>>,
+    porch: Option<&mut Result<FramedPorch, FramingError>>,
+) -> Vec<CodeCheck> {
+    let loads = RafterLoads::for_project(project);
+    let oc = project
+        .roof
+        .as_ref()
+        .and_then(|r| r.on_center)
+        .unwrap_or(project.rules.on_center);
+    let mut out = Vec::new();
+    if let Some(Ok(r)) = roof {
+        let two = r.rafters.len() > 1;
+        for (i, d) in r.rafters.iter().enumerate() {
+            let side = if i == 0 { 'F' } else { 'B' };
+            let labels = r
+                .members
+                .iter()
+                .filter(|p| p.member.kind == MemberKind::Rafter)
+                .filter(|p| !two || p.member.label.ends_with(side))
+                .map(|p| p.member.label.clone())
+                .collect();
+            out.push(check_rafter(d, &loads, oc, labels));
+        }
+        for c in &out {
+            mark(&mut r.members, c);
+        }
+    }
+    if let Some(Ok(p)) = porch {
+        // A porch roof is open underneath.
+        let loads = RafterLoads {
+            ceiling: false,
+            ..loads
+        };
+        let labels = p
+            .members
+            .iter()
+            .filter(|m| m.member.kind == MemberKind::Rafter)
+            .map(|m| m.member.label.clone())
+            .collect();
+        let c = check_rafter(&p.rafter, &loads, oc, labels);
+        mark(&mut p.members, &c);
+        out.push(c);
+    }
+    out
 }
 
 /// Turns a spot along a side wall (from its left end, seen from outside)

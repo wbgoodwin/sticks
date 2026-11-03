@@ -7,11 +7,13 @@ use sticks_core::Project;
 use sticks_core::{LayoutStart, MemberKind};
 use sticks_cutlist::CutList;
 use sticks_hardware::HardwareList;
+use sticks_rules::spans::RafterLoads;
 use sticks_rules::{plate_layout, plate_letter, FramedProject, FramedWall, PlateBoard};
 
 use crate::svg::{
-    deck_checks_svg, deck_notice, deck_plan_svg, deck_section_svg, decking_svg, floor_svg,
-    porch_deck_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg, wall_svg, NOTICE,
+    building_checks_svg, deck_checks_svg, deck_notice, deck_plan_svg, deck_section_svg,
+    decking_svg, floor_svg, porch_deck_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg,
+    subfloor_svg, wall_svg, NOTICE,
 };
 
 fn esc(s: &str) -> String {
@@ -250,6 +252,12 @@ table.plates .label {{ color: #777; font-size: 8pt; }}
     if let Some(Ok(s)) = &framed.sheathing {
         warnings.extend(s.warnings.iter().map(|x| format!("Sheathing: {x}")));
     }
+    warnings.extend(framed.checks.iter().filter(|c| !c.ok).map(|c| {
+        format!(
+            "Code check failed: {}: {} (allowed: {}; {})",
+            c.item, c.actual, c.allowed, c.source
+        )
+    }));
     if let Some(Ok(d)) = &framed.deck {
         warnings.extend(d.warnings.iter().map(|x| format!("Deck: {x}")));
         warnings.extend(d.checks.iter().filter(|c| !c.ok).map(|c| {
@@ -281,6 +289,13 @@ table.plates .label {{ color: #777; font-size: 8pt; }}
         page("page", deck_section_svg(&project.name, deck, d));
         page("page", decking_svg(&project.name, deck, d));
     }
+    if !framed.checks.is_empty() {
+        let loads = RafterLoads::for_project(project).describe();
+        page(
+            "page",
+            building_checks_svg(&project.name, &loads, &framed.checks),
+        );
+    }
     for w in framed.walls.iter().flatten() {
         page("page", wall_svg(&project.name, w, from));
         page("page text", plates_html(&project.name, w, from));
@@ -292,12 +307,19 @@ table.plates .label {{ color: #777; font-size: 8pt; }}
     if let Some(Ok(roof)) = &framed.roof {
         page("page", roof_svg(&project.name, roof, from));
         for r in &roof.rafters {
-            page("page", rafter_svg(&project.name, r));
+            page("page", rafter_svg(&project.name, r, framed.rafter_check(r)));
         }
     }
     if let Some(Ok(porch)) = &framed.porch {
         page("page", porch_svg(&project.name, porch, from));
-        page("page", rafter_svg(&project.name, &porch.rafter));
+        page(
+            "page",
+            rafter_svg(
+                &project.name,
+                &porch.rafter,
+                framed.rafter_check(&porch.rafter),
+            ),
+        );
         if let Some(svg) = porch_deck_svg(&project.name, porch, from) {
             page("page", svg);
         }
@@ -508,10 +530,11 @@ mod tests {
         let html = print_html(&p, &framed, &cl, &hw);
         assert!(html.contains("<h2>Hardware (Simpson Strong-Tie)</h2>"));
         assert!(html.contains("LRU26Z"));
-        // Cover, four walls and their plates, floor, subfloor, roof, rafter, porch, porch
+        // Cover, code checks, four walls and their plates, floor, subfloor, roof, rafter, porch, porch
         // rafter, deck, wall and roof sheathing, cut list.
         // Each wall's plate layout follows its drawing.
-        assert_eq!(html.matches("<section class=\"page").count(), 19);
+        assert_eq!(html.matches("<section class=\"page").count(), 20);
+        assert!(html.contains("Code check failed: Rafter span"));
         assert!(html.contains("front wall plate layout</h1>"));
         assert!(html.contains("<strong>J</strong> jack stud"));
         assert!(html.contains("wall sheathing</td>"));

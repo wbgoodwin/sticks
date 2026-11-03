@@ -10,7 +10,7 @@ use sticks_cutlist::{cut_list_with_sheets, Board, CutList};
 use sticks_hardware::HardwareList;
 use sticks_rules::{
     bounds, frame_project, model, plate_layout, plate_letter, wall_ids, CodeCheck, FramedProject,
-    FramedWall, Placed, PlateBoard, PlateLayout, Section, Solid, SolidKind,
+    FramedWall, Placed, PlateBoard, PlateLayout, RafterDetail, Section, Solid, SolidKind,
 };
 use wasm_bindgen::prelude::*;
 
@@ -123,6 +123,11 @@ struct FrameView {
     deck: Option<DeckView>,
     /// Printable drawings besides the walls, in order.
     drawings: Vec<DrawingView>,
+    /// The building's members checked against the span tables.
+    checks: Vec<CodeCheck>,
+    /// What they were checked for, like `southern pine No. 2, 30 psf ground
+    /// snow, ...`.
+    checked_for: String,
 }
 
 #[derive(Serialize)]
@@ -187,6 +192,8 @@ struct SolidView {
     u: [f64; 3],
     v: [f64; 3],
     depth: f64,
+    /// Code checks the member fails; empty when it passes.
+    fails: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -272,6 +279,8 @@ struct MemberView {
     h_16: i64,
     /// Corners as `[x, y]` for members that aren't rectangles; else empty.
     outline_16: Vec<[i64; 2]>,
+    /// Code checks the member fails; empty when it passes.
+    fails: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -558,6 +567,8 @@ fn framed(project_json: &str) -> Result<(Project, FramedProject), String> {
 pub fn frame_json(project_json: &str) -> Result<String, String> {
     let (project, framed) = framed(project_json)?;
     let drawings = drawing_list(&framed);
+    let checks = framed.checks.clone();
+    let checked_for = sticks_rules::spans::RafterLoads::for_project(&project).describe();
     // Walls come back in the order frame_project lists them.
     let walls = framed
         .walls
@@ -652,6 +663,8 @@ pub fn frame_json(project_json: &str) -> Result<String, String> {
         sheathing,
         deck,
         drawings,
+        checks,
+        checked_for,
     })
     .map_err(|e| e.to_string())
 }
@@ -666,6 +679,9 @@ fn drawing_list(framed: &FramedProject) -> Vec<DrawingView> {
             part: part.to_string(),
         })
     };
+    if !framed.checks.is_empty() {
+        add("checks", "Code checks", "roof");
+    }
     if framed.floor.is_some() {
         add("floor", "Floor", "floor");
         add("subfloor", "Subfloor", "floor");
@@ -744,6 +760,7 @@ fn member_view(p: Placed) -> MemberView {
             .iter()
             .map(|(x, y)| [x.sixteenths(), y.sixteenths()])
             .collect(),
+        fails: p.fails,
     }
 }
 
@@ -776,6 +793,7 @@ fn solid_view(s: Solid) -> SolidView {
         u: s.u,
         v: s.v,
         depth: s.depth,
+        fails: s.fails,
     }
 }
 
@@ -784,7 +802,19 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
     let name = &project.name;
     let from = project.rules.layout_from;
     let unframed = |part: &str| format!("the {part} doesn't frame");
+    let checks = framed.checks.clone();
+    let check = |d: &RafterDetail| {
+        let item = sticks_rules::spans::rafter_item(d);
+        checks.iter().find(|c| c.item == item)
+    };
     match which {
+        "checks" => {
+            if checks.is_empty() {
+                return Err("this project has no building checks".to_string());
+            }
+            let loads = sticks_rules::spans::RafterLoads::for_project(&project).describe();
+            Ok(sticks_export::building_checks_svg(name, &loads, &checks))
+        }
         "floor" | "subfloor" => {
             let floor = framed
                 .floor
@@ -809,7 +839,7 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
                         .rafters
                         .get(i)
                         .ok_or("this roof has one kind of rafter")?;
-                    Ok(sticks_export::rafter_svg(name, r))
+                    Ok(sticks_export::rafter_svg(name, r, check(r)))
                 }
             }
         }
@@ -820,7 +850,11 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
                 .map_err(|e| e.reason)?;
             match which {
                 "porch" => Ok(sticks_export::porch_svg(name, &porch, from)),
-                "porch-rafter" => Ok(sticks_export::rafter_svg(name, &porch.rafter)),
+                "porch-rafter" => Ok(sticks_export::rafter_svg(
+                    name,
+                    &porch.rafter,
+                    check(&porch.rafter),
+                )),
                 _ => sticks_export::porch_deck_svg(name, &porch, from)
                     .ok_or_else(|| "this porch has no deck".to_string()),
             }
@@ -1142,6 +1176,7 @@ mod tests {
         assert_eq!(
             drawings,
             [
+                "checks",
                 "floor",
                 "subfloor",
                 "roof",

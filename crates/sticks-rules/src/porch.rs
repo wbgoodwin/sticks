@@ -184,6 +184,8 @@ pub fn frame_porch(
         pitch,
         plumb_tenths_of_degree: sticks_core::tenths_of_degree(pitch.rise, Pitch::RUN),
         run,
+        // From the ledger's face to the beam's inside face.
+        span: porch.depth - beam_w - lt,
         plumb_depth,
         seat: beam_w,
         heel: d_rise(beam_w),

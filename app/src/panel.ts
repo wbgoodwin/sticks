@@ -9,6 +9,7 @@ import {
   parseLength,
   type BuildingJson,
   type DeckJson,
+  type FramingSpecies,
   type OpeningJson,
   type OpeningKind,
   type PorchJson,
@@ -147,6 +148,17 @@ const KIND_NAMES: Record<OpeningKind, string> = {
   penetration: "Penetration",
 };
 
+const FRAMING_SPECIES: [FramingSpecies, string][] = [
+  ["southern_pine", "Southern pine"],
+  ["spruce_pine_fir", "Spruce-pine-fir (SPF)"],
+  ["douglas_fir_larch", "Douglas fir-larch"],
+  ["hem_fir", "Hem-fir"],
+];
+const GROUND_SNOW = ["20", "25", "30", "40", "50"];
+const ROOFING: [number, string][] = [
+  [10, "Shingles, metal"],
+  [20, "Tile, slate"],
+];
 const HEADERS = ["2x4", "2x6", "2x8", "2x10", "2x12"];
 const RAFTERS = ["2x4", "2x6", "2x8", "2x10", "2x12"];
 const JOISTS = ["2x6", "2x8", "2x10", "2x12"];
@@ -468,6 +480,51 @@ function roofSection(project: ProjectJson, events: PanelEvents): HTMLElement | n
         { class: "row" },
         lengthField("Front overhang", () => roof.front_overhang, (v) => (roof.front_overhang = v), events),
         lengthField("Back overhang", () => roof.back_overhang, (v) => (roof.back_overhang = v), events),
+      ),
+      h("p", { class: "field-hint span-check", "data-live": "rafter-span" }),
+      h(
+        "div",
+        { class: "row" },
+        select(
+          "Rafter lumber",
+          FRAMING_SPECIES.map(([, name]) => name),
+          () => FRAMING_SPECIES.find(([c]) => c === (roof.species ?? "southern_pine"))![1],
+          (v) => (roof.species = FRAMING_SPECIES.find(([, name]) => name === v)![0]),
+          events,
+        ),
+        select(
+          "Ground snow, psf",
+          GROUND_SNOW,
+          () => String(roof.ground_snow_psf ?? 30),
+          (v) => (roof.ground_snow_psf = Number(v)),
+          events,
+        ),
+      ),
+      h(
+        "div",
+        { class: "row" },
+        select(
+          "Roofing",
+          ROOFING.map(([, name]) => name),
+          () => (ROOFING.find(([psf]) => psf === (roof.dead_psf ?? 10)) ?? ROOFING[0])[1],
+          (v) => (roof.dead_psf = ROOFING.find(([, name]) => name === v)![0]),
+          events,
+        ),
+        segmented(
+          "Ceiling on rafters",
+          [
+            ["no", "No"],
+            ["yes", "Yes"],
+          ],
+          () => (roof.ceiling ? "yes" : "no"),
+          (v) => (roof.ceiling = v === "yes"),
+          events.changed,
+        ),
+      ),
+      h(
+        "p",
+        { class: "field-hint" },
+        "Rafters are checked against the IRC span tables, No. 2 grade. Ask your building department for the ground snow load; Fairfax County uses 25.",
       ),
     ],
     [
