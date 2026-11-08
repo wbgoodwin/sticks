@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::joint::JointKind;
@@ -116,7 +117,7 @@ impl Default for Floor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FloorSupport {
     /// Beams on piers; beam joints land on a pier.
@@ -177,7 +178,7 @@ impl Hardware {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Fastening {
     /// The nails each connector's catalog listing calls for.
@@ -270,7 +271,7 @@ fn is_default_roof_dead(v: &u32) -> bool {
 
 /// Species of framing lumber in the code's joist and rafter span tables
 /// (IRC R802.4.1), all No. 2 grade.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FramingSpecies {
     /// Southern yellow pine, the usual pressure-treated and framing lumber
@@ -294,6 +295,27 @@ impl FramingSpecies {
     }
 }
 
+impl Default for Roof {
+    /// A lean-to at 4:12 with every other choice at its default.
+    fn default() -> Self {
+        Roof {
+            kind: RoofKind::default(),
+            pitch: Pitch::new(Length::inches(4)),
+            rafter: default_rafter(),
+            on_center: None,
+            front_overhang: default_overhang(),
+            back_overhang: default_overhang(),
+            fascia: None,
+            ridge: None,
+            collar_tie: None,
+            species: FramingSpecies::default(),
+            ground_snow_psf: DEFAULT_GROUND_SNOW_PSF,
+            dead_psf: DEFAULT_ROOF_DEAD_PSF,
+            ceiling: false,
+        }
+    }
+}
+
 fn default_rafter() -> Nominal {
     Nominal::new(2, 6)
 }
@@ -302,7 +324,7 @@ fn default_overhang() -> Length {
     Length::inches(12)
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RoofKind {
     /// A single slope, high at the front wall and low at the back.
@@ -497,7 +519,7 @@ impl Default for Deck {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BeamStyle {
     /// Joists sit on top of the beams and may run past them.
@@ -508,7 +530,7 @@ pub enum BeamStyle {
     Flush,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DeckSupport {
     /// Beams straight on concrete piers.
@@ -520,7 +542,7 @@ pub enum DeckSupport {
     Blocks,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DeckingMaterial {
     /// Wood boards: 5/4 boards span 16", 2x boards 24".
@@ -532,7 +554,7 @@ pub enum DeckingMaterial {
 }
 
 /// A set of deck rules to check a deck against.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DeckCode {
     /// The International Residential Code's prescriptive deck tables
@@ -554,7 +576,7 @@ impl DeckCode {
 }
 
 /// Wood species groups in the code's deck span tables.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Species {
     #[default]
@@ -577,7 +599,7 @@ impl Species {
 
 /// Sheathing on the outside walls and the roof. Leave a thickness out to skip
 /// that part.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Sheathing {
     /// Wall sheathing thickness, such as 7/16".
@@ -658,6 +680,20 @@ impl From<Pitch> for String {
     }
 }
 
+impl JsonSchema for Pitch {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Pitch".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Roof pitch as inches of rise per 12\" of run, written like \"4:12\" or \"3-1/2:12\". The rise is more than 0 and less than 24.",
+            "examples": ["2:12", "4:12", "6:12"]
+        })
+    }
+}
+
 /// Sheet goods on offer in one thickness.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -727,7 +763,7 @@ impl Default for Rules {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutStart {
     #[default]
@@ -736,7 +772,7 @@ pub enum LayoutStart {
 }
 
 /// Corner backing on the wall that runs through a corner.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CornerStyle {
     /// End stud, 1-1/2" spacer blocks, then a backer stud. The butting wall's
@@ -746,7 +782,7 @@ pub enum CornerStyle {
 }
 
 /// What happens at one end of a wall.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WallEnd {
     /// A single end stud: a free end, or a wall that butts into another.
@@ -808,13 +844,56 @@ pub struct Opening {
     pub header: Nominal,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OpeningKind {
     Door,
     Window,
     /// A small penetration, such as a mini-split line set.
     Penetration,
+}
+
+/// The usual rough opening for a kind of opening, used when a request
+/// doesn't give a size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UsualOpening {
+    pub width: Length,
+    pub height: Length,
+    pub sill_height: Length,
+    pub header: Nominal,
+}
+
+impl OpeningKind {
+    /// A 36" door's rough opening (38-1/2" x 82-1/2"), a 36" x 36" window
+    /// at a 44" sill, or a 4" square penetration a foot up.
+    pub fn usual(self) -> UsualOpening {
+        let (width, height, sill_height, header) = match self {
+            OpeningKind::Door => (
+                Length::from_sixteenths(616),
+                Length::from_sixteenths(1320),
+                Length::ZERO,
+                Nominal::new(2, 8),
+            ),
+            OpeningKind::Window => (
+                Length::inches(36),
+                Length::inches(36),
+                Length::inches(44),
+                Nominal::new(2, 6),
+            ),
+            OpeningKind::Penetration => (
+                Length::inches(4),
+                Length::inches(4),
+                Length::feet(1),
+                Nominal::new(2, 4),
+            ),
+        };
+        UsualOpening {
+            width,
+            height,
+            sill_height,
+            header,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

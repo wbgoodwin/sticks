@@ -12,6 +12,8 @@ sticks-cutlist.workspace = true
 sticks-hardware.workspace = true
 sticks-export.workspace = true
 sticks-intent.workspace = true
+sticks-schema.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
 

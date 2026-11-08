@@ -263,6 +263,20 @@ fn parse_decimal(s: &str, scale: i64) -> Option<i64> {
     Some(total)
 }
 
+impl schemars::JsonSchema for Length {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Length".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "A length in builder notation: feet with ', inches with \", fractions to the sixteenth, like \"12'\", \"7' 3\\\"\", \"38-1/2\\\"\" or \"3/4\\\"\".",
+            "examples": ["12'", "7' 3\"", "38-1/2\"", "3/4\""]
+        })
+    }
+}
+
 /// Project files store lengths as strings in builder notation; plain numbers
 /// are read as inches.
 impl Serialize for Length {

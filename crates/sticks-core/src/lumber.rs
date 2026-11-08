@@ -65,6 +65,27 @@ impl fmt::Display for Nominal {
     }
 }
 
+/// Sizes the schema offers. Project files may name others; these are the
+/// ones a builder finds at the yard.
+pub const COMMON_SIZES: [&str; 20] = [
+    "1x4", "1x6", "1x8", "1x10", "1x12", "5/4x4", "5/4x6", "2x3", "2x4", "2x6", "2x8", "2x10",
+    "2x12", "4x4", "4x6", "4x8", "4x10", "4x12", "6x6", "6x8",
+];
+
+impl schemars::JsonSchema for Nominal {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Nominal".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "A nominal lumber size, thickness by width, like \"2x6\". 5/4 sizes are decking.",
+            "enum": COMMON_SIZES
+        })
+    }
+}
+
 impl FromStr for Nominal {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {

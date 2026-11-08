@@ -1,5 +1,6 @@
 //! The `sticks` command: the same flow as the app, driven by a project file.
 
+mod design;
 mod edit;
 mod text;
 
@@ -72,6 +73,30 @@ enum Command {
         #[arg(long)]
         write: bool,
     },
+    /// Print the design schema: the JSON a person or a model writes to
+    /// describe what to build.
+    Schema {
+        /// Trim it to what Claude's structured outputs accept.
+        #[arg(long)]
+        claude: bool,
+    },
+    /// Print a project file's design as JSON in the schema's shape.
+    Design { project: PathBuf },
+    /// Check a design written as JSON: that it reads, fits and frames, and
+    /// what Sticks assumed for anything it left out.
+    Validate {
+        /// The design, as JSON. `-` reads it from standard input.
+        design: PathBuf,
+        /// A project file to take stock, prices and other settings from.
+        #[arg(long)]
+        base: Option<PathBuf>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Print the project file it becomes, when it's ok.
+        #[arg(long)]
+        toml: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -104,6 +129,17 @@ fn main() -> ExitCode {
             };
             edit::run(&p, &project, &request, &opts)
         }),
+        Command::Schema { claude } => design::schema(claude),
+        Command::Design { project } => load(&project).and_then(|p| design::export(&p)),
+        Command::Validate {
+            design,
+            base,
+            json,
+            toml,
+        } => match base.as_deref().map(load).transpose() {
+            Ok(base) => design::validate(&design, base, json, toml),
+            Err(e) => Err(e),
+        },
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

@@ -186,26 +186,8 @@ type Out = Result<Vec<Edit>, Stop>;
 
 /// Rough-opening defaults, matching what the app's panel adds.
 fn opening_defaults(kind: OpeningKind) -> (Length, Length, Length, Nominal) {
-    match kind {
-        OpeningKind::Door => (
-            Length::from_sixteenths(616),
-            Length::from_sixteenths(1320),
-            Length::ZERO,
-            Nominal::new(2, 8),
-        ),
-        OpeningKind::Window => (
-            Length::inches(36),
-            Length::inches(36),
-            Length::inches(44),
-            Nominal::new(2, 6),
-        ),
-        OpeningKind::Penetration => (
-            Length::inches(4),
-            Length::inches(4),
-            Length::feet(1),
-            Nominal::new(2, 4),
-        ),
-    }
+    let u = kind.usual();
+    (u.width, u.height, u.sill_height, u.header)
 }
 
 /// Slab widths a door is sold in. "A 3' door" names the slab; the framed
