@@ -1,8 +1,10 @@
 name: Release
 
-# Pushing a tag like v0.2.0 publishes a GitHub release, which is what the
-# app's update check looks for. The tag must match the version in
-# app/src-tauri/tauri.conf.json.
+# Pushing a tag like v0.2.0 builds the signed, notarized Mac app and
+# publishes it as a GitHub release, with the files the app's updater reads
+# (latest.json and the signed .app.tar.gz). The tag must match the version in
+# app/src-tauri/tauri.conf.json. The secrets it needs are listed in
+# docs/releasing.md.
 on:
   push:
     tags: ["v*"]
@@ -11,10 +13,11 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  mac:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Check the tag matches the app version
         run: |
           version=$(jq -r .version app/src-tauri/tauri.conf.json)
@@ -22,7 +25,87 @@ jobs:
             echo "Tag $GITHUB_REF_NAME doesn't match tauri.conf.json version $version" >&2
             exit 1
           fi
-      - name: Publish the release
+
+      - name: Check the signing secrets are set
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "Sticks ${GITHUB_REF_NAME#v}" --generate-notes
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+        run: |
+          missing=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD \
+                      APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+                      TAURI_UPDATER_PUBKEY; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "Missing repository secrets or variables:$missing (see docs/releasing.md)" >&2
+            exit 1
+          fi
+
+      # The updater's public key lives in a repository variable, so the
+      # committed release config carries a placeholder.
+      - name: Put the updater public key in the release config
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+        run: |
+          conf=app/src-tauri/tauri.release.conf.json
+          jq --arg key "$TAURI_UPDATER_PUBKEY" '.plugins.updater.pubkey = $key' "$conf" > "$RUNNER_TEMP/release.json"
+          mv "$RUNNER_TEMP/release.json" "$conf"
+
+      # One app for both Apple Silicon and Intel Macs.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            app/src-tauri -> target
+      # Must match the wasm-bindgen version pinned in crates/sticks-wasm.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.129
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+
+      - name: Build, sign, notarize and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Tells the app it updates itself (app/src/updates.ts).
+          VITE_CHANNEL: release
+          # Sticks accounts; the app leaves them out when these are empty.
+          VITE_YARD_URL: ${{ vars.VITE_YARD_URL }}
+          VITE_YARD_SIGN_IN: ${{ vars.VITE_YARD_SIGN_IN }}
+          VITE_YARD_CLIENT_ID: ${{ vars.VITE_YARD_CLIENT_ID }}
+          # Developer ID certificate (base64 .p12) for code signing.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Apple ID with an app-specific password, for notarizing.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Signs the update files so the app only installs our builds.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseName: Sticks __VERSION__
+          releaseBody: Download the .dmg below, open it and drag Sticks to Applications. Sticks installs later updates itself.
+          releaseDraft: false
+          prerelease: false
+          args: --target universal-apple-darwin --config src-tauri/tauri.release.conf.json

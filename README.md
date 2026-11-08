@@ -180,9 +180,15 @@ happens in the Rust core compiled to WebAssembly.
 
 ### Install
 
-Sticks is installed by building it from this repository. You need
-[Rust](https://rustup.rs), Node 22, and Tauri's prerequisites for your OS (on
-a Mac, the Xcode command line tools: `xcode-select --install`). Then:
+**Download:** get the `.dmg` from the
+[latest release](https://github.com/wbgoodwin/sticks/releases/latest), open it
+and drag Sticks to Applications. It's signed and notarized, runs on Apple
+Silicon and Intel Macs (macOS 12 or newer), and installs its own updates: when
+a newer version is out, a card offers **Install and restart**.
+
+**From source:** you need [Rust](https://rustup.rs), Node 22, and Tauri's
+prerequisites for your OS (on a Mac, the Xcode command line tools:
+`xcode-select --install`). Then:
 
 ```sh
 git clone https://github.com/wbgoodwin/sticks.git
@@ -195,17 +201,15 @@ npm run app:install
 
 On a Mac that builds `Sticks.app` and puts it in `/Applications`. On Windows
 or Linux it builds the installers and prints where they are. The first build
-takes a few minutes.
-
-The app checks GitHub for a newer release once a day. When there is one, it
-says so with a link to what's new. To update, run `git pull` and then
-`npm run app:install` again in the `app` folder. Skipping a version keeps it
-quiet until the next one.
+takes a few minutes. A copy built from source checks GitHub for a newer
+release once a day and, when there is one, says to run `git pull` and then
+`npm run app:install` again in the `app` folder.
 
 To publish an update, raise `version` in `app/src-tauri/tauri.conf.json`,
 merge it, and push a matching tag (`git tag v0.2.0 && git push origin
-v0.2.0`). The Release workflow then publishes the GitHub release the app
-looks for.
+v0.2.0`). The Release workflow builds, signs and notarizes the Mac app and
+publishes the release. The one-time signing setup is in
+[docs/releasing.md](docs/releasing.md).
 
 ### Develop
 

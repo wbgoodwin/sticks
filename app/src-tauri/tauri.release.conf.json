@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "SET_BY_THE_RELEASE_WORKFLOW",
+      "endpoints": ["https://github.com/wbgoodwin/sticks/releases/latest/download/latest.json"]
+    }
+  }
+}
