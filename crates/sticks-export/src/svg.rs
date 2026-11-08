@@ -118,6 +118,11 @@ impl Doc {
 .joist {{ fill: #f3e6c8; }} .rim {{ fill: #e9d8b4; }} .beam {{ fill: none; stroke-dasharray: 4 2; }}
 .rafter {{ fill: #f3e6c8; }} .fascia {{ fill: #e2c992; }} .ridge {{ fill: #c9a86a; }} .tie {{ fill: #d7d0c0; }}
 .post {{ fill: #c9a86a; }} .decking {{ fill: #efe3c6; }}
+.rail {{ fill: #e2c992; }} .baluster {{ fill: #f6edd9; }} .stringer {{ fill: #e9d8b4; }}
+.ledger {{ fill: #d8bb7e; }} .house {{ fill: #eceae4; stroke: #555; stroke-width: 0.8; }}
+.lot {{ fill: none; stroke: #222; stroke-width: 1; stroke-dasharray: 10 3 2 3; }}
+.bolt {{ fill: #222; }}
+.rail-line {{ stroke: #8a5a1c; stroke-width: 1.4; }} .ghost {{ fill-opacity: 0.35; }}
 .hole {{ fill: #fff; stroke: #2a6fb0; stroke-width: 0.6; stroke-dasharray: 3 2; }}
 .opening {{ fill: none; stroke: #2a6fb0; stroke-width: 0.75; stroke-dasharray: 3 2; }}
 .splice {{ stroke: #c0392b; stroke-width: 1.5; }}
@@ -271,7 +276,11 @@ fn class(kind: MemberKind) -> &'static str {
         MemberKind::Ridge => "ridge",
         MemberKind::CollarTie => "tie",
         MemberKind::GableStud => "stud",
-        MemberKind::Decking => "decking",
+        MemberKind::Decking | MemberKind::Tread | MemberKind::Riser => "decking",
+        MemberKind::GuardPost => "post",
+        MemberKind::Rail | MemberKind::Handrail => "rail",
+        MemberKind::Baluster => "baluster",
+        MemberKind::Stringer => "stringer",
     }
 }
 
@@ -1409,11 +1418,17 @@ pub fn deck_plan_svg(project: &str, deck: &Deck, d: &FramedDeck, from: LayoutSta
         PAGE_W - MARGIN - 90.0,
         PAGE_H - MARGIN - MARK_ROW * 2.0 - 40.0,
     );
+    let house = if d.ledger.is_some() {
+        Length::inches(10)
+    } else {
+        Length::ZERO
+    };
+    let (lo, hi) = deck_extent(d);
     let f = Frame::fit(
-        0.0,
-        0.0,
-        d.width.as_inches_f64(),
-        d.depth.as_inches_f64(),
+        lo.0.as_inches_f64(),
+        lo.1.as_inches_f64(),
+        (hi.0 - lo.0).as_inches_f64(),
+        (hi.1.max(d.depth + house) - lo.1).as_inches_f64(),
         area,
     );
     let joist = deck.joist;
@@ -1422,27 +1437,70 @@ pub fn deck_plan_svg(project: &str, deck: &Deck, d: &FramedDeck, from: LayoutSta
         &title,
         &[
             format!(
-                "{} wide by {} deep, decking {} above grade. {joist} joists at {:#} on center {} {lines} beams of {}",
+                "{} wide by {} deep, decking {} above grade. {joist} joists at {:#} on center {} {} of {}{}",
                 d.width,
                 d.depth,
                 d.heights.top,
                 d.layout.oc,
-                if d.beam_style == BeamStyle::Flush {
-                    "hung between"
-                } else {
-                    "on"
+                match (d.beam_style == BeamStyle::Flush, lines) {
+                    (true, 1) => "hung from",
+                    (true, _) => "hung between",
+                    _ => "on",
                 },
-                beam_name(d.beam, d.beam_plies)
+                if lines == 1 {
+                    "1 beam".to_string()
+                } else {
+                    format!("{lines} beams")
+                },
+                beam_name(d.beam, d.beam_plies),
+                if d.ledger.is_some() { " and a ledger" } else { "" }
             ),
-            format!("Beams on {}", standing(d)),
+            format!("Beams on {}. {}", standing(d), extras_note(d)),
             format!(
-                "Seen from above with the front at the bottom. Beams dashed, footings as dashed circles. {}. {}",
+                "Seen from above with the front at the bottom. Beams and stringers dashed, footings as dashed circles. {}. {}",
                 origin_note(from, "Joist marks"),
                 f.note()
             ),
         ],
         &[&deck_notice(deck)[0], &deck_notice(deck)[1]],
     );
+    if let Some(l) = &d.ledger {
+        let (x0, x1) = (lo.0 - Length::inches(6), hi.0 + Length::inches(6));
+        let (y0, y1) = (d.depth, d.depth + house);
+        doc.polygon(
+            &[
+                (f.x(x0), f.y(y0)),
+                (f.x(x1), f.y(y0)),
+                (f.x(x1), f.y(y1)),
+                (f.x(x0), f.y(y1)),
+            ],
+            "house",
+        );
+        doc.text(
+            f.x(d.width.mul_div(1, 2)),
+            f.y(y0 + half(house)) + 2.5,
+            "callout",
+            "middle",
+            &format!(
+                "HOUSE: {} ledger, {} at {:#} o.c. staggered",
+                l.size,
+                l.fasteners.name(),
+                l.spacing
+            ),
+        );
+    }
+    for st in &d.stairs {
+        let r = st.pad;
+        doc.polygon(
+            &[
+                (f.x(r.x), f.y(r.y)),
+                (f.x(r.right()), f.y(r.y)),
+                (f.x(r.right()), f.y(r.top())),
+                (f.x(r.x), f.y(r.top())),
+            ],
+            "concrete",
+        );
+    }
     let framing = of_kind(
         &d.members,
         &[
@@ -1454,8 +1512,47 @@ pub fn deck_plan_svg(project: &str, deck: &Deck, d: &FramedDeck, from: LayoutSta
     let beams = of_kind(&d.members, &[MemberKind::Beam]);
     let posts = of_kind(&d.members, &[MemberKind::Post]);
     members(&mut doc, &f, &framing, true);
+    members(
+        &mut doc,
+        &f,
+        &of_kind(&d.members, &[MemberKind::Ledger]),
+        true,
+    );
     members(&mut doc, &f, &beams, false);
     members(&mut doc, &f, &posts, false);
+    let stair_boards = of_kind(&d.members, &[MemberKind::Tread, MemberKind::Riser]);
+    members(&mut doc, &f, &stair_boards, false);
+    for p in of_kind(&d.members, &[MemberKind::Stringer]) {
+        doc.polygon(&shape(&f, &p), "m beam");
+    }
+    let guard = of_kind(
+        &d.members,
+        &[
+            MemberKind::Rail,
+            MemberKind::Handrail,
+            MemberKind::Baluster,
+            MemberKind::GuardPost,
+        ],
+    );
+    members(&mut doc, &f, &guard, false);
+    if let Some(l) = &d.ledger {
+        let t = deck.joist.actual_thickness();
+        let y = d.depth - half(t);
+        for &(x, top) in &l.bolts {
+            let dy = if top { 1.2 } else { -1.2 };
+            doc.circle(f.x(x), f.y(y) + dy, 1.1, "bolt");
+        }
+    }
+    for (i, st) in d.stairs.iter().enumerate() {
+        let r = st.pad;
+        doc.text(
+            f.x(r.x + half(r.w)),
+            f.y(r.y + half(r.h)) + 2.5,
+            "callout",
+            "middle",
+            &format!("S{}: {} risers, pad", i + 1, st.risers),
+        );
+    }
     for (p, footing) in d.piers.iter().zip(&d.footings) {
         doc.circle(f.x(p.x), f.y(p.y), f.len(half(footing.diameter)), "footing");
         if posts.is_empty() {
@@ -1469,7 +1566,7 @@ pub fn deck_plan_svg(project: &str, deck: &Deck, d: &FramedDeck, from: LayoutSta
     splices(&mut doc, &f, &structural, &d.splices);
 
     // Width over the top, the supports along a beam under it.
-    let top = f.y(d.depth) - 14.0;
+    let top = f.y(hi.1.max(d.depth + house)) - 14.0;
     doc.dimension(
         (f.x(Length::ZERO), top),
         (f.x(d.width), top),
@@ -1487,7 +1584,7 @@ pub fn deck_plan_svg(project: &str, deck: &Deck, d: &FramedDeck, from: LayoutSta
         "post centers",
     );
     // Depth on the left, beam centers on the right.
-    let left = f.x(Length::ZERO) - 18.0;
+    let left = f.x(lo.0) - 18.0;
     doc.dimension(
         (left, f.y(Length::ZERO)),
         (left, f.y(d.depth)),
@@ -1496,7 +1593,7 @@ pub fn deck_plan_svg(project: &str, deck: &Deck, d: &FramedDeck, from: LayoutSta
     let mut stops = vec![Length::ZERO];
     stops.extend(d.beam_y.iter().copied());
     stops.push(d.depth);
-    let right = f.x(d.width) + 20.0;
+    let right = f.x(hi.0) + 20.0;
     y_chain(&mut doc, &f, &stops, right);
     doc.text(
         right + 6.0,
@@ -1505,8 +1602,52 @@ pub fn deck_plan_svg(project: &str, deck: &Deck, d: &FramedDeck, from: LayoutSta
         "start",
         "beam centers",
     );
-    marks(&mut doc, &f, &d.marks, from, d.width, f.y(Length::ZERO));
+    marks(&mut doc, &f, &d.marks, from, d.width, f.y(lo.1));
     doc.finish()
+}
+
+/// The corners of everything in a deck's plan: framing, guards, stairs and
+/// their pads.
+fn deck_extent(d: &FramedDeck) -> ((Length, Length), (Length, Length)) {
+    let mut lo = (Length::ZERO, Length::ZERO);
+    let mut hi = (d.width, d.depth);
+    let rects = d
+        .members
+        .iter()
+        .map(|p| p.rect)
+        .chain(d.stairs.iter().map(|s| s.pad));
+    for r in rects {
+        lo = (lo.0.min(r.x), lo.1.min(r.y));
+        hi = (hi.0.max(r.right()), hi.1.max(r.top()));
+    }
+    (lo, hi)
+}
+
+/// Guards, stairs and the ledger, in a sentence for a sheet's header.
+fn extras_note(d: &FramedDeck) -> String {
+    let mut out = Vec::new();
+    if let Some(g) = &d.guards {
+        let sides: Vec<&str> = g.sides.iter().map(|s| s.name()).collect();
+        out.push(format!("{:#} guards on the {}", g.height, sides.join(", ")));
+    }
+    for s in &d.stairs {
+        out.push(format!(
+            "stairs off the {}, {} risers of {:#}",
+            s.side.name(),
+            s.risers,
+            s.riser
+        ));
+    }
+    if d.ledger.is_some() {
+        out.push("ledger on the house at the back".to_string());
+    }
+    if out.is_empty() {
+        "No guards needed, no stairs.".to_string()
+    } else {
+        let mut text = out.join("; ");
+        text[..1].make_ascii_uppercase();
+        text + "."
+    }
 }
 
 /// A section through the deck along the joists at a line of posts: grade,
@@ -1533,13 +1674,20 @@ pub fn deck_section_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
         MARGIN + 60.0,
         MARGIN + 80.0,
         PAGE_W - MARGIN - 60.0,
-        PAGE_H - MARGIN - 175.0,
+        PAGE_H - MARGIN - 185.0,
     );
+    let above = if d.guards.is_some() {
+        sticks_rules::deck_parts::GUARD_HEIGHT + Length::inches(4)
+    } else if d.ledger.is_some() {
+        Length::inches(24)
+    } else {
+        Length::inches(4)
+    };
     let f = Frame::fit(
         -12.0,
         -below.as_inches_f64(),
         (d.depth + Length::inches(24)).as_inches_f64(),
-        (h.top + below + Length::inches(4)).as_inches_f64(),
+        (h.top + below + above).as_inches_f64(),
         area,
     );
     deck_header(
@@ -1631,7 +1779,81 @@ pub fn deck_section_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
     } else {
         rect(&mut doc, Length::ZERO, h.joist_bottom, t, jh, "m rim");
         rect(&mut doc, t, h.joist_bottom, d.depth - t * 2, jh, "m joist");
-        rect(&mut doc, d.depth - t, h.joist_bottom, t, jh, "m rim");
+        if d.ledger.is_none() {
+            rect(&mut doc, d.depth - t, h.joist_bottom, t, jh, "m rim");
+        }
+    }
+    // The ledger on the house's band joist, and the house wall behind it.
+    if let Some(l) = &d.ledger {
+        let lh = l.size.actual_width();
+        let lz = h.joist_top - lh;
+        rect(&mut doc, d.depth - t, lz, t, lh, "m ledger");
+        let band = Length::from_sixteenths(24);
+        rect(
+            &mut doc,
+            d.depth,
+            lz - Length::inches(2),
+            Length::inches(8),
+            h.top + Length::inches(20) - lz + Length::inches(2),
+            "house",
+        );
+        rect(
+            &mut doc,
+            d.depth,
+            lz - Length::inches(1),
+            band,
+            lh + Length::inches(2),
+            "m rim",
+        );
+        doc.text(
+            f.x(d.depth + Length::inches(9)),
+            f.y(h.top + Length::inches(12)),
+            "callout",
+            "start",
+            "house",
+        );
+        doc.text(
+            f.x(d.depth + Length::inches(9)),
+            f.y(lz + half(lh)) + 2.5,
+            "callout",
+            "start",
+            &format!("{} ledger, {}", l.size, l.fasteners.name()),
+        );
+    }
+    // Guards at the open ends of the cut: a post outside the rim, the
+    // rails on its inner face.
+    if let Some(g) = &d.guards {
+        let pw = Length::from_sixteenths(56);
+        let rt = Length::from_sixteenths(24);
+        let rw = Length::from_sixteenths(56);
+        // (post's near face, rail's near face) at the front, and at the back
+        // of a freestanding deck.
+        let mut ends = vec![(-pw, Length::ZERO)];
+        if d.ledger.is_none() {
+            ends.push((d.depth, d.depth - rt));
+        }
+        for (px, rx) in ends {
+            rect(
+                &mut doc,
+                px,
+                h.joist_bottom,
+                pw,
+                h.top + g.height - h.joist_bottom,
+                "m post",
+            );
+            for z in [
+                h.top + g.height - rw,
+                h.top + sticks_rules::deck_parts::MAX_GAP,
+            ] {
+                rect(&mut doc, rx, z, rt, rw, "m rail");
+            }
+        }
+        let gx = f.x(-pw) - 12.0;
+        doc.dimension(
+            (gx, f.y(h.top)),
+            (gx, f.y(h.top + g.height)),
+            &format!("{:#} guard", g.height),
+        );
     }
     rect(
         &mut doc,
@@ -1693,7 +1915,7 @@ pub fn deck_section_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
     );
 
     // Heights on the left.
-    let left = f.x(Length::ZERO) - 26.0;
+    let left = f.x(Length::ZERO) - 34.0;
     doc.dimension(
         (left, f.y(Length::ZERO)),
         (left, f.y(h.top)),
@@ -1746,11 +1968,563 @@ pub fn deck_section_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
             ft.diameter, ft.side, ft.thickness, ft.depth
         ));
     }
-    let y0 = PAGE_H - MARGIN - 105.0;
+    if let Some(l) = &d.ledger {
+        notes.push(format!(
+            "Ledger: {} on the house's 2x band joist, {} staggered at {:#} o.c., 2\" from the edges, 2\"-5\" from the ends; flashed over the top; joists in hangers",
+            l.size,
+            l.fasteners.name(),
+            l.spacing
+        ));
+        notes.push("Lateral: (2) deck tension ties (750 lb, Simpson DTT2Z or equal) from joists to the house floor framing, within 24\" of the deck's ends".to_string());
+    }
+    if let Some(g) = &d.guards {
+        notes.push(format!(
+            "Guards: {:#} high, 4x4 posts up to {} apart through-bolted to the rim with (2) 1/2\" bolts and a tension tie to a joist; 2x4 rails, 2x2 balusters, gaps under 4\"",
+            g.height, g.post_spacing
+        ));
+    }
+    if d.concrete.cubic_feet() > 0.0 {
+        notes.push(format!(
+            "Concrete ({} footings{}): {}",
+            d.concrete.footing_count,
+            if d.concrete.pad_count > 0 {
+                format!(", {} stair pads", d.concrete.pad_count)
+            } else {
+                String::new()
+            },
+            d.concrete.describe()
+        ));
+    }
+    let y0 = PAGE_H - MARGIN - 112.0;
     for (i, n) in notes.iter().enumerate() {
-        doc.text(MARGIN, y0 + i as f64 * 11.0, "callout", "start", n);
+        doc.text(MARGIN, y0 + i as f64 * 10.0, "callout", "start", n);
     }
     doc.finish()
+}
+
+/// Whether a deck has a stairs and guards sheet: stairs, guards, or a
+/// ledger to detail.
+pub fn has_deck_details(d: &FramedDeck) -> bool {
+    !d.stairs.is_empty() || d.guards.is_some() || d.ledger.is_some()
+}
+
+/// Stairs, guards and the ledger in detail: a side view of the first
+/// stair with its risers, treads, stringer, rails and pad dimensioned; a
+/// bay of guard; and the ledger's fastening.
+pub fn deck_details_svg(project: &str, deck: &Deck, d: &FramedDeck) -> String {
+    use sticks_rules::deck_parts::{
+        GUARD_HEIGHT, HANDRAIL_HEIGHT, MAX_GAP, NOSING, PAD_DEPTH, PAD_THICKNESS,
+    };
+    let title = format!("{project}: stairs, guards and ledger");
+    let mut doc = Doc::new(&title);
+    let h = d.heights;
+    let mut sub = vec![extras_note(d)];
+    let mut notes: Vec<String> = Vec::new();
+
+    // A stair seen from its side, the deck's edge at the left.
+    if let Some(st) = d.stairs.first() {
+        let run_out = st.total_run + PAD_DEPTH + Length::inches(6);
+        let tall = h.top + GUARD_HEIGHT + Length::inches(4);
+        let area = (MARGIN + 50.0, MARGIN + 60.0, 430.0, PAGE_H - MARGIN - 215.0);
+        let f = Frame::fit(
+            -30.0,
+            -(PAD_THICKNESS + Length::inches(4)).as_inches_f64(),
+            (run_out + Length::inches(30)).as_inches_f64(),
+            (tall + PAD_THICKNESS + Length::inches(4)).as_inches_f64(),
+            area,
+        );
+        sub.push(format!(
+            "Stair {}: seen from the side, the deck at the left. {}",
+            1,
+            f.note()
+        ));
+        let rect = |doc: &mut Doc, x: Length, z: Length, w: Length, hh: Length, class: &str| {
+            doc.polygon(
+                &[
+                    (f.x(x), f.y(z)),
+                    (f.x(x + w), f.y(z)),
+                    (f.x(x + w), f.y(z + hh)),
+                    (f.x(x), f.y(z + hh)),
+                ],
+                class,
+            );
+        };
+        let t = deck.joist.actual_thickness();
+        // Grade, the pad, and the deck's edge.
+        doc.line(
+            f.x(Length::inches(-30)),
+            f.y(Length::ZERO),
+            f.x(run_out + Length::inches(6)),
+            f.y(Length::ZERO),
+            "grade",
+        );
+        let pad_from = (st.total_run - Length::inches(12)).max(Length::ZERO);
+        rect(
+            &mut doc,
+            pad_from,
+            -PAD_THICKNESS,
+            st.total_run + PAD_DEPTH - pad_from,
+            PAD_THICKNESS,
+            "concrete",
+        );
+        rect(
+            &mut doc,
+            Length::inches(-30),
+            h.joist_top,
+            Length::inches(30),
+            h.top - h.joist_top,
+            "m decking",
+        );
+        rect(
+            &mut doc,
+            -t,
+            h.joist_bottom,
+            t,
+            h.joist_top - h.joist_bottom,
+            "m rim",
+        );
+        rect(
+            &mut doc,
+            Length::inches(-30),
+            h.joist_bottom,
+            Length::inches(30) - t,
+            h.joist_top - h.joist_bottom,
+            "m joist",
+        );
+        // The stringer, its profile from the framer.
+        if let Some(rise) = d
+            .rises
+            .iter()
+            .find(|r| r.label.contains("-ST") && r.label.starts_with("deck-S1-"))
+        {
+            let side = st.side;
+            let back = |c: Length| match side {
+                sticks_core::DeckSide::Front | sticks_core::DeckSide::Left => -c,
+                sticks_core::DeckSide::Back => c - d.depth,
+                sticks_core::DeckSide::Right => c - d.width,
+            };
+            let pts: Vec<(f64, f64)> = rise
+                .profile
+                .iter()
+                .map(|&(c, z)| (f.x(back(c)), f.y(z)))
+                .collect();
+            doc.polygon(&pts, "m stringer");
+            let tt = st.tread.actual_thickness();
+            let z = |i: i64| h.top - h.top.mul_div(i, st.risers);
+            for i in 1..st.risers {
+                rect(
+                    &mut doc,
+                    st.run * (i - 1),
+                    z(i) - tt,
+                    st.tread_depth,
+                    tt,
+                    "m decking",
+                );
+                if st.closed_risers {
+                    rect(
+                        &mut doc,
+                        st.run * i - Length::from_sixteenths(12),
+                        z(i + 1),
+                        Length::from_sixteenths(12),
+                        z(i) - tt - z(i + 1),
+                        "m decking",
+                    );
+                }
+            }
+            // Handrail and guard lines along the nosings.
+            let nose = |r: Length| h.top - st.riser.mul_div(r.sixteenths(), st.run.sixteenths());
+            let end = st.total_run;
+            if st.guards {
+                for above in [GUARD_HEIGHT, MAX_GAP + Length::from_sixteenths(56)] {
+                    doc.line(
+                        f.x(Length::ZERO),
+                        f.y(nose(Length::ZERO) + above),
+                        f.x(end),
+                        f.y(nose(end) + above),
+                        "dim",
+                    );
+                }
+            }
+            if st.handrail {
+                doc.line(
+                    f.x(Length::ZERO),
+                    f.y(nose(Length::ZERO) + HANDRAIL_HEIGHT),
+                    f.x(end),
+                    f.y(nose(end) + HANDRAIL_HEIGHT),
+                    "rail-line",
+                );
+                for r in [Length::ZERO, end - Length::from_sixteenths(56)] {
+                    rect(
+                        &mut doc,
+                        r,
+                        if r == Length::ZERO {
+                            h.joist_bottom
+                        } else {
+                            Length::ZERO
+                        },
+                        Length::from_sixteenths(56),
+                        nose(r)
+                            + if st.guards {
+                                GUARD_HEIGHT
+                            } else {
+                                HANDRAIL_HEIGHT
+                            }
+                            - if r == Length::ZERO {
+                                h.joist_bottom
+                            } else {
+                                Length::ZERO
+                            },
+                        "m post ghost",
+                    );
+                }
+                let mid = end.mul_div(3, 4);
+                doc.dimension(
+                    (f.x(mid), f.y(nose(mid))),
+                    (f.x(mid), f.y(nose(mid) + HANDRAIL_HEIGHT)),
+                    &format!("{HANDRAIL_HEIGHT:#} handrail"),
+                );
+            }
+            // Riser and run on the second step, the whole rise and run.
+            let x_end = f.x(run_out);
+            doc.dimension(
+                (x_end, f.y(Length::ZERO)),
+                (x_end, f.y(h.top)),
+                &format!("{:#} = {} x {:#}", h.top, st.risers, st.riser),
+            );
+            doc.dimension(
+                (f.x(Length::ZERO), f.y(-PAD_THICKNESS) + 16.0),
+                (f.x(end), f.y(-PAD_THICKNESS) + 16.0),
+                &format!("{:#} = {} x {:#}", end, st.risers - 1, st.run),
+            );
+            doc.dimension(
+                (f.x(end), f.y(-PAD_THICKNESS) + 16.0),
+                (f.x(end + PAD_DEPTH), f.y(-PAD_THICKNESS) + 16.0),
+                &format!("{PAD_DEPTH:#} landing"),
+            );
+        }
+        notes.push(format!(
+            "Stairs: {} risers of {:#} (none taller than 7-3/4\", all within 3/8\"), {} treads {:#} nosing to nosing of (2) {} with {:#} nosings, {:#} wide",
+            st.risers,
+            st.riser,
+            st.risers - 1,
+            st.run,
+            st.tread,
+            NOSING,
+            st.width
+        ));
+        notes.push(format!(
+            "Stringers: {} cut {} at {:#} o.c., {:#} throat, hung on the rim with stair-stringer connectors (Simpson LSCZ or equal); feet on the pad with an anchored kicker",
+            st.stringers, st.stringer, st.stringer_spacing, st.throat
+        ));
+        notes.push(format!(
+            "Landing: concrete pad {:#} thick, {:#} out from the last riser, at least as wide as the stair",
+            PAD_THICKNESS, PAD_DEPTH
+        ));
+        if st.handrail {
+            notes.push("Handrail: graspable (2x2 eased, or 1-1/4\" to 2\" round), 34\" to 38\" over the nosings, top riser to bottom, ends returned to posts, 1-1/2\" clear of the guard".to_string());
+        }
+        if st.guards {
+            notes.push("Stair guards: 36\" over the nosings, balusters so a 4\" ball can't pass; closed risers since the stair rises more than 30\"".to_string());
+        }
+        if d.stairs.len() > 1 {
+            notes.push(format!(
+                "The other {} stair(s) are built the same way to the same rise.",
+                d.stairs.len() - 1
+            ));
+        }
+    }
+
+    // A bay of guard, seen from outside.
+    if let Some(g) = &d.guards {
+        let bay = g.post_spacing;
+        let left = if d.stairs.is_empty() {
+            MARGIN + 60.0
+        } else {
+            470.0
+        };
+        let area = (
+            left,
+            MARGIN + 90.0,
+            PAGE_W - MARGIN - 20.0,
+            PAGE_H - MARGIN - 230.0,
+        );
+        let pw = Length::from_sixteenths(56);
+        let f = Frame::fit(
+            -12.0,
+            -10.0,
+            (bay + pw + Length::inches(24)).as_inches_f64(),
+            (g.height + Length::inches(20)).as_inches_f64(),
+            area,
+        );
+        let rect = |doc: &mut Doc, x: Length, z: Length, w: Length, hh: Length, class: &str| {
+            doc.polygon(
+                &[
+                    (f.x(x), f.y(z)),
+                    (f.x(x + w), f.y(z)),
+                    (f.x(x + w), f.y(z + hh)),
+                    (f.x(x), f.y(z + hh)),
+                ],
+                class,
+            );
+        };
+        let jh = h.joist_top - h.joist_bottom;
+        let deck_t = h.top - h.joist_top;
+        // Rim and decking edge, posts, rails, balusters. Heights from the
+        // top of the decking.
+        let rim_z = -(deck_t + jh);
+        rect(
+            &mut doc,
+            Length::inches(-6),
+            rim_z,
+            bay + pw + Length::inches(12),
+            jh,
+            "m rim",
+        );
+        rect(
+            &mut doc,
+            Length::inches(-6),
+            -deck_t,
+            bay + pw + Length::inches(12),
+            deck_t,
+            "m decking",
+        );
+        for x in [Length::ZERO, bay] {
+            rect(&mut doc, x, rim_z, pw, g.height - rim_z, "m post");
+            for bz in [rim_z + Length::inches(2), rim_z + jh - Length::inches(2)] {
+                doc.circle(f.x(x + half(pw)), f.y(bz), 1.6, "bolt");
+            }
+        }
+        let rw = Length::from_sixteenths(56);
+        rect(&mut doc, pw, g.height - rw, bay - pw, rw, "m rail");
+        rect(&mut doc, pw, MAX_GAP, bay - pw, rw, "m rail");
+        let bw = Length::from_sixteenths(24);
+        let clear = bay - pw;
+        let k = ((clear - MAX_GAP).sixteenths() + bw.sixteenths() + MAX_GAP.sixteenths() - 1)
+            / (bw + MAX_GAP).sixteenths();
+        let room = clear - bw * k;
+        for i in 0..k {
+            let x = pw + room.mul_div(i + 1, k + 1) + bw * i;
+            rect(&mut doc, x, MAX_GAP, bw, g.height - MAX_GAP, "m baluster");
+        }
+        let lx = f.x(bay + pw) + 14.0;
+        doc.dimension(
+            (lx, f.y(Length::ZERO)),
+            (lx, f.y(g.height)),
+            &format!("{:#} min.", g.height),
+        );
+        doc.dimension(
+            (lx + 22.0, f.y(Length::ZERO)),
+            (lx + 22.0, f.y(MAX_GAP)),
+            &format!("{MAX_GAP:#}"),
+        );
+        let dy = f.y(rim_z) + 16.0;
+        doc.dimension(
+            (f.x(half(pw)), dy),
+            (f.x(bay + half(pw)), dy),
+            &format!("{} max. post spacing here; 6' max.", bay),
+        );
+        doc.text(
+            f.x(bay.mul_div(1, 2)),
+            f.y(g.height) - 8.0,
+            "callout",
+            "middle",
+            &format!(
+                "Guard bay, seen from outside: balusters {:#} max. apart",
+                g.gap
+            ),
+        );
+        notes.push(format!(
+            "Guards: {:#} above the decking on every open side; 4x4 posts at {} max. o.c. outside the rim, each through-bolted with (2) 1/2\" bolts and tied to the next joist with a tension tie (Simpson DTT2Z or equal); 2x4 top and bottom rails on the posts' inner faces; 2x2 balusters screwed to the rails, gaps under 4\"; the bottom rail {:#} over the decking",
+            g.height, g.post_spacing, MAX_GAP
+        ));
+        notes.push("Guards and handrails are built for a 200 lb load at the top in any direction (IRC Table R301.5).".to_string());
+    }
+
+    if let Some(l) = &d.ledger {
+        notes.push(format!(
+            "Ledger: {} (2x8 min.), {} into the house's 2x band joist at {:#} o.c. staggered top and bottom, 2\" from the edges and 2\"-5\" from the ends ({:#} allowed for a {} joist span); not to brick veneer, I-joist rims or through siding; flashing over the ledger and lapped under the siding",
+            l.size,
+            l.fasteners.name(),
+            l.spacing,
+            l.allowed.unwrap_or_default(),
+            l.joist_span
+        ));
+        notes.push("Lateral: (2) hold-downs of 750 lb (Simpson DTT2Z or equal) within 24\" of the deck's ends, joists to the house floor framing (IRC R507.9.2).".to_string());
+    }
+
+    deck_header(&mut doc, deck, &title, &sub);
+    let mut y = PAGE_H - MARGIN - 150.0;
+    for n in &notes {
+        for (i, line) in wrap(n, 175).iter().enumerate() {
+            let text = if i == 0 {
+                format!("- {line}")
+            } else {
+                format!("  {line}")
+            };
+            doc.text(MARGIN, y, "callout", "start", &text);
+            y += 9.0;
+        }
+    }
+    doc.finish()
+}
+
+/// The lot seen from above with the street along the bottom: lot lines,
+/// the house, and the deck with its stairs, dimensioned to the lot lines.
+pub fn deck_site_svg(project: &str, deck: &Deck, d: &FramedDeck) -> Option<String> {
+    let site = deck.site.as_ref()?;
+    let title = match &site.address {
+        Some(a) => format!("{project}: site plan, {a}"),
+        None => format!("{project}: site plan"),
+    };
+    let mut doc = Doc::new(&title);
+    let (lw, ld) = (site.lot_width, site.lot_depth);
+    let area = (
+        MARGIN + 60.0,
+        MARGIN + 80.0,
+        PAGE_W - MARGIN - 110.0,
+        PAGE_H - MARGIN - 60.0,
+    );
+    let f = Frame::fit(
+        0.0,
+        -120.0,
+        lw.as_inches_f64(),
+        (ld + Length::inches(120)).as_inches_f64(),
+        area,
+    );
+    // The deck turned to face the back of the lot: its plan's front at the
+    // top, its plan's left on the right.
+    let front_y = ld - site.from_rear;
+    let to_site = |x: Length, y: Length| (site.from_left + d.width - x, front_y - y);
+    let (lo, hi) = deck_extent(d);
+    let (ax, ay) = to_site(lo.0, lo.1);
+    let (bx, by) = to_site(hi.0, hi.1);
+    let (sx0, sx1, sy0, sy1) = (ax.min(bx), ax.max(bx), ay.min(by), ay.max(by));
+    let near = sticks_rules::code::site_distances(deck, lo, hi)?;
+    deck_header(
+        &mut doc,
+        deck,
+        &title,
+        &[
+            format!(
+                "Lot {} wide by {} deep, the street along the bottom. Deck {} by {}, decking {} above grade. {}",
+                lw, ld, d.width, d.depth, d.heights.top, f.note()
+            ),
+            format!(
+                "Deck (stairs included) to the lot lines: {}{}",
+                near.iter()
+                    .map(|(n, l)| format!("{n} {l}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                site.setback
+                    .map(|s| format!("; zoning setback {s}"))
+                    .unwrap_or_default()
+            ),
+            "Check the distances against your house location survey (plat); attach a copy of it with the deck drawn on.".to_string(),
+        ],
+    );
+    let poly = |doc: &mut Doc, x0: Length, y0: Length, x1: Length, y1: Length, class: &str| {
+        doc.polygon(
+            &[
+                (f.x(x0), f.y(y0)),
+                (f.x(x1), f.y(y0)),
+                (f.x(x1), f.y(y1)),
+                (f.x(x0), f.y(y1)),
+            ],
+            class,
+        );
+    };
+    poly(&mut doc, Length::ZERO, Length::ZERO, lw, ld, "lot");
+    doc.text(
+        f.x(lw.mul_div(1, 2)),
+        f.y(Length::ZERO) + 28.0,
+        "sub",
+        "middle",
+        site.street.as_deref().unwrap_or("STREET"),
+    );
+    doc.line(
+        f.x(Length::ZERO),
+        f.y(Length::ZERO) + 14.0,
+        f.x(lw),
+        f.y(Length::ZERO) + 14.0,
+        "grade",
+    );
+    if let Some(hs) = &site.house {
+        poly(
+            &mut doc,
+            hs.from_left,
+            hs.from_street,
+            hs.from_left + hs.width,
+            hs.from_street + hs.depth,
+            "house",
+        );
+        doc.text(
+            f.x(hs.from_left + half(hs.width)),
+            f.y(hs.from_street + half(hs.depth)),
+            "callout",
+            "middle",
+            "HOUSE",
+        );
+    }
+    // The deck's outline and its stairs.
+    let draw = |doc: &mut Doc, r: &sticks_rules::Rect, class: &str| {
+        let (ax, ay) = to_site(r.x, r.y);
+        let (bx, by) = to_site(r.right(), r.top());
+        poly(doc, ax.min(bx), ay.min(by), ax.max(bx), ay.max(by), class);
+    };
+    let outline = sticks_rules::Rect {
+        x: Length::ZERO,
+        y: Length::ZERO,
+        w: d.width,
+        h: d.depth,
+    };
+    draw(&mut doc, &outline, "m decking");
+    for s in &d.stairs {
+        draw(&mut doc, &s.pad, "concrete");
+        for p in s
+            .members
+            .iter()
+            .filter(|p| p.member.kind == MemberKind::Tread)
+        {
+            draw(&mut doc, &p.rect, "m decking");
+        }
+    }
+    let (cx, cy) = to_site(half(d.width), half(d.depth));
+    doc.text(
+        f.x(cx),
+        f.y(cy) + 2.5,
+        "callout",
+        "middle",
+        &format!("DECK {} x {}", d.width, d.depth),
+    );
+    // Distances to the lot lines.
+    let my = f.y(sy0 + half(sy1 - sy0));
+    doc.dimension(
+        (f.x(Length::ZERO), my),
+        (f.x(sx0), my),
+        &near[0].1.to_string(),
+    );
+    doc.dimension((f.x(sx1), my), (f.x(lw), my), &near[1].1.to_string());
+    let mx = f.x(sx0 + half(sx1 - sx0));
+    doc.dimension((mx, f.y(sy1)), (mx, f.y(ld)), &near[2].1.to_string());
+    // Lot size, and a north arrow left for the builder to turn.
+    doc.dimension(
+        (f.x(lw) + 30.0, f.y(Length::ZERO)),
+        (f.x(lw) + 30.0, f.y(ld)),
+        &ld.to_string(),
+    );
+    doc.dimension(
+        (f.x(Length::ZERO), f.y(ld) - 14.0),
+        (f.x(lw), f.y(ld) - 14.0),
+        &lw.to_string(),
+    );
+    let (nx, ny) = (PAGE_W - MARGIN - 40.0, MARGIN + 110.0);
+    doc.line(nx, ny + 24.0, nx, ny - 10.0, "dim");
+    doc.polygon(
+        &[(nx, ny - 14.0), (nx - 5.0, ny - 2.0), (nx + 5.0, ny - 2.0)],
+        "bolt",
+    );
+    doc.text(nx, ny + 36.0, "sub", "middle", "N (turn to match the plat)");
+    Some(doc.finish())
 }
 
 /// Decking boards in plan, numbered to match the cut list.
@@ -1912,6 +2686,12 @@ fn checks_table(doc: &mut Doc, checks: &[CodeCheck], design: &str, mut y: f64) -
     y += 4.0;
     doc.line(MARGIN, y, PAGE_W - MARGIN, y, "rule");
     y += 9.0;
+    // A long list packs its rows closer so the notes and sign-off still fit.
+    let (line, gap) = if checks.len() > 18 {
+        (7.6, 1.0)
+    } else {
+        (8.5, 3.0)
+    };
     for c in checks {
         let cells = [&c.item, &c.actual, &c.allowed, &c.source];
         let wrapped: Vec<Vec<String>> = cells
@@ -1928,13 +2708,13 @@ fn checks_table(doc: &mut Doc, checks: &[CodeCheck], design: &str, mut y: f64) -
             if c.ok { "OK" } else { "FAIL" },
         );
         for (lines, (x, _, _)) in wrapped.iter().zip(&cols[1..]) {
-            for (i, line) in lines.iter().enumerate() {
-                doc.text(*x, y + i as f64 * 8.5, "cell", "start", line);
+            for (i, text) in lines.iter().enumerate() {
+                doc.text(*x, y + i as f64 * line, "cell", "start", text);
             }
         }
-        y += rows as f64 * 8.5 + 2.0;
+        y += rows as f64 * line + 2.0;
         doc.line(MARGIN, y - 6.0, PAGE_W - MARGIN, y - 6.0, "rule");
-        y += 3.0;
+        y += gap;
     }
     y
 }

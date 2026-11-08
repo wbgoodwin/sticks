@@ -204,13 +204,22 @@ name = "Strong-Drive SDWS Timber screw, 0.220 x 5\""
 joints = ["ledger_to_frame"]
 each = 2
 
-# The deck tied back to the building.
+# The deck tied back to the building, and guard posts tied to the joists.
 
 [[part]]
 model = "DTT2Z"
 name = "deck tension tie"
-joints = ["deck_lateral"]
+joints = ["deck_lateral", "guard_post"]
 note = "comes with its SDS screws; each needs a 1/2\" bolt through the rim"
+
+# Stair stringers hung on a deck rim.
+
+[[part]]
+model = "LSCZ"
+name = "adjustable stair-stringer connector"
+joints = ["stringer_on_rim"]
+nails = { "10d" = 14 }
+note = "fits 2x10 and 2x12 stringers"
 
 # Studs tied to the plates for high wind.
 

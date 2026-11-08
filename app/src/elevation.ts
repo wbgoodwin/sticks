@@ -62,6 +62,13 @@ export const KIND_NAMES: Record<MemberKind, string> = {
   collar_tie: "Collar tie",
   gable_stud: "Gable stud",
   decking: "Decking",
+  guard_post: "Guard post",
+  rail: "Rail",
+  baluster: "Baluster",
+  stringer: "Stringer",
+  tread: "Tread",
+  riser: "Riser",
+  handrail: "Handrail",
 };
 
 const SVG = "http://www.w3.org/2000/svg";

@@ -146,7 +146,29 @@ fn deck_solids(out: &mut Vec<Solid>, deck: &FramedDeck) {
         inches(h.beam_bottom),
         inches(h.pier_top),
     );
+    let rises: std::collections::HashMap<&str, &crate::deck_parts::Rise> =
+        deck.rises.iter().map(|r| (r.label.as_str(), r)).collect();
     for p in &deck.members {
+        if let Some(r) = rises.get(p.member.label.as_str()) {
+            let profile: Vec<[f64; 2]> = r
+                .profile
+                .iter()
+                .map(|&(c, z)| [inches(c), inches(z)])
+                .collect();
+            out.push(match (profile.is_empty(), r.along_x) {
+                (true, _) => plan_solid(p, "deck", inches(r.lo), inches(r.hi)),
+                (false, false) => side_solid(p, "deck", profile),
+                (false, true) => Solid {
+                    profile,
+                    origin: [0.0, inches(p.rect.y + p.rect.h), 0.0],
+                    u: [1.0, 0.0, 0.0],
+                    v: UP,
+                    depth: inches(p.rect.h),
+                    ..member_solid(p, "deck")
+                },
+            });
+            continue;
+        }
         let (lo, hi) = match p.member.kind {
             MemberKind::Decking => (jt, top),
             MemberKind::Beam => (bb, bt),
@@ -154,6 +176,21 @@ fn deck_solids(out: &mut Vec<Solid>, deck: &FramedDeck) {
             _ => (jb, jt),
         };
         out.push(plan_solid(p, "deck", lo, hi));
+    }
+    for (i, s) in deck.stairs.iter().enumerate() {
+        let r = &s.pad;
+        out.push(Solid {
+            label: format!("stair pad {}", i + 1),
+            part: "deck".to_string(),
+            kind: SolidKind::Other(OtherKind::Pier),
+            member: None,
+            profile: corners(r),
+            origin: [0.0, 0.0, -inches(crate::deck_parts::PAD_THICKNESS)],
+            u: [1.0, 0.0, 0.0],
+            v: [0.0, 1.0, 0.0],
+            depth: inches(crate::deck_parts::PAD_THICKNESS),
+            fails: Vec::new(),
+        });
     }
     for (i, (pier, footing)) in deck.piers.iter().zip(&deck.footings).enumerate() {
         let r = inches(footing.diameter) / 2.0;

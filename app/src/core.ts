@@ -24,7 +24,14 @@ export type MemberKind =
   | "ridge"
   | "collar_tie"
   | "gable_stud"
-  | "decking";
+  | "decking"
+  | "guard_post"
+  | "rail"
+  | "baluster"
+  | "stringer"
+  | "tread"
+  | "riser"
+  | "handrail";
 
 export interface MemberView {
   label: string;
@@ -248,6 +255,8 @@ export interface CutListView {
   on_hand: { boards: number; sheets: number; total_cents: number | null };
   /** Connectors and fasteners for the stages still to buy. */
   hardware: HardwareView;
+  /** Concrete for a deck's footings and stair pads, when still to buy. */
+  concrete?: string;
 }
 
 export interface HardwareView {
@@ -434,6 +443,37 @@ export interface DeckJson {
   live_psf?: number;
   frost_depth?: string;
   pier_above_grade?: string;
+  /** On its own footings, or hung from the house on a ledger along its back. */
+  attach?: "freestanding" | "ledger";
+  ledger_fasteners?: "lag_screws" | "bolts" | "bolts_with_spacers";
+  /** Guards where the code needs them (over 30"), always, or never. */
+  guards?: "auto" | "always" | "never";
+  stairs?: DeckStairsJson[];
+  site?: DeckSiteJson;
+}
+
+export type DeckSide = "front" | "back" | "left" | "right";
+
+/** A flight of stairs from the decking down to a pad at grade. */
+export interface DeckStairsJson {
+  side?: DeckSide;
+  /** From the start of the side (left end, or front end) to the stair's near edge. */
+  at?: string;
+  width?: string;
+  tread?: string;
+  stringer?: string;
+}
+
+/** The lot, street at the bottom, the deck's front facing the back of the lot. */
+export interface DeckSiteJson {
+  lot_width?: string;
+  lot_depth?: string;
+  from_left?: string;
+  from_rear?: string;
+  house?: { from_left?: string; from_street?: string; width?: string; depth?: string };
+  setback?: string;
+  street?: string;
+  address?: string;
 }
 
 /** Sheet thicknesses; a part left out isn't sheathed. */

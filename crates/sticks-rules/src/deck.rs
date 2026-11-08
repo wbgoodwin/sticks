@@ -6,11 +6,18 @@
 //! joists from the front edge. Heights are from the ground.
 
 use serde::Serialize;
-use sticks_core::{BeamStyle, Deck, DeckSupport, Length, MemberKind, Nominal, Rules, Stock};
+use sticks_core::{
+    BeamStyle, Deck, DeckAttach, DeckSide, DeckSupport, GuardRule, Length, MemberKind, Nominal,
+    Rules, Stock,
+};
 
 use crate::code::{
-    check_deck, effective_joist_span, footings, longest_beam_span, BeamLoad, CodeCheck, DeckLayout,
-    Footing,
+    check_deck, check_deck_parts, effective_joist_span, footings, longest_beam_span, BeamLoad,
+    CodeCheck, DeckLayout, Footing, GUARD_ABOVE,
+};
+use crate::deck_parts::{
+    cylinder, frame_guards, frame_ledger, frame_stairs, Concrete, Edge, FramedGuards, FramedLedger,
+    FramedStairs, Rise, PAD_THICKNESS,
 };
 use crate::floor::Pier;
 use crate::layout::{half, placed, LayoutMark, Placed, Rect, Splice};
@@ -69,6 +76,16 @@ pub struct FramedDeck {
     /// The design checked against the deck rules.
     pub checks: Vec<CodeCheck>,
     pub warnings: Vec<String>,
+    /// Guards along the open sides, when it has them.
+    pub guards: Option<FramedGuards>,
+    pub stairs: Vec<FramedStairs>,
+    /// The ledger on the house, for a deck fastened to it.
+    pub ledger: Option<FramedLedger>,
+    /// Heights of guard and stair pieces, which don't sit at the framing's
+    /// levels.
+    pub rises: Vec<Rise>,
+    /// Concrete for the footings and stair pads.
+    pub concrete: Concrete,
 }
 
 impl FramedDeck {
@@ -96,10 +113,13 @@ pub fn frame_deck(deck: &Deck, rules: &Rules, stock: &[Stock]) -> Result<FramedD
     if width < t * 4 || depth < t * 4 {
         return Err(fail(format!("{width} by {depth} is too small to frame")));
     }
-    if deck.beams < 2 {
-        return Err(fail(
-            "needs at least two beam lines, one near each end of the joists".to_string(),
-        ));
+    let ledger = deck.attach == DeckAttach::Ledger;
+    if deck.beams < 1 || (!ledger && deck.beams < 2) {
+        return Err(fail(if ledger {
+            "needs at least one beam line under the joists' outer ends".to_string()
+        } else {
+            "needs at least two beam lines, one near each end of the joists".to_string()
+        }));
     }
     if deck.beam_plies == 0 {
         return Err(fail("a beam needs at least one ply".to_string()));
@@ -121,7 +141,11 @@ pub fn frame_deck(deck: &Deck, rules: &Rules, stock: &[Stock]) -> Result<FramedD
     let ply = deck.beam.actual_thickness();
     let bw = ply * i64::from(deck.beam_plies);
     let n = i64::from(deck.beams);
-    let reach = depth - deck.overhang * 2;
+    let reach = if ledger {
+        depth - deck.overhang - t
+    } else {
+        depth - deck.overhang * 2
+    };
     if bw * n > reach {
         return Err(fail(format!(
             "{} beams {bw:#} wide don't fit in {depth} of joists",
@@ -169,40 +193,58 @@ pub fn frame_deck(deck: &Deck, rules: &Rules, stock: &[Stock]) -> Result<FramedD
     };
 
     // Beam lines: the outer two at the ends of the joists, less any
-    // overhang; the rest evenly between, by their centers.
+    // overhang, the rest evenly between, by their centers. On a ledger deck
+    // the ledger's face is the back bearing, and the beams share out the
+    // room in front of it.
     let first = deck.overhang;
-    let last = depth - deck.overhang - bw;
-    let beam_face: Vec<Length> = (0..n)
-        .map(|i| first + (last - first).mul_div(i, n - 1))
-        .collect();
-    let beam_y: Vec<Length> = beam_face.iter().map(|&y| y + half(bw)).collect();
-    let joist_spans: Vec<Length> = beam_y.windows(2).map(|w| w[1] - w[0]).collect();
-    let overhangs = if flush {
-        [Length::ZERO, Length::ZERO]
+    let ledger_face = depth - t;
+    let beam_face: Vec<Length> = if ledger {
+        let front = first + half(bw);
+        (0..n)
+            .map(|i| front + (ledger_face - front).mul_div(i, n) - half(bw))
+            .collect()
     } else {
-        [beam_y[0], depth - beam_y[beam_y.len() - 1]]
+        let last = depth - deck.overhang - bw;
+        (0..n)
+            .map(|i| first + (last - first).mul_div(i, n - 1))
+            .collect()
+    };
+    let beam_y: Vec<Length> = beam_face.iter().map(|&y| y + half(bw)).collect();
+    let mut bearings = beam_y.clone();
+    if ledger {
+        bearings.push(ledger_face);
+    }
+    let joist_spans: Vec<Length> = bearings.windows(2).map(|w| w[1] - w[0]).collect();
+    let overhangs = match (flush, ledger) {
+        (true, _) => [Length::ZERO, Length::ZERO],
+        (false, true) => [beam_y[0], Length::ZERO],
+        (false, false) => [beam_y[0], depth - beam_y[beam_y.len() - 1]],
     };
 
-    // What each beam carries.
+    // What each beam carries: the joist span on each side, or the overhang
+    // where there's no span.
     let count = beam_y.len();
     let mut loads: Vec<(String, Length, Length)> = Vec::new();
     for i in 0..count {
         let name = match i {
+            0 if count == 1 => "beam".to_string(),
             0 => "front beam".to_string(),
-            i if i == count - 1 => "back beam".to_string(),
+            i if i == count - 1 && !ledger => "back beam".to_string(),
             i => format!("beam {}", i + 1),
         };
-        let (influence, effective) = if i == 0 || i == count - 1 {
-            let back = if i == 0 {
-                joist_spans[0]
-            } else {
-                joist_spans[count - 2]
-            };
-            let over = overhangs[usize::from(i != 0)];
-            (half(back) + over, effective_joist_span(back, over))
-        } else {
-            let (a, b) = (joist_spans[i - 1], joist_spans[i]);
-            (half(a + b), a + b)
+        let front = (i > 0).then(|| joist_spans[i - 1]);
+        let back = joist_spans.get(i).copied();
+        let (influence, effective) = match (front, back) {
+            (Some(a), Some(b)) => (half(a + b), a + b),
+            (None, Some(span)) => (
+                half(span) + overhangs[0],
+                effective_joist_span(span, overhangs[0]),
+            ),
+            (Some(span), None) => (
+                half(span) + overhangs[1],
+                effective_joist_span(span, overhangs[1]),
+            ),
+            (None, None) => unreachable!("every beam has a span on one side"),
         };
         loads.push((name, influence, effective));
     }
@@ -253,13 +295,41 @@ pub fn frame_deck(deck: &Deck, rules: &Rules, stock: &[Stock]) -> Result<FramedD
     let mut warnings = Vec::new();
     let (joist_x, centers) = joist_layout(width, oc, t, rules.layout_from);
 
+    // The ledger along the back, in place of a rim, at least a 2x8.
+    let ledger_size = if joist.actual_width() < Nominal::new(2, 8).actual_width() {
+        joist.with_width(8)
+    } else {
+        joist
+    };
+    if ledger {
+        let joints = joints_over_joists("ledger", ledger_size, width, &centers, stock, rules)
+            .map_err(fail)?;
+        members.extend(run_pieces(
+            "deck-LG",
+            1,
+            MemberKind::Ledger,
+            ledger_size,
+            width,
+            ledger_face,
+            t,
+            &joints,
+        ));
+        splices.extend(joints.iter().map(|&at| Splice {
+            kind: MemberKind::Ledger,
+            at,
+        }));
+    }
     if flush {
         // Joists hang between each pair of beams; the outer beams are the
-        // deck's front and back edges.
-        let bays = beam_face.len() - 1;
+        // deck's front and back edges, or the ledger is its back.
+        let mut faces: Vec<(Length, Length)> = beam_face.iter().map(|&y| (y, y + bw)).collect();
+        if ledger {
+            faces.push((ledger_face, depth));
+        }
+        let bays = faces.len() - 1;
         for (i, &x) in joist_x.iter().enumerate() {
             for b in 0..bays {
-                let (a, z) = (beam_face[b] + bw, beam_face[b + 1]);
+                let (a, z) = (faces[b].1, faces[b + 1].0);
                 let mut label = format!("deck-J{:02}", i + 1);
                 if bays > 1 {
                     label.push((b'a' + b as u8) as char);
@@ -284,7 +354,12 @@ pub fn frame_deck(deck: &Deck, rules: &Rules, stock: &[Stock]) -> Result<FramedD
         let rim_joints =
             joints_over_joists("rim", joist, width, &centers, stock, rules).map_err(fail)?;
         let mut rim_count = 0;
-        for y in [Length::ZERO, depth - t] {
+        let rim_ys: &[Length] = if ledger {
+            &[Length::ZERO]
+        } else {
+            &[Length::ZERO, depth - t]
+        };
+        for &y in rim_ys {
             let rims = run_pieces(
                 "deck-RJ",
                 rim_count + 1,
@@ -317,7 +392,12 @@ pub fn frame_deck(deck: &Deck, rules: &Rules, stock: &[Stock]) -> Result<FramedD
             ));
         }
         let mut blocks = 0;
-        for &y in &beam_y[1..beam_y.len() - 1] {
+        let inner = if ledger {
+            &beam_y[1..]
+        } else {
+            &beam_y[1..beam_y.len() - 1]
+        };
+        for &y in inner {
             for pair in joist_x.windows(2) {
                 blocks += 1;
                 members.push(placed(
@@ -435,7 +515,109 @@ pub fn frame_deck(deck: &Deck, rules: &Rules, stock: &[Stock]) -> Result<FramedD
         .iter()
         .flat_map(|b| footings(deck, b, post_width))
         .collect();
-    let checks = check_deck(deck, &layout);
+    let mut checks = check_deck(deck, &layout);
+
+    // Guards on the open sides, stairs, and the ledger's fasteners.
+    let edge = Edge {
+        deck,
+        width,
+        depth,
+        top,
+        joist_bottom,
+        stock,
+        rules,
+    };
+    let open: Vec<DeckSide> = [
+        DeckSide::Front,
+        DeckSide::Left,
+        DeckSide::Right,
+        DeckSide::Back,
+    ]
+    .into_iter()
+    .filter(|&s| !(ledger && s == DeckSide::Back))
+    .collect();
+    let want_guards = match deck.guards {
+        GuardRule::Auto => top > GUARD_ABOVE,
+        GuardRule::Always => true,
+        GuardRule::Never => false,
+    };
+    let guards = if want_guards {
+        let g = frame_guards(&edge, &open).map_err(fail)?;
+        members.extend(g.members.iter().cloned());
+        Some(g)
+    } else {
+        None
+    };
+    let guard_posts: Vec<Rect> = guards
+        .iter()
+        .flat_map(|g| &g.members)
+        .filter(|p| p.member.kind == MemberKind::GuardPost)
+        .map(|p| p.rect)
+        .collect();
+    let mut stairs = Vec::new();
+    for (i, s) in deck.stairs.iter().enumerate() {
+        if ledger && s.side == DeckSide::Back {
+            return Err(fail(
+                "stairs can't leave from the back; that's the ledger on the house".to_string(),
+            ));
+        }
+        let st = frame_stairs(&edge, i + 1, s, &guard_posts).map_err(fail)?;
+        members.extend(st.members.iter().cloned());
+        stairs.push(st);
+    }
+    let ledger_parts = ledger.then(|| {
+        frame_ledger(
+            ledger_size,
+            deck.ledger_fasteners,
+            width,
+            layout.joist_spans.last().copied().unwrap_or_default(),
+        )
+    });
+    checks.extend(check_deck_parts(
+        deck,
+        guards.as_ref(),
+        &stairs,
+        ledger_parts.as_ref(),
+    ));
+    let (mut lo, mut hi) = ((Length::ZERO, Length::ZERO), (width, depth));
+    for r in members
+        .iter()
+        .map(|p| p.rect)
+        .chain(stairs.iter().map(|s| s.pad))
+    {
+        lo = (lo.0.min(r.x), lo.1.min(r.y));
+        hi = (hi.0.max(r.right()), hi.1.max(r.top()));
+    }
+    checks.extend(crate::code::check_site(deck, lo, hi));
+    let mut rises: Vec<Rise> = guards.iter().flat_map(|g| g.rises.clone()).collect();
+    rises.extend(stairs.iter().flat_map(|s| s.rises.clone()));
+
+    // Concrete: each footing a round column from its bottom up to the pier
+    // top, and a pad at the foot of each stair.
+    let concrete = Concrete {
+        footings: footing_list
+            .iter()
+            .map(|f| cylinder(f.diameter, f.depth + pier_top))
+            .sum(),
+        footing_count: footing_list.len(),
+        pads: stairs
+            .iter()
+            .map(|s| {
+                let (w, d) = (s.pad.w.as_inches_f64(), s.pad.h.as_inches_f64());
+                (w * d * PAD_THICKNESS.as_inches_f64()).ceil() as i64
+            })
+            .sum(),
+        pad_count: stairs.len(),
+    };
+    let concrete = if deck.support == DeckSupport::Blocks {
+        Concrete {
+            footings: 0,
+            footing_count: 0,
+            ..concrete
+        }
+    } else {
+        concrete
+    };
 
     Ok(FramedDeck {
         width,
@@ -463,6 +645,11 @@ pub fn frame_deck(deck: &Deck, rules: &Rules, stock: &[Stock]) -> Result<FramedD
         layout,
         checks,
         warnings,
+        guards,
+        stairs,
+        ledger: ledger_parts,
+        rises,
+        concrete,
     })
 }
 
@@ -572,5 +759,138 @@ mod tests {
         assert_eq!(d.beam_y[0], l("19-1/2"));
         assert_eq!(d.layout.overhangs[0], l("19-1/2"));
         assert!(d.passes(), "{:?}", failing(&d));
+    }
+}
+
+#[cfg(test)]
+mod parts_tests {
+    use super::*;
+    use sticks_core::Project;
+
+    fn l(s: &str) -> Length {
+        s.parse().unwrap()
+    }
+
+    fn deck(extra: &str) -> FramedDeck {
+        let p = Project::from_toml(&format!("name = \"Deck\"\n[deck]\n{extra}")).unwrap();
+        frame_deck(p.deck.as_ref().unwrap(), &p.rules, &p.stock).unwrap()
+    }
+
+    fn count(d: &FramedDeck, kind: MemberKind) -> usize {
+        d.members.iter().filter(|p| p.member.kind == kind).count()
+    }
+
+    fn failing(d: &FramedDeck) -> Vec<String> {
+        d.checks
+            .iter()
+            .filter(|c| !c.ok)
+            .map(|c| format!("{}: {} vs {}", c.item, c.actual, c.allowed))
+            .collect()
+    }
+
+    #[test]
+    fn a_low_deck_has_no_guards() {
+        let d = deck("height = \"28\"");
+        assert!(d.guards.is_none());
+        assert_eq!(count(&d, MemberKind::GuardPost), 0);
+        assert!(d.passes(), "{:?}", failing(&d));
+    }
+
+    /// 36" up, 12' square: guards on all four sides, posts no more than 6'
+    /// apart, and no gap a 4" ball gets through.
+    #[test]
+    fn a_high_deck_gets_guards_all_round() {
+        let d = deck("height = \"36\"\nsupport = \"posts\"");
+        let g = d.guards.as_ref().unwrap();
+        assert_eq!(g.sides.len(), 4);
+        assert!(g.post_spacing <= l("6'"));
+        assert!(g.gap < l("4"), "{}", g.gap);
+        // Three posts a side: two bays of about 5' 10" on a 12' side.
+        assert_eq!(g.posts, 12);
+        // Posts run from the bottom of the rim to 36" over the decking.
+        let post = d
+            .members
+            .iter()
+            .find(|p| p.member.kind == MemberKind::GuardPost)
+            .unwrap();
+        assert_eq!(
+            post.member.length,
+            l("36") + l("36") - d.heights.joist_bottom
+        );
+        assert!(d.passes(), "{:?}", failing(&d));
+        let never = deck("height = \"36\"\nsupport = \"posts\"\nguards = \"never\"");
+        assert!(failing(&never).iter().any(|c| c.starts_with("Guards")));
+    }
+
+    /// 28" up: four risers of 7", three treads of two 2x6s, three 2x12
+    /// stringers for a 36" stair, a handrail, and a pad at the foot.
+    #[test]
+    fn stairs_down_from_a_low_deck() {
+        let d = deck("height = \"28\"\n[[deck.stairs]]\nside = \"front\"\nat = \"4'\"");
+        let s = &d.stairs[0];
+        assert_eq!(s.risers, 4);
+        assert_eq!(s.riser, l("7"));
+        assert_eq!(s.run, l("10-1/4"));
+        assert_eq!(s.total_run, l("30-3/4"));
+        assert_eq!(s.stringers, 3);
+        assert!(s.handrail && !s.guards && !s.closed_risers);
+        assert!(s.throat >= l("5"), "{}", s.throat);
+        assert_eq!(count(&d, MemberKind::Stringer), 3);
+        assert_eq!(count(&d, MemberKind::Tread), 6);
+        assert_eq!(count(&d, MemberKind::Handrail), 1);
+        // The pad starts under the stringers' feet and runs 36" out.
+        assert_eq!(s.pad.y, -(s.total_run + l("36")));
+        assert!(d.concrete.pads > 0);
+        assert!(d.passes(), "{:?}", failing(&d));
+    }
+
+    /// A high stair shares the deck's guard posts at its top and gets guards
+    /// and closed risers of its own.
+    #[test]
+    fn high_stairs_get_guards() {
+        let d = deck(
+            "height = \"40\"\nsupport = \"posts\"\npost = \"6x6\"\n[[deck.stairs]]\nside = \"left\"\nat = \"3'\"",
+        );
+        let s = &d.stairs[0];
+        assert_eq!(s.risers, 6);
+        assert!(s.guards && s.closed_risers);
+        // Top posts were already the deck's, so only the two at the foot.
+        let posts = s
+            .members
+            .iter()
+            .filter(|p| p.member.kind == MemberKind::GuardPost)
+            .count();
+        assert_eq!(posts, 2);
+        assert_eq!(count(&d, MemberKind::Riser), 5);
+        assert!(d.passes(), "{:?}", failing(&d));
+    }
+
+    /// Fastened to the house: one beam out front, the joists hung from a
+    /// 2x8 ledger, its lag screws spaced by the IRC table.
+    #[test]
+    fn a_ledger_deck() {
+        let d = deck(
+            "attach = \"ledger\"\nbeams = 1\nheight = \"28\"\noverhang = \"12\"\ndepth = \"10'\"",
+        );
+        assert_eq!(d.beam_y.len(), 1);
+        assert_eq!(count(&d, MemberKind::Ledger), 1);
+        assert_eq!(count(&d, MemberKind::RimJoist), 1);
+        let ledger = d.ledger.as_ref().unwrap();
+        // Beam at 12" + 1-1/2", ledger face at 118-1/2": 8' 9" span, so
+        // lags at 18" o.c. at most.
+        assert_eq!(ledger.joist_span, l("105"));
+        assert_eq!(ledger.allowed, Some(l("18")));
+        assert!(ledger.spacing <= l("18"));
+        assert_eq!(d.layout.overhangs, [l("13-1/2"), Length::ZERO]);
+        assert!(d.passes(), "{:?}", failing(&d));
+        assert!(!d.checks.iter().any(|c| c.item == "Lateral bracing"));
+    }
+
+    #[test]
+    fn concrete_adds_up() {
+        let d = deck("");
+        // Six 12" round footings... at least something for each.
+        assert_eq!(d.concrete.footing_count, 6);
+        assert!(d.concrete.cubic_feet() > 1.0);
     }
 }
