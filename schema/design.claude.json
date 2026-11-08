@@ -1,0 +1,1355 @@
+{
+  "$defs": {
+    "Against": {
+      "additionalProperties": false,
+      "description": "Which structure this one is built against, and on which side.",
+      "properties": {
+        "side": {
+          "$ref": "#/$defs/PorchSide"
+        },
+        "structure": {
+          "description": "The id of a building in this design.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "structure",
+        "side"
+      ],
+      "type": "object"
+    },
+    "BeamStyle": {
+      "anyOf": [
+        {
+          "const": "under",
+          "description": "Joists sit on top of the beams and may run past them.",
+          "type": "string"
+        },
+        {
+          "const": "flush",
+          "description": "Joists hang in hangers between beams level with them, for a deck too\nlow for beams underneath.",
+          "type": "string"
+        }
+      ]
+    },
+    "DeckCode": {
+      "anyOf": [
+        {
+          "const": "irc2021",
+          "description": "The International Residential Code's prescriptive deck tables\n(R507), with no local changes.",
+          "type": "string"
+        },
+        {
+          "const": "fairfax2021",
+          "description": "Fairfax County, Virginia's Typical Deck Details (2021 Virginia\nResidential Code), which permit drawings there may follow.",
+          "type": "string"
+        }
+      ],
+      "description": "A set of deck rules to check a deck against."
+    },
+    "DeckSupport": {
+      "anyOf": [
+        {
+          "const": "piers",
+          "description": "Beams straight on concrete piers.",
+          "type": "string"
+        },
+        {
+          "const": "posts",
+          "description": "Beams on posts, each post on a concrete pier.",
+          "type": "string"
+        },
+        {
+          "const": "blocks",
+          "description": "Beams on precast concrete deck blocks set on the ground.",
+          "type": "string"
+        }
+      ]
+    },
+    "DeckingMaterial": {
+      "anyOf": [
+        {
+          "const": "wood",
+          "description": "Wood boards: 5/4 boards span 16\", 2x boards 24\".",
+          "type": "string"
+        },
+        {
+          "const": "composite",
+          "description": "Plastic or wood-plastic composite boards, which span what their\nmaker's listing says.",
+          "type": "string"
+        }
+      ]
+    },
+    "FloorSpec": {
+      "additionalProperties": false,
+      "description": "A floor platform on beams, covering the building's footprint. Joists\nrun front to back; beams and rim joists run along the front.",
+      "properties": {
+        "beam": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Beam size. Default 4x6."
+        },
+        "beam_plies": {
+          "description": "Boards laminated into each beam, such as 2 for a doubled 2x8.\nDefault 1.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "beams": {
+          "description": "Beam lines, front to back, the outer two under the rims.\nDefault 2.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "joist": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Joist and rim size. Default 2x6."
+        },
+        "on_center": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Joist spacing, on center. Defaults to the framing spacing."
+        },
+        "pier_inset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "From each end of a beam to the center of its end pier.\nDefault 12\"."
+        },
+        "pier_spacing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Most room between piers along a beam. Default 6'."
+        },
+        "post": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Post size, when the beams sit on posts. Default 4x4."
+        },
+        "post_height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Post length, pier top to beam bottom, when the beams sit on\nposts. Default 12\"."
+        },
+        "subfloor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Subfloor sheet thickness. Default 3/4\"."
+        },
+        "support": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FloorSupport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the beams sit on. Default piers."
+        }
+      },
+      "type": "object"
+    },
+    "FloorSupport": {
+      "anyOf": [
+        {
+          "const": "piers",
+          "description": "Beams on piers; beam joints land on a pier.",
+          "type": "string"
+        },
+        {
+          "const": "skids",
+          "description": "Beams laid on grade as skids; no piers.",
+          "type": "string"
+        },
+        {
+          "const": "posts",
+          "description": "Beams on short posts, each post on a pier; beam joints land on a post.",
+          "type": "string"
+        }
+      ]
+    },
+    "FramingSpec": {
+      "additionalProperties": false,
+      "description": "Framing conventions shared by every structure.",
+      "properties": {
+        "layout_from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutStart"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which end of each wall the stud layout is measured from, seen\nfrom outside. Default left."
+        },
+        "on_center": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Stud, joist and rafter spacing, on center. Default 16\"."
+        },
+        "wall_lumber": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lumber size for wall studs and plates. Default 2x4."
+        }
+      },
+      "type": "object"
+    },
+    "FramingSpecies": {
+      "anyOf": [
+        {
+          "enum": [
+            "douglas_fir_larch",
+            "hem_fir"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "southern_pine",
+          "description": "Southern yellow pine, the usual pressure-treated and framing lumber\nin the Southeast and Mid-Atlantic.",
+          "type": "string"
+        },
+        {
+          "const": "spruce_pine_fir",
+          "description": "Spruce-pine-fir, the usual kiln-dried \"SPF\" stud and framing stock.",
+          "type": "string"
+        }
+      ],
+      "description": "Species of framing lumber in the code's joist and rafter span tables\n(IRC R802.4.1), all No. 2 grade."
+    },
+    "LayoutStart": {
+      "enum": [
+        "left",
+        "right"
+      ],
+      "type": "string"
+    },
+    "Length": {
+      "description": "A length in builder notation: feet with ', inches with \", fractions to the sixteenth, like \"12'\", \"7' 3\\\"\", \"38-1/2\\\"\" or \"3/4\\\"\".",
+      "type": "string"
+    },
+    "Nominal": {
+      "description": "A nominal lumber size, thickness by width, like \"2x6\". 5/4 sizes are decking.",
+      "enum": [
+        "1x4",
+        "1x6",
+        "1x8",
+        "1x10",
+        "1x12",
+        "5/4x4",
+        "5/4x6",
+        "2x3",
+        "2x4",
+        "2x6",
+        "2x8",
+        "2x10",
+        "2x12",
+        "4x4",
+        "4x6",
+        "4x8",
+        "4x10",
+        "4x12",
+        "6x6",
+        "6x8"
+      ],
+      "type": "string"
+    },
+    "OpeningKind": {
+      "anyOf": [
+        {
+          "enum": [
+            "door",
+            "window"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "penetration",
+          "description": "A small penetration, such as a mini-split line set.",
+          "type": "string"
+        }
+      ]
+    },
+    "OpeningSpec": {
+      "additionalProperties": false,
+      "description": "A door, window or small penetration in a wall. Sizes are rough openings,\nthe framed hole.",
+      "properties": {
+        "header": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Header size over the opening. Default 2x8 for a door, 2x6 for a\nwindow, 2x4 for a penetration. Sticks doesn't size headers yet."
+        },
+        "height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Rough opening height. Default 82-1/2\" for a door, 36\" for a window,\n4\" for a penetration."
+        },
+        "kind": {
+          "$ref": "#/$defs/OpeningKind"
+        },
+        "place": {
+          "$ref": "#/$defs/Place",
+          "description": "Where it goes along the wall."
+        },
+        "sill_height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Bottom of the rough opening above the floor. Default 0\" for a door,\n44\" for a window, 1' for a penetration."
+        },
+        "width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Rough opening width. Default 38-1/2\" for a door (a 36\" door slab),\n36\" for a window, 4\" for a penetration."
+        }
+      },
+      "required": [
+        "kind",
+        "place"
+      ],
+      "type": "object"
+    },
+    "Pitch": {
+      "description": "Roof pitch as inches of rise per 12\" of run, written like \"4:12\" or \"3-1/2:12\". The rise is more than 0 and less than 24.",
+      "type": "string"
+    },
+    "Place": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "Its left side `distance` from the wall's left end.",
+          "properties": {
+            "distance": {
+              "$ref": "#/$defs/Length"
+            },
+            "from": {
+              "const": "left",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "distance"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Its right side `distance` from the wall's right end.",
+          "properties": {
+            "distance": {
+              "$ref": "#/$defs/Length"
+            },
+            "from": {
+              "const": "right",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "distance"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Centered along the wall.",
+          "properties": {
+            "from": {
+              "const": "center",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Where an opening sits along its wall, seen from outside."
+    },
+    "PorchDeckSpec": {
+      "additionalProperties": false,
+      "description": "A deck under a porch: joists hung from the building's floor rim out\nto a beam on piers, with decking across them.",
+      "properties": {
+        "beam": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Beam size, under the outer rim. Default 4x6."
+        },
+        "decking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Decking boards, laid along the front. Default 5/4x6."
+        },
+        "gap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Space between decking boards. Default 1/8\"."
+        },
+        "joist": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Joist, rim and ledger size. Defaults to the floor's joists."
+        },
+        "step_down": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How far the top of the decking sits below the subfloor.\nDefault 1\"."
+        }
+      },
+      "type": "object"
+    },
+    "PorchSide": {
+      "description": "The side of a building a porch can go on. Only the front for now.",
+      "enum": [
+        "front"
+      ],
+      "type": "string"
+    },
+    "RoofKind": {
+      "anyOf": [
+        {
+          "const": "lean_to",
+          "description": "A single slope, high at the front wall and low at the back.",
+          "type": "string"
+        },
+        {
+          "const": "gable",
+          "description": "Two slopes meeting at a ridge that runs along the front, with the\ngables over the side walls.",
+          "type": "string"
+        }
+      ]
+    },
+    "RoofSpec": {
+      "additionalProperties": false,
+      "description": "The roof over a building.",
+      "properties": {
+        "back_overhang": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Level distance the rafters run past the back wall. Default 12\"."
+        },
+        "ceiling": {
+          "description": "Whether a ceiling is fastened to the underside of the rafters.\nDefault no.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "collar_tie": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Gable roofs: collar ties across rafter pairs. Default 2x4."
+        },
+        "dead_psf": {
+          "description": "Weight of the roof itself, pounds per square foot: 10 for\nasphalt shingles or metal, 20 for heavier roofing. Default 10.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fascia": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Fascia size. Defaults to two sizes up from the rafter."
+        },
+        "front_overhang": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Level distance the rafters run past the front wall. Default 12\"."
+        },
+        "ground_snow_psf": {
+          "description": "Ground snow load where it's built, pounds per square foot. Ask\nthe building department. Default 30.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoofKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lean-to (one slope, high at the front) or gable (a ridge along\nthe front, gables over the side walls). Default lean-to."
+        },
+        "on_center": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Rafter spacing, on center. Defaults to the framing spacing."
+        },
+        "pitch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pitch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default 4:12."
+        },
+        "rafter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Rafter size. Default 2x6."
+        },
+        "ridge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Nominal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Gable roofs: the ridge board. Defaults to two sizes up from the\nrafter."
+        },
+        "species": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FramingSpecies"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Species of the rafters, for the span tables. Default southern\npine."
+        }
+      },
+      "type": "object"
+    },
+    "Sheathing": {
+      "additionalProperties": false,
+      "description": "Sheathing on the outside walls and the roof. Leave a thickness out to skip\nthat part.",
+      "properties": {
+        "roof": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Roof sheathing thickness, such as 1/2\". Also covers the porch roof."
+        },
+        "wall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Wall sheathing thickness, such as 7/16\"."
+        }
+      },
+      "type": "object"
+    },
+    "Side": {
+      "description": "A side of a building. Front and back run along its width; left and right,\nseen from outside the front, run along its depth.",
+      "enum": [
+        "front",
+        "back",
+        "left",
+        "right"
+      ],
+      "type": "string"
+    },
+    "SideWall": {
+      "additionalProperties": false,
+      "description": "One of a building's four outside walls and what goes in it.",
+      "properties": {
+        "openings": {
+          "description": "Doors, windows and penetrations in this wall.",
+          "items": {
+            "$ref": "#/$defs/OpeningSpec"
+          },
+          "type": "array"
+        },
+        "side": {
+          "$ref": "#/$defs/Side"
+        },
+        "tees": {
+          "description": "Centers of inside partitions that tee into this wall, measured from\nits left end seen from outside.",
+          "items": {
+            "$ref": "#/$defs/Length"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "side"
+      ],
+      "type": "object"
+    },
+    "Species": {
+      "anyOf": [
+        {
+          "enum": [
+            "southern_pine"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "douglas_fir",
+          "description": "Douglas fir-larch, hem-fir and spruce-pine-fir, incised for treatment.",
+          "type": "string"
+        },
+        {
+          "const": "redwood",
+          "description": "Redwood, western cedars, ponderosa pine and red pine.",
+          "type": "string"
+        }
+      ],
+      "description": "Wood species groups in the code's deck span tables."
+    },
+    "Structure": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "A rectangular building, like a shed: four outside stud walls, on a\nfloor platform or not, under a roof or not.",
+          "properties": {
+            "depth": {
+              "$ref": "#/$defs/Length",
+              "description": "Outside to outside, front to back."
+            },
+            "floor": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FloorSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The floor platform the walls stand on. Leave it out when the walls\nstand on a slab."
+            },
+            "height": {
+              "$ref": "#/$defs/Length",
+              "description": "The front wall, subfloor to top of plates. Under a lean-to roof this\nis the high wall and the others follow the pitch down to the back;\nunder a gable roof every wall is this tall."
+            },
+            "id": {
+              "description": "A short name other structures use to refer to it, like \"shed\".",
+              "type": "string"
+            },
+            "kind": {
+              "const": "building",
+              "type": "string"
+            },
+            "roof": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RoofSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The roof. Leave it out for walls only."
+            },
+            "sheathing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Sheathing"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sheathing on the outside walls and roof. Leave it out, or leave out a\nthickness, to skip that part."
+            },
+            "walls": {
+              "description": "Doors, windows and tees on the four outside walls. List a wall only\nwhen something goes in it.",
+              "items": {
+                "$ref": "#/$defs/SideWall"
+              },
+              "type": "array"
+            },
+            "width": {
+              "$ref": "#/$defs/Length",
+              "description": "Outside to outside, along the front wall."
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "width",
+            "depth",
+            "height"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A covered porch across the front of a building: posts on piers, a\nbeam on the posts, and a roof hung from a ledger on the front wall.\nIt can have a deck under it.",
+          "properties": {
+            "against": {
+              "$ref": "#/$defs/Against",
+              "description": "The building it's built against."
+            },
+            "beam": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Nominal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Beam size. Default 2x8."
+            },
+            "beam_plies": {
+              "description": "Boards laminated into the beam. Default 2.",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "deck": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PorchDeckSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A deck under the porch roof, a step below the building's floor.\nLeave it out for open ground."
+            },
+            "depth": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "From the front wall's outside face to the outside of the posts.\nDefault 6'."
+            },
+            "id": {
+              "description": "A short name for it, like \"porch\".",
+              "type": "string"
+            },
+            "kind": {
+              "const": "porch",
+              "type": "string"
+            },
+            "ledger": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Nominal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ledger size. Defaults to two sizes up from the rafter."
+            },
+            "ledger_height": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Top of the ledger above the subfloor. Defaults to just under the\nfront wall's top plates."
+            },
+            "overhang": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Level distance the rafters run past the beam. Default 12\"."
+            },
+            "pitch": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Pitch"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Defaults to the building's roof pitch."
+            },
+            "post": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Nominal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Post size. Default 4x4."
+            },
+            "post_spacing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Most room between posts, center to center. Default 8'."
+            },
+            "rafter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Nominal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Rafter size. Defaults to the building's rafters."
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "against"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A deck standing on its own footings, away from any building.",
+          "properties": {
+            "beam": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Nominal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Beam board size. Default 2x8."
+            },
+            "beam_plies": {
+              "description": "Boards laminated into each beam. Default 2.",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "beam_style": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BeamStyle"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether the joists sit on the beams (under) or hang between them\nlevel with them (flush, for a low deck). Default under."
+            },
+            "beams": {
+              "description": "Beam lines across the joists, the outer two near the ends.\nDefault 2.",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "code": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DeckCode"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Which deck rules to check against. Default the 2021 IRC."
+            },
+            "decking": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Nominal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Decking boards, laid across the joists. Default 5/4x6."
+            },
+            "decking_material": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DeckingMaterial"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Wood or composite decking. Default wood."
+            },
+            "depth": {
+              "$ref": "#/$defs/Length",
+              "description": "Along the joists, outside to outside."
+            },
+            "frost_depth": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Local frost depth the footings go below. Ask the building\ndepartment."
+            },
+            "gap": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Space between decking boards. Default 1/8\"."
+            },
+            "height": {
+              "$ref": "#/$defs/Length",
+              "description": "Ground to the top of the decking. Over 30\" needs guards, which\nSticks doesn't draw yet."
+            },
+            "id": {
+              "description": "A short name for it, like \"deck\".",
+              "type": "string"
+            },
+            "joist": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Nominal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Joist and rim size. Default 2x8."
+            },
+            "kind": {
+              "const": "deck",
+              "type": "string"
+            },
+            "live_psf": {
+              "description": "Live load, pounds per square foot. Default 40.",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "on_center": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Joist spacing, on center. Defaults to the framing spacing."
+            },
+            "overhang": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "With beams under the joists: how far the joists run past the\nouter beams. Default 0\"."
+            },
+            "pier_above_grade": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pier tops above the ground. Default 2\"."
+            },
+            "post": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Nominal"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Post size, when the beams sit on posts. Default 4x4."
+            },
+            "post_inset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "From each end of a beam to the center of its end support.\nDefault 12\"."
+            },
+            "post_spacing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Most room between supports along a beam. Defaults to the longest\nspan the code allows."
+            },
+            "soil_psf": {
+              "description": "Soil bearing pressure for footing sizes, pounds per square foot.\nDefault 1500.",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "species": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Species"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Wood species group for the span tables. Default southern pine."
+            },
+            "support": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DeckSupport"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What the beams sit on. Default piers."
+            },
+            "width": {
+              "$ref": "#/$defs/Length",
+              "description": "Along the beams, outside to outside."
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "width",
+            "depth",
+            "height"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A straight stud wall standing on its own, like a partition or a\ngarden wall.",
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/Length",
+              "description": "Overall height, bottom of the bottom plate to top of the top plates."
+            },
+            "id": {
+              "description": "A short name for it, like \"partition\". Not front, back, left or right,\nwhich name a building's walls.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "wall",
+              "type": "string"
+            },
+            "left_end": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WallEnd"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What happens at the left end. Default plain."
+            },
+            "length": {
+              "$ref": "#/$defs/Length"
+            },
+            "openings": {
+              "items": {
+                "$ref": "#/$defs/OpeningSpec"
+              },
+              "type": "array"
+            },
+            "right_end": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WallEnd"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What happens at the right end. Default plain."
+            },
+            "tees": {
+              "description": "Centers of partitions that tee into this wall, from its left end.",
+              "items": {
+                "$ref": "#/$defs/Length"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "length",
+            "height"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "One thing to build. `kind` says which, and picks the fields that follow."
+    },
+    "Version": {
+      "description": "The schema version a design is written against.",
+      "enum": [
+        "sticks/1"
+      ],
+      "type": "string"
+    },
+    "WallEnd": {
+      "anyOf": [
+        {
+          "const": "plain",
+          "description": "A single end stud: a free end, or a wall that butts into another.",
+          "type": "string"
+        },
+        {
+          "const": "corner",
+          "description": "This wall runs through a corner and backs the wall that butts into it.",
+          "type": "string"
+        }
+      ],
+      "description": "What happens at one end of a wall."
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A design Sticks can frame and check for a permit: what gets built, and\nthe few framing conventions that apply to all of it. Say only what the\nperson asked for; anything left out takes Sticks' documented default and\nis shown to them as an assumption.",
+  "properties": {
+    "framing": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FramingSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Framing conventions for every structure."
+    },
+    "name": {
+      "description": "What the person calls the project, like \"Backyard shed\".",
+      "type": "string"
+    },
+    "questions": {
+      "description": "Questions for the person about things the request left out that\nchange the permit or the structure, such as how tall it is or what it\nstands on. Leave it empty when a default will do.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "schema": {
+      "$ref": "#/$defs/Version",
+      "description": "The schema version. Always \"sticks/1\"."
+    },
+    "structures": {
+      "description": "What gets built. Sticks frames at most one building, one porch on\nthat building, and one deck, plus any number of freestanding walls.",
+      "items": {
+        "$ref": "#/$defs/Structure"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "name",
+    "structures"
+  ],
+  "title": "Sticks design",
+  "type": "object"
+}

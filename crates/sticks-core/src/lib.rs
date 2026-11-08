@@ -9,12 +9,12 @@ pub mod units;
 pub use joint::{Joint, JointKind};
 pub use lumber::{
     longest_board, tenths_of_degree, Cut, Member, MemberKind, Nominal, SheetPiece, SheetUse,
-    DEFAULT_STOCK_FEET,
+    COMMON_SIZES, DEFAULT_STOCK_FEET,
 };
 pub use project::{
     BeamStyle, Building, CornerStyle, Deck, DeckCode, DeckSupport, DeckingMaterial, Fastening,
     Floor, FloorSupport, FramingSpecies, Hardware, LayoutStart, Opening, OpeningKind, Pitch, Porch,
     PorchDeck, Project, ProjectError, Roof, RoofKind, Rules, Sheathing, SheetStock, Species, Stock,
-    Wall, WallEnd, DEFAULT_GROUND_SNOW_PSF, DEFAULT_ROOF_DEAD_PSF,
+    UsualOpening, Wall, WallEnd, DEFAULT_GROUND_SNOW_PSF, DEFAULT_ROOF_DEAD_PSF,
 };
 pub use units::{Length, ParseLengthError};

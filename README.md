@@ -80,6 +80,30 @@ key (see below), so a bundled build works too.
 line: `TYPESAFE_API_KEY=... npm run probe:jev` in `app/`, which builds
 `sticks` first.
 
+### Designs as JSON
+
+`sticks-schema` describes every structure Sticks can frame as JSON a person
+or a model can write: a design is a list of structures (`building`, `porch`,
+`deck`, `wall`), each with only the choices Sticks frames and checks. Most
+fields are optional; left out, Sticks uses its default and lists it as an
+assumption. The Rust types are the source of truth and the JSON Schema is
+generated from them (checked in at `schema/`).
+
+```sh
+cargo run -p sticks-cli -- schema              # the JSON Schema
+cargo run -p sticks-cli -- schema --claude     # trimmed for Claude's structured outputs
+cargo run -p sticks-cli -- design examples/shed.toml > shed.json
+cargo run -p sticks-cli -- validate shed.json --base examples/shed.toml
+```
+
+`validate` checks the shape, the values and the fit (openings inside their
+walls, unique ids, a porch against a real building), then frames it. Each
+problem has a path like `structures[0].walls[1].openings[0].place` and a
+plain fix, ready to send back to a model. `--json` prints the report,
+`--toml` the project file it becomes, and `--base` a project to take stock,
+prices and kerf from. After a schema change, run
+`UPDATE_SCHEMA=1 cargo test -p sticks-schema` to write `schema/` again.
+
 ## Project file
 
 `examples/shed.toml` is the reference shed from the PRD. A `[building]` gives

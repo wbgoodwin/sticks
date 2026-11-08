@@ -21,3 +21,6 @@ toml = "0.8"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 proptest = "1"
+schemars = "1"
+serde_path_to_error = "0.1"
+sticks-schema = { path = "crates/sticks-schema" }
