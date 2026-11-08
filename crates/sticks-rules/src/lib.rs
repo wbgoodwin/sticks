@@ -4,6 +4,7 @@
 pub mod building;
 pub mod code;
 pub mod deck;
+pub mod deck_parts;
 pub mod floor;
 pub mod joints;
 pub mod layout;

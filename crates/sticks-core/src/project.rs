@@ -465,6 +465,20 @@ pub struct Deck {
     pub frost_depth: Option<Length>,
     /// Pier tops above the ground. Default 2".
     pub pier_above_grade: Length,
+    /// Whether the deck stands on its own or hangs from the house on a
+    /// ledger along its back edge. Default freestanding.
+    pub attach: DeckAttach,
+    /// What holds a ledger to the house's band joist. Default 1/2" lag
+    /// screws.
+    pub ledger_fasteners: LedgerFasteners,
+    /// When the open sides get guards. Default where the code needs them.
+    pub guards: GuardRule,
+    /// Stairs down to the ground.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stairs: Vec<DeckStairs>,
+    /// Where the deck sits on the lot, for the site plan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site: Option<DeckSite>,
 }
 
 impl Default for Deck {
@@ -493,6 +507,178 @@ impl Default for Deck {
             live_psf: 40,
             frost_depth: None,
             pier_above_grade: Length::inches(2),
+            attach: DeckAttach::Freestanding,
+            ledger_fasteners: LedgerFasteners::LagScrews,
+            guards: GuardRule::Auto,
+            stairs: Vec::new(),
+            site: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeckAttach {
+    /// On its own footings all round, beams at the front and back.
+    #[default]
+    Freestanding,
+    /// The back edge is a ledger bolted to the house's band joist, and the
+    /// joists hang from it.
+    Ledger,
+}
+
+/// Fasteners through a deck ledger into the house, as the IRC's ledger
+/// table lists them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LedgerFasteners {
+    /// 1/2" lag screws.
+    #[default]
+    LagScrews,
+    /// 1/2" through-bolts with nuts and washers.
+    Bolts,
+    /// 1/2" through-bolts with a 1/2" stack of washers between the ledger
+    /// and the house, to let water drain.
+    BoltsWithSpacers,
+}
+
+impl LedgerFasteners {
+    pub fn name(self) -> &'static str {
+        match self {
+            LedgerFasteners::LagScrews => "1/2\" lag screws",
+            LedgerFasteners::Bolts => "1/2\" through-bolts",
+            LedgerFasteners::BoltsWithSpacers => "1/2\" through-bolts with 1/2\" washer spacers",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardRule {
+    /// Guards on every open side when the decking is more than 30" above
+    /// the ground, as the code requires.
+    #[default]
+    Auto,
+    /// Guards on every open side, however low.
+    Always,
+    /// No guards. Fails the code check when they're needed.
+    Never,
+}
+
+/// A side of a deck, seen from above with the front at the bottom.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeckSide {
+    #[default]
+    Front,
+    Back,
+    Left,
+    Right,
+}
+
+impl DeckSide {
+    pub fn name(self) -> &'static str {
+        match self {
+            DeckSide::Front => "front",
+            DeckSide::Back => "back",
+            DeckSide::Left => "left",
+            DeckSide::Right => "right",
+        }
+    }
+}
+
+/// A flight of stairs from the decking down to a concrete pad at grade.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeckStairs {
+    /// The side it leaves from. Default front.
+    pub side: DeckSide,
+    /// From the start of that side to the stair's near edge: from the left
+    /// end along the front or back, from the front along the left or right.
+    /// Default 0".
+    pub at: Length,
+    /// Outside to outside of the stringers. Default 36", the code's least.
+    pub width: Length,
+    /// Tread boards, two to a tread. Default 2x6.
+    pub tread: Nominal,
+    /// Cut stringer size. Default 2x12.
+    pub stringer: Nominal,
+}
+
+impl Default for DeckStairs {
+    fn default() -> Self {
+        DeckStairs {
+            side: DeckSide::Front,
+            at: Length::ZERO,
+            width: Length::inches(36),
+            tread: Nominal::new(2, 6),
+            stringer: Nominal::new(2, 12),
+        }
+    }
+}
+
+/// The lot around a deck, for the site plan. Seen from above with the
+/// street at the bottom; the deck's front faces the back of the lot.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeckSite {
+    /// Along the street. Default 80'.
+    pub lot_width: Length,
+    /// From the street to the rear lot line. Default 120'.
+    pub lot_depth: Length,
+    /// From the left lot line to the deck's left side. Default 20'.
+    pub from_left: Length,
+    /// From the rear lot line to the deck's front edge. Default 40'.
+    pub from_rear: Length,
+    /// The house, drawn for reference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub house: Option<SiteHouse>,
+    /// Least distance the zoning allows from the deck to any lot line.
+    /// Left out, distances are shown but not checked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setback: Option<Length>,
+    /// The street's name, written along the bottom.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub street: Option<String>,
+    /// The address, in the sheet's title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+impl Default for DeckSite {
+    fn default() -> Self {
+        DeckSite {
+            lot_width: Length::feet(80),
+            lot_depth: Length::feet(120),
+            from_left: Length::feet(20),
+            from_rear: Length::feet(40),
+            house: None,
+            setback: None,
+            street: None,
+            address: None,
+        }
+    }
+}
+
+/// The house on a site plan, as a rectangle.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SiteHouse {
+    /// From the left lot line to the house's left side.
+    pub from_left: Length,
+    /// From the street to the house's front.
+    pub from_street: Length,
+    pub width: Length,
+    pub depth: Length,
+}
+
+impl Default for SiteHouse {
+    fn default() -> Self {
+        SiteHouse {
+            from_left: Length::feet(15),
+            from_street: Length::feet(30),
+            width: Length::feet(40),
+            depth: Length::feet(30),
         }
     }
 }

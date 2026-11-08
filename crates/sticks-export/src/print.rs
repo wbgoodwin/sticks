@@ -11,9 +11,9 @@ use sticks_rules::spans::RafterLoads;
 use sticks_rules::{plate_layout, plate_letter, FramedProject, FramedWall, PlateBoard};
 
 use crate::svg::{
-    building_checks_svg, deck_checks_svg, deck_notice, deck_plan_svg, deck_section_svg,
-    decking_svg, floor_svg, porch_deck_svg, porch_svg, rafter_svg, roof_svg, sheathing_svg,
-    subfloor_svg, wall_svg, NOTICE,
+    building_checks_svg, deck_checks_svg, deck_details_svg, deck_notice, deck_plan_svg,
+    deck_section_svg, deck_site_svg, decking_svg, floor_svg, has_deck_details, porch_deck_svg,
+    porch_svg, rafter_svg, roof_svg, sheathing_svg, subfloor_svg, wall_svg, NOTICE,
 };
 
 fn esc(s: &str) -> String {
@@ -233,6 +233,21 @@ table.plates .label {{ color: #777; font-size: 8pt; }}
             piers.join(", ")
         );
     }
+    if let Some(Ok(d)) = &framed.deck {
+        if d.concrete.cubic_feet() > 0.0 && !project.on_hand.iter().any(|k| k == "deck framing") {
+            let _ = writeln!(
+                out,
+                "<h2>Concrete</h2>\n<p>{} footings{}: {}.</p>",
+                d.concrete.footing_count,
+                if d.concrete.pad_count > 0 {
+                    format!(" and {} stair pads", d.concrete.pad_count)
+                } else {
+                    String::new()
+                },
+                esc(&d.concrete.describe())
+            );
+        }
+    }
     let mut warnings: Vec<String> = Vec::new();
     for w in framed.walls.iter().flatten() {
         warnings.extend(w.warnings.iter().map(|x| format!("Wall {}: {x}", w.id)));
@@ -287,6 +302,12 @@ table.plates .label {{ color: #777; font-size: 8pt; }}
         page("page", deck_checks_svg(&project.name, deck, d));
         page("page", deck_plan_svg(&project.name, deck, d, from));
         page("page", deck_section_svg(&project.name, deck, d));
+        if has_deck_details(d) {
+            page("page", deck_details_svg(&project.name, deck, d));
+        }
+        if let Some(svg) = deck_site_svg(&project.name, deck, d) {
+            page("page", svg);
+        }
         page("page", decking_svg(&project.name, deck, d));
     }
     if !framed.checks.is_empty() {

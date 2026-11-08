@@ -1225,6 +1225,33 @@ dialog.settings header p {
   fill: var(--header);
   --swatch: var(--header);
 }
+.kind-guard_post {
+  fill: var(--beam);
+  --swatch: var(--beam);
+}
+.kind-rail,
+.kind-handrail {
+  fill: var(--sill);
+  --swatch: var(--sill);
+}
+.kind-baluster {
+  fill: var(--cripple);
+  --swatch: var(--cripple);
+}
+.kind-stringer {
+  fill: var(--plate);
+  --swatch: var(--plate);
+}
+.kind-tread,
+.kind-riser {
+  fill: var(--fascia);
+  --swatch: var(--fascia);
+}
+.stair-card {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 8px;
+}
 .kind-rafter {
   fill: var(--rafter);
   --swatch: var(--rafter);
@@ -2029,6 +2056,9 @@ tbody tr.highlight {
   display: block;
   color: var(--text-2);
   font-size: 12px;
+}
+.concrete {
+  margin: 4px 0 0;
 }
 .hw-notice {
   max-width: 640px;

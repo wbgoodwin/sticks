@@ -314,6 +314,10 @@ struct CutListView {
     on_hand: OnHandView,
     /// Connectors and fasteners for the stages still to buy.
     hardware: HardwareList,
+    /// Concrete for a deck's footings and stair pads, when its framing is
+    /// still to buy: how much, and the bags it takes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    concrete: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -409,6 +413,15 @@ pub fn cut_list_json(project_json: &str) -> Result<String, String> {
         total_cents: k.total_cents,
     };
     view.on_hand_boards = kept.boards.into_iter().map(board_view).collect();
+    view.concrete = match &framed.deck {
+        Some(Ok(d))
+            if d.concrete.cubic_feet() > 0.0
+                && !project.on_hand.iter().any(|k| k == "deck framing") =>
+        {
+            Some(d.concrete.describe())
+        }
+        _ => None,
+    };
     view.hardware = sticks_hardware::for_project(
         &buy.joints,
         sticks_rules::hardware_settings(&project).as_ref(),
@@ -472,6 +485,7 @@ fn cut_list_view(cl: CutList, skipped: Vec<String>) -> CutListView {
             total_cents: Some(0),
         },
         hardware: HardwareList::default(),
+        concrete: None,
     }
 }
 
@@ -566,7 +580,10 @@ fn framed(project_json: &str) -> Result<(Project, FramedProject), String> {
 
 pub fn frame_json(project_json: &str) -> Result<String, String> {
     let (project, framed) = framed(project_json)?;
-    let drawings = drawing_list(&framed);
+    let drawings = drawing_list(
+        &framed,
+        project.deck.as_ref().is_some_and(|d| d.site.is_some()),
+    );
     let checks = framed.checks.clone();
     let checked_for = sticks_rules::spans::RafterLoads::for_project(&project).describe();
     // Walls come back in the order frame_project lists them.
@@ -670,7 +687,7 @@ pub fn frame_json(project_json: &str) -> Result<String, String> {
 }
 
 /// Every plan drawing the framed project can print, by id.
-fn drawing_list(framed: &FramedProject) -> Vec<DrawingView> {
+fn drawing_list(framed: &FramedProject, site: bool) -> Vec<DrawingView> {
     let mut out = Vec::new();
     let mut add = |id: &str, name: &str, part: &str| {
         out.push(DrawingView {
@@ -703,10 +720,18 @@ fn drawing_list(framed: &FramedProject) -> Vec<DrawingView> {
             add("deck", "Porch deck", "porch");
         }
     }
-    if framed.deck.is_some() {
+    if let Some(deck) = &framed.deck {
         add("deck-checks", "Code checks", "deck");
         add("deck-plan", "Deck plan", "deck");
         add("deck-section", "Deck section", "deck");
+        if let Ok(d) = deck {
+            if sticks_export::has_deck_details(d) {
+                add("deck-details", "Stairs, guards, ledger", "deck");
+            }
+        }
+        if site {
+            add("deck-site", "Site plan", "deck");
+        }
         add("decking", "Decking", "deck");
     }
     if let Some(s) = &framed.sheathing {
@@ -859,7 +884,7 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
                     .ok_or_else(|| "this porch has no deck".to_string()),
             }
         }
-        "deck-checks" | "deck-plan" | "deck-section" | "decking" => {
+        "deck-checks" | "deck-plan" | "deck-section" | "deck-details" | "deck-site" | "decking" => {
             let d = framed
                 .deck
                 .ok_or("this project has no deck")?
@@ -869,6 +894,9 @@ pub fn drawing_svg(project_json: &str, which: &str) -> Result<String, String> {
                 "deck-checks" => sticks_export::deck_checks_svg(name, deck, &d),
                 "deck-plan" => sticks_export::deck_plan_svg(name, deck, &d, from),
                 "deck-section" => sticks_export::deck_section_svg(name, deck, &d),
+                "deck-details" => sticks_export::deck_details_svg(name, deck, &d),
+                "deck-site" => sticks_export::deck_site_svg(name, deck, &d)
+                    .ok_or("this deck has no lot entered")?,
                 _ => sticks_export::decking_svg(name, deck, &d),
             })
         }

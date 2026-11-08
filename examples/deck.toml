@@ -2,7 +2,8 @@
 # to Fairfax County, Virginia's Typical Deck Details. The decking is 28"
 # off the ground, under the 30" where guards are needed, short 4x4 posts
 # stand on round concrete footings, and the joists run a foot past each
-# beam so the beams sit back out of sight.
+# beam so the beams sit back out of sight. Four risers step down off the
+# middle of the front to a concrete pad.
 name = "Backyard deck"
 
 [rules]
@@ -25,6 +26,10 @@ post = "4x4"
 decking = "5/4x6"
 species = "southern_pine"
 
+[[deck.stairs]]
+side = "front"
+at = "6'"              # from the left end; 36" wide
+
 [[stock]]
 size = "2x8"
 lengths = ["8'", "10'", "12'", "14'", "16'"]
@@ -36,3 +41,11 @@ lengths = ["8'"]
 [[stock]]
 size = "5/4x6"
 lengths = ["8'", "10'", "12'", "16'"]
+
+[[stock]]
+size = "2x12"
+lengths = ["8'"]
+
+[[stock]]
+size = "2x6"
+lengths = ["8'"]

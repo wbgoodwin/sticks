@@ -131,6 +131,18 @@ pub enum MemberKind {
     CollarTie,
     GableStud,
     Decking,
+    /// A post holding up a guard or a stair rail.
+    GuardPost,
+    /// A level or sloped rail between guard posts.
+    Rail,
+    Baluster,
+    /// A cut stair stringer.
+    Stringer,
+    Tread,
+    /// A board closing the gap under a tread.
+    Riser,
+    /// A graspable rail beside a stair.
+    Handrail,
 }
 
 impl MemberKind {
@@ -159,6 +171,13 @@ impl MemberKind {
             MemberKind::CollarTie => "collar tie",
             MemberKind::GableStud => "gable stud",
             MemberKind::Decking => "decking",
+            MemberKind::GuardPost => "guard post",
+            MemberKind::Rail => "rail",
+            MemberKind::Baluster => "baluster",
+            MemberKind::Stringer => "stringer",
+            MemberKind::Tread => "tread",
+            MemberKind::Riser => "riser",
+            MemberKind::Handrail => "handrail",
         }
     }
 }

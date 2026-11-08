@@ -351,6 +351,58 @@ impl FramedDeck {
                 ),
             }
         }
+        // A ledger deck: joists in hangers on the ledger, and two ties back
+        // into the house's floor.
+        if let Some(l) = &self.ledger {
+            if !flush {
+                for j in self
+                    .members
+                    .iter()
+                    .filter(|p| p.member.kind == MemberKind::Joist)
+                {
+                    out.push(
+                        Joint::new(
+                            JointKind::JoistOnLedger,
+                            j.member.size,
+                            true,
+                            &[&j.member.label],
+                        )
+                        .on(l.size),
+                    );
+                }
+            }
+            for _ in 0..2 {
+                out.push(Joint::new(JointKind::DeckLateral, l.size, true, &[]));
+            }
+        }
+        // Guard posts tied back to the framing; stair stringers hung on
+        // the rim; posts at a stair's foot on its pad.
+        for p in &self.members {
+            let label = p.member.label.as_str();
+            match p.member.kind {
+                MemberKind::GuardPost => {
+                    let at_foot = self.stairs.iter().any(|s| {
+                        !s.top_posts.contains(&p.rect)
+                            && s.members.iter().any(|m| m.member.label == label)
+                    });
+                    let kind = if at_foot {
+                        JointKind::PostOnConcrete
+                    } else {
+                        JointKind::GuardPost
+                    };
+                    out.push(Joint::new(kind, p.member.size, true, &[label]));
+                }
+                MemberKind::Stringer => {
+                    out.push(Joint::new(
+                        JointKind::StringerOnRim,
+                        p.member.size,
+                        true,
+                        &[label],
+                    ));
+                }
+                _ => {}
+            }
+        }
         out
     }
 }

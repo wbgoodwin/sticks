@@ -22,7 +22,13 @@
 
 use serde::Serialize;
 use sticks_core::{
-    BeamStyle, Deck, DeckCode, DeckSupport, DeckingMaterial, Length, Nominal, Species,
+    BeamStyle, Deck, DeckAttach, DeckCode, DeckSupport, DeckingMaterial, GuardRule,
+    LedgerFasteners, Length, Nominal, Species,
+};
+
+use crate::deck_parts::{
+    FramedGuards, FramedLedger, FramedStairs, GUARD_HEIGHT, GUARD_POST_SPACING, MAX_RISER,
+    MIN_STAIR_WIDTH, MIN_THROAT, MIN_TREAD, STRINGER_SPAN,
 };
 
 /// Decks higher than this above the ground need a guard (IRC R312.1.1;
@@ -827,6 +833,30 @@ pub fn decking_spacing(decking: Nominal, material: DeckingMaterial) -> Option<Le
     }
 }
 
+/// IRC Table R507.9.1.3(1): most room between ledger fasteners, on center
+/// and staggered, by the joist span hung on the ledger, for 1/2" fasteners
+/// through a 2x band joist with up to 15/32" sheathing between.
+const LEDGER_SPACING: [(LedgerFasteners, [i64; 7]); 3] = [
+    (LedgerFasteners::LagScrews, [30, 23, 18, 15, 13, 11, 10]),
+    (LedgerFasteners::Bolts, [36, 36, 34, 29, 24, 21, 19]),
+    (
+        LedgerFasteners::BoltsWithSpacers,
+        [36, 36, 29, 24, 21, 18, 16],
+    ),
+];
+
+/// The most room IRC Table R507.9.1.3(1) allows between `fasteners` for a
+/// ledger carrying joists that span `joist_span`, or none past 18'.
+pub fn ledger_spacing(fasteners: LedgerFasteners, joist_span: Length) -> Option<Length> {
+    let col = SPAN_COLUMNS
+        .iter()
+        .position(|&ft| joist_span <= Length::feet(ft))?;
+    LEDGER_SPACING
+        .iter()
+        .find(|(f, _)| *f == fasteners)
+        .map(|(_, row)| Length::inches(row[col]))
+}
+
 /// The tallest post IRC Table R507.4 allows, top of footing to underside of
 /// beam, for the smallest decks it covers.
 pub fn irc_post_height(post: Nominal) -> Option<Length> {
@@ -966,6 +996,235 @@ pub fn footings(deck: &Deck, beam: &BeamLoad, post_width: Length) -> Vec<Footing
         })
         .collect();
     out
+}
+
+/// Checks a deck's guards, stairs and ledger against the rules.
+pub fn check_deck_parts(
+    deck: &Deck,
+    guards: Option<&FramedGuards>,
+    stairs: &[FramedStairs],
+    ledger: Option<&FramedLedger>,
+) -> Vec<CodeCheck> {
+    let fairfax = deck.code == DeckCode::Fairfax2021;
+    let mut out = Vec::new();
+    let need_guard = deck.height > GUARD_ABOVE;
+    let source = |irc: &str| {
+        if fairfax {
+            format!("VRC {irc}, as Fairfax's details follow it")
+        } else {
+            format!("IRC {irc}")
+        }
+    };
+    match guards {
+        Some(g) => {
+            let sides: Vec<&str> = g.sides.iter().map(|s| s.name()).collect();
+            out.push(check(
+                "Guards",
+                format!(
+                    "{:#} guards on the {}, gaps up to {:#}",
+                    g.height,
+                    sides.join(", "),
+                    g.gap
+                ),
+                if need_guard {
+                    format!("{GUARD_HEIGHT:#} or taller on every open side; a 4\" ball can't pass")
+                } else {
+                    format!("none needed at {GUARD_ABOVE:#} or less; if built, {GUARD_HEIGHT:#} with gaps under 4\"")
+                },
+                g.height >= GUARD_HEIGHT && g.gap < Length::inches(4),
+                source("R312.1, R312.1.3"),
+            ));
+            out.push(check(
+                "Guard posts",
+                format!("{} 4x4 posts, up to {} apart", g.posts, g.post_spacing),
+                format!(
+                    "{GUARD_POST_SPACING} apart or less, each through-bolted to the rim and tied back to a joist with a hold-down"
+                ),
+                g.post_spacing <= GUARD_POST_SPACING,
+                "AWC DCA 6 (200 lb guard load, IRC Table R301.5)".to_string(),
+            ));
+        }
+        None => out.push(check(
+            "Guards",
+            format!(
+                "decking {} above grade{}",
+                deck.height,
+                if deck.guards == GuardRule::Never && need_guard {
+                    ", guards left off"
+                } else {
+                    ""
+                }
+            ),
+            if need_guard {
+                format!("{GUARD_HEIGHT:#} guards on every open side, openings under 4\"")
+            } else {
+                format!("none needed at {GUARD_ABOVE:#} or less")
+            },
+            !need_guard,
+            source("R312.1.1"),
+        )),
+    }
+
+    for st in stairs {
+        let name = |what: &str| format!("{what}, {} stairs", st.side.name());
+        let spread = Length::from_sixteenths(6);
+        out.push(check(
+            &name("Risers"),
+            format!("{} risers, {:#} tallest", st.risers, st.riser),
+            format!("{MAX_RISER:#} or less, all within {spread:#}"),
+            st.riser <= MAX_RISER,
+            source("R311.7.5.1"),
+        ));
+        out.push(check(
+            &name("Treads"),
+            format!(
+                "{:#} nosing to nosing, (2) {} per tread {:#} deep",
+                st.run, st.tread, st.tread_depth
+            ),
+            format!("{MIN_TREAD:#} or more; 3/4\" to 1-1/4\" nosings"),
+            st.run >= MIN_TREAD,
+            source("R311.7.5.2, R311.7.5.3"),
+        ));
+        out.push(check(
+            &name("Width"),
+            format!("{:#}", st.width),
+            format!("{MIN_STAIR_WIDTH:#} or more"),
+            st.width >= MIN_STAIR_WIDTH,
+            source("R311.7.1"),
+        ));
+        out.push(check(
+            &name("Stringers"),
+            format!(
+                "{} cut {} at {:#} o.c., {} run, {:#} throat",
+                st.stringers, st.stringer, st.stringer_spacing, st.total_run, st.throat
+            ),
+            format!(
+                "18\" o.c. or less (16\" with 5/4 treads), {STRINGER_SPAN} run between supports, {MIN_THROAT:#} throat"
+            ),
+            st.stringer_spacing <= Length::inches(18)
+                && st.total_run <= STRINGER_SPAN
+                && st.throat >= MIN_THROAT,
+            "AWC DCA 6 (stairs)".to_string(),
+        ));
+        out.push(check(
+            &name("Handrail"),
+            if st.handrail {
+                "graspable 2x2 rail 34\" over the nosings, top riser to bottom".to_string()
+            } else {
+                format!("{} risers", st.risers)
+            },
+            if st.handrail {
+                "34\" to 38\" above the nosings on at least one side, graspable".to_string()
+            } else {
+                "none needed under 4 risers".to_string()
+            },
+            true,
+            source("R311.7.8"),
+        ));
+        if st.guards {
+            out.push(check(
+                &name("Guards"),
+                format!("{GUARD_HEIGHT:#} over the nosings both sides, closed risers"),
+                "guards on open sides over 30\" up; risers that stop a 4\" ball".to_string(),
+                true,
+                source("R312.1, R311.7.5.1"),
+            ));
+        }
+        out.push(check(
+            &name("Landing"),
+            format!(
+                "concrete pad {:#} out from the last riser, as wide as the stair",
+                crate::deck_parts::PAD_DEPTH
+            ),
+            "36\" deep at the bottom, at least the stair's width".to_string(),
+            true,
+            source("R311.7.6"),
+        ));
+    }
+
+    if let Some(l) = ledger {
+        out.push(check(
+            "Ledger fasteners",
+            format!(
+                "{} staggered at {:#} o.c. into the band joist",
+                l.fasteners.name(),
+                l.spacing
+            ),
+            match l.allowed {
+                Some(a) => format!("{a:#} o.c. or less for a {} joist span", l.joist_span),
+                None => "not in the table past an 18' joist span".to_string(),
+            },
+            l.allowed.is_some_and(|a| l.spacing <= a),
+            source("Table R507.9.1.3(1)"),
+        ));
+        out.push(check(
+            "Ledger",
+            format!("{} ledger, flashed", l.size),
+            "2x8 or deeper, on a 2x band joist; not on brick veneer, I-joist rims or through siding".to_string(),
+            l.size.actual_width() >= Nominal::new(2, 8).actual_width(),
+            source("R507.9.1"),
+        ));
+        out.push(check(
+            "Lateral load connection",
+            "(2) hold-downs, 750 lb each, within 24\" of the deck's ends".to_string(),
+            "two 750 lb hold-down devices, or 1,500 lb total".to_string(),
+            true,
+            source("R507.9.2"),
+        ));
+    }
+    out
+}
+
+/// The deck's distances to the lot lines, stairs included, given the
+/// corners of everything in its plan: left, right and rear.
+pub fn site_distances(
+    deck: &Deck,
+    lo: (Length, Length),
+    hi: (Length, Length),
+) -> Option<[(&'static str, Length); 3]> {
+    let site = deck.site.as_ref()?;
+    Some([
+        ("left", site.from_left - (hi.0 - deck.width)),
+        (
+            "right",
+            site.lot_width - (site.from_left + deck.width - lo.0),
+        ),
+        ("rear", site.from_rear + lo.1),
+    ])
+}
+
+/// The site plan: drawn, and the deck clear of the zoning setback.
+pub fn check_site(deck: &Deck, lo: (Length, Length), hi: (Length, Length)) -> Vec<CodeCheck> {
+    let Some(near) = site_distances(deck, lo, hi) else {
+        return vec![check(
+            "Site plan",
+            "no lot entered: sketch the deck on your house location plat by hand".to_string(),
+            "the deck on the lot with distances to the lot lines (enter the lot under Site to have Sticks draw it)".to_string(),
+            true,
+            if deck.code == DeckCode::Fairfax2021 {
+                "Fairfax deck permit: a copy of the house location plat".to_string()
+            } else {
+                "Your building department's permit checklist".to_string()
+            },
+        )];
+    };
+    let text = near
+        .iter()
+        .map(|(n, l)| format!("{n} {l}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let closest = near.iter().map(|(_, l)| *l).min().unwrap_or_default();
+    let setback = deck.site.as_ref().and_then(|s| s.setback);
+    vec![check(
+        "Setbacks",
+        text,
+        match setback {
+            Some(s) => format!("{s} or more to every lot line"),
+            None => "what your zoning allows; ask the county".to_string(),
+        },
+        closest >= Length::ZERO && setback.is_none_or(|s| closest >= s),
+        "Zoning ordinance".to_string(),
+    )]
 }
 
 /// Checks `deck`, framed as `layout`, against its rules.
@@ -1136,15 +1395,16 @@ pub fn check_deck(deck: &Deck, layout: &DeckLayout) -> Vec<CodeCheck> {
                 h <= cap,
                 "Fairfax Table 4".to_string(),
             ));
+            let freestanding = deck.attach == DeckAttach::Freestanding;
             out.push(check(
                 "Lateral bracing",
                 format!("posts {h} tall"),
-                if h > FAIRFAX_BRACE_ABOVE {
+                if h > FAIRFAX_BRACE_ABOVE && freestanding {
                     "knee braces or other lateral support per Table 8 (methods 2 and 3); Sticks doesn't draw them yet".to_string()
                 } else {
                     format!("none needed for posts {FAIRFAX_BRACE_ABOVE} or shorter")
                 },
-                h <= FAIRFAX_BRACE_ABOVE,
+                h <= FAIRFAX_BRACE_ABOVE || !freestanding,
                 "Fairfax Table 8".to_string(),
             ));
         } else {
@@ -1156,7 +1416,7 @@ pub fn check_deck(deck: &Deck, layout: &DeckLayout) -> Vec<CodeCheck> {
                 cap.is_some_and(|c| h <= c),
                 "IRC Table R507.4".to_string(),
             ));
-            if h > Length::feet(2) {
+            if h > Length::feet(2) && deck.attach == DeckAttach::Freestanding {
                 out.push(check(
                     "Lateral bracing",
                     format!("posts {h} tall"),
@@ -1225,9 +1485,10 @@ pub fn check_deck(deck: &Deck, layout: &DeckLayout) -> Vec<CodeCheck> {
                     if fairfax {
                         "24\" below grade, on solid ground, inspected before the pour".to_string()
                     } else {
-                        match deck.frost_depth {
-                            Some(d) => format!("12\" below undisturbed ground and below the {d:#} frost line"),
-                            None => "12\" below undisturbed ground; below the frost line where your building department requires it".to_string(),
+                        match (deck.frost_depth, deck.attach) {
+                            (Some(d), _) => format!("12\" below undisturbed ground and below the {d:#} frost line"),
+                            (None, DeckAttach::Ledger) => "12\" below undisturbed ground and below the frost line: a deck fastened to the house can't float (R403.1.4.1)".to_string(),
+                            (None, DeckAttach::Freestanding) => "12\" below undisturbed ground; below the frost line where your building department requires it".to_string(),
                         }
                     },
                     true,
@@ -1264,24 +1525,6 @@ pub fn check_deck(deck: &Deck, layout: &DeckLayout) -> Vec<CodeCheck> {
         },
     ));
 
-    // Guards.
-    let need_guard = deck.height > GUARD_ABOVE;
-    out.push(check(
-        "Guards",
-        format!("decking {} above grade", deck.height),
-        if need_guard {
-            "36\" guards on open sides, openings under 4\"; Sticks doesn't draw guards yet"
-                .to_string()
-        } else {
-            format!("none needed at {GUARD_ABOVE} or less")
-        },
-        !need_guard,
-        if fairfax {
-            "Fairfax Section 9".to_string()
-        } else {
-            "IRC R312.1".to_string()
-        },
-    ));
     out
 }
 

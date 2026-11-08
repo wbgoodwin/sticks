@@ -9,6 +9,7 @@ import {
   parseLength,
   type BuildingJson,
   type DeckJson,
+  type DeckSide,
   type FramingSpecies,
   type OpeningJson,
   type OpeningKind,
@@ -692,6 +693,188 @@ const SPECIES: [NonNullable<DeckJson["species"]>, string][] = [
   ["redwood", "Redwood"],
 ];
 const DECK_BEAMS = ["2x6", "2x8", "2x10", "2x12"];
+const LEDGER_FASTENERS: [NonNullable<DeckJson["ledger_fasteners"]>, string][] = [
+  ["lag_screws", '1/2" lag screws'],
+  ["bolts", '1/2" through-bolts'],
+  ["bolts_with_spacers", '1/2" bolts, 1/2" spacers'],
+];
+const SIDES: [DeckSide, string][] = [
+  ["front", "Front"],
+  ["left", "Left"],
+  ["right", "Right"],
+  ["back", "Back"],
+];
+
+/** A plain text field, such as a street name. Emptied, it's left out. */
+function textField(label: string, get: () => string, set: (v: string | undefined) => void, events: PanelEvents): HTMLElement {
+  const input = h("input", {
+    type: "text",
+    value: get(),
+    autocomplete: "off",
+    "aria-label": label,
+    oninput: () => {
+      set(input.value.trim() === "" ? undefined : input.value);
+      events.changed();
+    },
+  });
+  return h("label", { class: "field" }, h("span", { class: "field-label" }, label), input);
+}
+
+/** Guards along the open sides, and each flight of stairs down to the ground. */
+function stairsSection(deck: DeckJson, events: PanelEvents): HTMLElement {
+  const stairs = () => deck.stairs ?? [];
+  const sides = SIDES.filter(([s]) => !(deck.attach === "ledger" && s === "back"));
+  const flights = stairs().map((st, i) =>
+    h(
+      "div",
+      { class: "stair-card" },
+      h("p", { class: "section-hint" }, `Stairs ${i + 1}`),
+      segmented("Off the", sides, () => st.side ?? "front", (v) => (st.side = v), events.changed),
+      h(
+        "div",
+        { class: "row" },
+        lengthField("From the start", () => st.at ?? "0", (v) => (st.at = v), events, "From the left end, or the front end of a side"),
+        lengthField("Width", () => st.width ?? '36"', (v) => (st.width = v), events, "36\" or more"),
+      ),
+      h(
+        "button",
+        {
+          type: "button",
+          class: "remove-button",
+          onclick: () => {
+            deck.stairs = stairs().filter((x) => x !== st);
+            if (deck.stairs.length === 0) delete deck.stairs;
+            events.restructured();
+          },
+        },
+        "Remove stairs",
+      ),
+    ),
+  );
+  const guards = () => deck.guards ?? "auto";
+  return foldSection(
+    "deck-stairs",
+    "Guards and stairs",
+    () =>
+      `${guards() === "auto" ? "guards where needed" : guards() === "always" ? "guards all round" : "no guards"} · ${stairs().length === 0 ? "no stairs" : `${stairs().length} stairs`}`,
+    [
+      segmented(
+        "Guards",
+        [
+          ["auto", "Where needed"],
+          ["always", "Always"],
+          ["never", "None"],
+        ],
+        guards,
+        (v) => (deck.guards = v),
+        events.changed,
+      ),
+      h("p", { class: "section-hint" }, "36\" guards go on every open side when the decking is more than 30\" up. Stairs get a handrail at 4 risers."),
+      ...flights,
+      h(
+        "button",
+        {
+          type: "button",
+          class: "add-button",
+          onclick: () => {
+            const width = parseLength(deck.width ?? "12'");
+            const at = "error" in width ? "0" : `${Math.max(0, Math.round((width.ok / 16 - 36) / 2))}"`;
+            deck.stairs = [...stairs(), { side: "front", at, width: '36"' }];
+            events.restructured();
+          },
+        },
+        "+ Stairs",
+      ),
+    ],
+  );
+}
+
+/** The lot, for the site plan sheet. */
+function siteSection(deck: DeckJson, events: PanelEvents): HTMLElement {
+  const site = deck.site;
+  if (!site) {
+    return foldSection("deck-site", "Site", () => "no lot entered", [
+      h("p", { class: "section-hint" }, "Enter the lot to get a site plan sheet with the deck's distances to the lot lines. Or sketch the deck on your house location plat by hand."),
+      h(
+        "button",
+        {
+          type: "button",
+          class: "add-button",
+          onclick: () => {
+            deck.site = { lot_width: "80'", lot_depth: "120'", from_left: "20'", from_rear: "40'" };
+            openSection("deck-site");
+            events.restructured();
+          },
+        },
+        "+ Lot",
+      ),
+    ]);
+  }
+  const house = site.house;
+  return foldSection(
+    "deck-site",
+    "Site",
+    () => `lot ${site.lot_width ?? "80'"} × ${site.lot_depth ?? "120'"}`,
+    [
+      h("p", { class: "section-hint" }, "Seen from above with the street at the bottom; the deck's front faces the back of the lot."),
+      h(
+        "div",
+        { class: "row" },
+        lengthField("Lot width", () => site.lot_width ?? "80'", (v) => (site.lot_width = v), events, "Along the street"),
+        lengthField("Lot depth", () => site.lot_depth ?? "120'", (v) => (site.lot_depth = v), events, "Street to rear line"),
+      ),
+      h(
+        "div",
+        { class: "row" },
+        lengthField("Deck from left line", () => site.from_left ?? "20'", (v) => (site.from_left = v), events),
+        lengthField("Deck from rear line", () => site.from_rear ?? "40'", (v) => (site.from_rear = v), events, "To the deck's front edge"),
+      ),
+      lengthField("Zoning setback", () => site.setback ?? "", (v) => (site.setback = v), events, "Blank: shown, not checked", () => delete site.setback),
+      h(
+        "div",
+        { class: "row" },
+        textField("Street", () => site.street ?? "", (v) => (v === undefined ? delete site.street : (site.street = v)), events),
+        textField("Address", () => site.address ?? "", (v) => (v === undefined ? delete site.address : (site.address = v)), events),
+      ),
+      house
+        ? h(
+            "div",
+            {},
+            h(
+              "div",
+              { class: "row" },
+              lengthField("House from left", () => house.from_left ?? "15'", (v) => (house.from_left = v), events),
+              lengthField("House from street", () => house.from_street ?? "30'", (v) => (house.from_street = v), events),
+            ),
+            h(
+              "div",
+              { class: "row" },
+              lengthField("House width", () => house.width ?? "40'", (v) => (house.width = v), events),
+              lengthField("House depth", () => house.depth ?? "30'", (v) => (house.depth = v), events),
+            ),
+          )
+        : h(
+            "button",
+            {
+              type: "button",
+              class: "add-button",
+              onclick: () => {
+                site.house = { from_left: "15'", from_street: "30'", width: "40'", depth: "30'" };
+                events.restructured();
+              },
+            },
+            "+ House",
+          ),
+    ],
+    [
+      "Remove lot",
+      () => {
+        delete deck.site;
+        events.restructured();
+      },
+    ],
+  );
+}
 const SOILS = ["1500", "2000", "2500", "3000"];
 
 /** Who owns a deck's plans, at the top of its panel and on every sheet. */
@@ -726,6 +909,32 @@ function deckSections(deck: DeckJson, events: PanelEvents, remove?: () => void):
           lengthField("Depth", () => deck.depth ?? "12'", (v) => (deck.depth = v), events, "Along the joists"),
         ),
         lengthField("Height", () => deck.height ?? '18"', (v) => (deck.height = v), events, "Ground to the top of the decking. Over 30\" needs guards."),
+        segmented(
+          "Stands",
+          [
+            ["freestanding", "On its own"],
+            ["ledger", "Ledger on the house"],
+          ],
+          () => deck.attach ?? "freestanding",
+          (v) => {
+            deck.attach = v;
+            // A ledger is the back bearing, so one beam line will do; no stairs off the house side.
+            if (v === "ledger") {
+              deck.beams = Math.max(1, (deck.beams ?? 2) - 1);
+              deck.stairs = deck.stairs?.filter((st) => st.side !== "back");
+            } else deck.beams = Math.max(2, (deck.beams ?? 1) + 1);
+          },
+          events.restructured,
+        ),
+        deck.attach === "ledger"
+          ? select(
+              "Ledger fasteners",
+              LEDGER_FASTENERS.map(([, name]) => name),
+              () => LEDGER_FASTENERS.find(([k]) => k === (deck.ledger_fasteners ?? "lag_screws"))![1],
+              (v) => (deck.ledger_fasteners = LEDGER_FASTENERS.find(([, name]) => name === v)![0]),
+              events,
+            )
+          : null,
       ],
       remove
         ? [
@@ -740,7 +949,7 @@ function deckSections(deck: DeckJson, events: PanelEvents, remove?: () => void):
     foldSection(
       "deck-framing",
       "Deck framing",
-      () => `${deck.joist ?? "2x8"} joists · ${deck.beams ?? 2} beams of (${plies()}) ${deck.beam ?? "2x8"}${flush() ? " · flush" : ""}`,
+      () => `${deck.joist ?? "2x8"} joists · ${deck.beams ?? 2} beam${(deck.beams ?? 2) === 1 ? "" : "s"} of (${plies()}) ${deck.beam ?? "2x8"}${flush() ? " · flush" : ""}${deck.attach === "ledger" ? " · ledger" : ""}`,
       [
         h(
           "div",
@@ -757,8 +966,8 @@ function deckSections(deck: DeckJson, events: PanelEvents, remove?: () => void):
         h(
           "div",
           { class: "row" },
-          stepper("Beam lines", () => deck.beams ?? 2, (v) => (deck.beams = v), 2, 4, events),
-          lengthField("Joist overhang", () => deck.overhang ?? "0", (v) => (deck.overhang = v), events, "Past each outer beam"),
+          stepper("Beam lines", () => deck.beams ?? 2, (v) => (deck.beams = v), deck.attach === "ledger" ? 1 : 2, 4, events),
+          lengthField("Joist overhang", () => deck.overhang ?? "0", (v) => (deck.overhang = v), events, deck.attach === "ledger" ? "Past the front beam" : "Past each outer beam"),
         ),
         segmented(
           "Joists sit",
@@ -827,6 +1036,8 @@ function deckSections(deck: DeckJson, events: PanelEvents, remove?: () => void):
         ),
       ],
     ),
+    stairsSection(deck, events),
+    siteSection(deck, events),
     foldSection(
       "deck-code",
       "Deck code",

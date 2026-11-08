@@ -37,6 +37,7 @@ export function renderShopping(root: HTMLElement, plan: CutListView, toggle: OnH
     ${leftOff(plan)}
     ${notes(plan, priced ? [] : ["Add a price to every stock length in the lumber yard to see what this costs."])}
     ${hardware(plan.hardware)}
+    ${plan.concrete ? `<h3 class="hardware-heading">Concrete</h3><p class="concrete">${esc(plan.concrete)}</p>` : ""}
   `;
   for (const b of root.querySelectorAll<HTMLButtonElement>(".have button")) {
     b.addEventListener("click", () => toggle(b.dataset.key!));

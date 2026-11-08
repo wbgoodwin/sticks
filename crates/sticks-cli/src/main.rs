@@ -271,6 +271,15 @@ fn build(project: &Project, out: &Path) -> Result<(), String> {
             "deck-section.svg".to_string(),
             sticks_export::deck_section_svg(name, deck, d),
         ));
+        if sticks_export::has_deck_details(d) {
+            files.push((
+                "deck-details.svg".to_string(),
+                sticks_export::deck_details_svg(name, deck, d),
+            ));
+        }
+        if let Some(svg) = sticks_export::deck_site_svg(name, deck, d) {
+            files.push(("deck-site.svg".to_string(), svg));
+        }
         files.push((
             "decking.svg".to_string(),
             sticks_export::decking_svg(name, deck, d),

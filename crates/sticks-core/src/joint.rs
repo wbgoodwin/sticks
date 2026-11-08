@@ -39,10 +39,14 @@ pub enum JointKind {
     DeckLateral,
     /// A stud tied to the plate at one of its ends.
     StudToPlate,
+    /// A guard post bolted to a deck's rim, tied back to a joist.
+    GuardPost,
+    /// A stair stringer's top hung on a deck's rim.
+    StringerOnRim,
 }
 
 impl JointKind {
-    pub const ALL: [JointKind; 13] = [
+    pub const ALL: [JointKind; 15] = [
         JointKind::RafterOnPlate,
         JointKind::RafterOnBeam,
         JointKind::RafterOnLedger,
@@ -56,6 +60,8 @@ impl JointKind {
         JointKind::LedgerToFrame,
         JointKind::DeckLateral,
         JointKind::StudToPlate,
+        JointKind::GuardPost,
+        JointKind::StringerOnRim,
     ];
 
     /// Plain-English name for tables, e.g. `rafter on plate`.
@@ -74,6 +80,8 @@ impl JointKind {
             JointKind::LedgerToFrame => "ledger to frame",
             JointKind::DeckLateral => "deck lateral tie",
             JointKind::StudToPlate => "stud to plate",
+            JointKind::GuardPost => "guard post",
+            JointKind::StringerOnRim => "stringer on rim",
         }
     }
 
