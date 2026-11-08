@@ -126,15 +126,32 @@ const SIGNED_IN_PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>Stic
 @media(prefers-color-scheme:dark){body{color:#ecebe6;background:#161714}}main{text-align:center;padding:16px}</style>
 <main><h1>Signed in</h1><p>You can close this tab and go back to Sticks.</p></main>"#;
 
+/// Restarts Sticks, after an update has been installed.
+#[tauri::command]
+fn restart(app: tauri::AppHandle) {
+    app.restart();
+}
+
 fn main() {
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    // Only signed release builds carry an updater section (merged in from
+    // tauri.release.conf.json by the Release workflow). Builds from source
+    // and App Store builds leave it out, and the plugin can't start without
+    // it, so it's added only when it's there.
+    let self_updating = context.config().plugins.0.contains_key("updater");
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+    if self_updating {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder
         .invoke_handler(tauri::generate_handler![
             save_file,
             open_in_browser,
-            sign_in_in_browser
+            sign_in_in_browser,
+            restart
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running Sticks");
 }
